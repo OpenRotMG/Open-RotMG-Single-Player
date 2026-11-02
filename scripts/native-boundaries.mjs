@@ -16,13 +16,26 @@ export async function protectInstallation(path) {
   if(process.platform==='win32') {
     assert(process.env.GITHUB_ACTIONS==='true','Windows ACL tests require a dedicated CI VM');
     const sid=powershell('[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
-    execFileSync('icacls.exe',[path,'/deny',`*${sid}:(OI)(CI)(W,D)`,'/T','/Q']);
-    return async()=>execFileSync('icacls.exe',[path,'/remove:d',`*${sid}`,'/T','/Q']);
+    return protectWindowsInstallation(path,sid);
   }
   const {chmod,lstat}=await import('node:fs/promises');
   const visit=async file=>{const info=await lstat(file);if(info.isSymbolicLink())return;if(info.isDirectory())for(const name of await readdir(file))await visit(join(file,name));await chmod(file,info.mode&~0o222);};
   await visit(path);
   return async()=>{};
+}
+export function protectWindowsInstallation(path,sid,run=execFileSync) {
+  const restore=()=>{
+    run('icacls.exe',[path,'/remove:d',`*${sid}`,'/Q']);
+    run('icacls.exe',[path,'/remove:d',`*${sid}`,'/T','/Q']);
+  };
+  try {
+    // Generic W also denies SYNCHRONIZE/READ_CONTROL, breaking traversal and native execution.
+    run('icacls.exe',[path,'/deny',`*${sid}:(OI)(CI)(WD,AD,WEA,WA,D,DC)`,'/T','/Q']);
+  }catch(error){
+    try{restore();}catch(rollback){throw new AggregateError([error,rollback],`Install ACL apply failed: ${error}; rollback failed: ${rollback}`);}
+    throw error;
+  }
+  return restore;
 }
 export async function assertInstallationProtected(path, resources) {
   for(const directory of [path,resources])await assert.rejects(writeFile(join(directory,'forbidden-write'),'must not be writable'),error=>['EACCES','EPERM'].includes(error.code),'Real install write must be denied');

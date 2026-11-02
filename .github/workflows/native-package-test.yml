@@ -53,13 +53,23 @@ jobs:
           name: phase1-${{ matrix.os }}
           include-hidden-files: true
           path: |
-            .qa/package-tests/**/result.json
-            .qa/package-tests/**/*.png
-            .qa/package-tests/**/*.xml
-            .qa/package-tests/**/*console.json
-            .qa/package-tests/**/*browser.log
-            .qa/package-tests/**/state-contender.log
-            .qa/package-tests/**/server-crash-restart.jsonl
+            .qa/package-tests/run-*/*.json
+            .qa/package-tests/run-*/*.png
+            .qa/package-tests/run-*/*.xml
+            .qa/package-tests/run-*/*.log
+            .qa/package-tests/run-*/*.jsonl
+            .qa/package-tests/run-*/launcher-profile/*.json
+            .qa/package-tests/run-*/launcher-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/initialization-profile/*.json
+            .qa/package-tests/run-*/initialization-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/timeout-profile/*.json
+            .qa/package-tests/run-*/timeout-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/startup-exit-close/*.json
+            .qa/package-tests/run-*/startup-exit-close/diagnostics/*.jsonl
+            .qa/package-tests/run-*/delayed-marker/*.json
+            .qa/package-tests/run-*/delayed-marker/diagnostics/*.jsonl
+            .qa/package-tests/run-*/unwritable-marker/*.json
+            .qa/package-tests/run-*/unwritable-marker/diagnostics/*.jsonl
             .qa/integration/offline-proof.json
             .qa/ci-inputs/server-artifact.json
             runtime/build-identity.json
