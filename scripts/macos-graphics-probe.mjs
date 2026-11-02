@@ -18,11 +18,11 @@ const configurations=[
 ];
 for(const configuration of configurations) {
   const entry={...configuration,profile:join(tmp,configuration.name),errors:[]};report.configurations.push(entry);
-  let context,pid;
+  let context,pid,protocol;
   try {
     context=await chromium.launchPersistentContext(entry.profile,{headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args:['--remote-debugging-pipe',`--user-data-dir=${entry.profile}`,'--no-first-run','--no-default-browser-check','--window-size=800,600',...configuration.args,'about:blank'],env:{...process.env,TMPDIR:tmp,TMP:tmp,TEMP:tmp},timeout:30000});
     const browser=context.browser();assert(browser,'Diagnostic browser connection required');
-    const protocol=await browser.newBrowserCDPSession();
+    protocol=await browser.newBrowserCDPSession();
     const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');pid=processInfo.find(process=>process.type==='browser')?.id;assert(Number.isSafeInteger(pid),'Actual browser PID required');
     entry.pid=pid;entry.argv=await processArgv(pid);entry.startIdentity=startIdentity(pid);entry.browserVersion=browser.version();
     assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security/.test(entry.argv),'No security bypass is permitted');
@@ -45,23 +45,28 @@ for(const configuration of configurations) {
     await page.screenshot({path:join(out,configuration.name+'.png')});
   }catch(error){entry.status='error';entry.errors.push(String(error.stack??error));process.exitCode=1;}
   finally {
-    if(context){
+    // Persistent-context close can escalate to SIGKILL; defer it until actual OS exit.
+    if(protocol){
       let timer;
-      try{await Promise.race([context.close(),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Browser close exceeded10s')),10000))]);}
-      catch(error){
-        entry.errors.push(`Browser cleanup: ${error}`);process.exitCode=1;
-        if(pid&&alive(pid))try{
+      try{await Promise.race([protocol.send('Browser.close'),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Protocol Browser.close exceeded10s')),10000))]);}
+      catch(error){entry.errors.push(`Browser protocol cleanup: ${error}`);process.exitCode=1;}
+      finally{clearTimeout(timer);}
+    }
+    if(pid){
+      let deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
+      if(alive(pid)){
+        entry.errors.push(`Owned browser ${pid} did not exit after protocol close`);process.exitCode=1;
+        try{
           const argv=await processArgv(pid),started=startIdentity(pid);
           assert(entry.argv&&argv===entry.argv&&argv.includes(entry.profile)&&entry.startIdentity&&started===entry.startIdentity,'Current browser ownership identity mismatch');
           process.kill(pid,'SIGTERM');entry.cleanupSignal={signal:'SIGTERM',argv,startIdentity:started};
         }catch(cause){entry.errors.push(`Cleanup ownership could not be verified; no signal sent: ${cause}`);}
+        deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
       }
-      finally{clearTimeout(timer);}
-    }
-    if(pid){
-      const deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
-      entry.browserExited=!alive(pid);if(!entry.browserExited){entry.errors.push(`Owned browser ${pid} did not exit; no successful cleanup claim`);process.exitCode=1;}
-    }
+      entry.browserExited=!alive(pid);
+      if(entry.browserExited&&context)try{await context.close();}catch(error){entry.errors.push(`Exited context disposal: ${error}`);process.exitCode=1;}
+      if(!entry.browserExited){entry.errors.push(`Owned browser ${pid} did not exit; no successful cleanup claim`);process.exitCode=1;}
+    }else if(context){entry.errors.push('Browser identity unavailable; no context disposal or signal attempted');process.exitCode=1;}
     await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
     console.log(`${configuration.name}: ${entry.status}; cleanup=${entry.browserExited}; errors=${entry.errors.length}`);
   }
