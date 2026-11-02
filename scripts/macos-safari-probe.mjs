@@ -1,21 +1,24 @@
 import assert from 'node:assert/strict';
-import {spawn,execFileSync} from 'node:child_process';
+import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdir,open,writeFile} from 'node:fs/promises';
+import {mkdir,open,writeFile,realpath} from 'node:fs/promises';
+import {connect} from 'node:net';
 import {resolve,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
-import {verifySafariListener,cleanupSafariDrivers} from './safari-driver-ownership.mjs';
+import {verifySafariEndpoint,cleanupSafariCli,SAFARI_SERVICE_REQUIREMENT} from './safari-driver-ownership.mjs';
 
 assert(process.platform==='darwin'&&process.env.GITHUB_ACTIONS==='true','Safari diagnostics require an owned native macOS CI runner');
 const out=resolve('.qa/mac-safari-probe');await mkdir(out,{recursive:true});
 const report={purpose:'Normal built-in Safari WebDriver capability diagnostics, NOT game/default-browser acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),driverVersion:execFileSync('/usr/bin/safaridriver',['--version'],{encoding:'utf8'}).trim(),errors:[]};
-let driver,session,driverIdentity,listenerIdentity,endpoint;
+let driver,session,driverIdentity,endpoint,endpointPort;
 const page=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Safari WebGL2 diagnostic</title><h1>Safari WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
 const log=await open(join(out,'safaridriver.log'),'wx');
 try {
   await listen(page);const origin=`http://127.0.0.1:${page.address().port}`;
-  const allocation=createServer();await listen(allocation);const port=allocation.address().port;await new Promise(ok=>allocation.close(ok));
+  const allocation=createServer();await listen(allocation);const port=allocation.address().port;endpointPort=port;
+  report.endpointLease={address:'127.0.0.1',port,reservedByPid:process.pid,reservedAt:new Date().toISOString()};
+  await new Promise(ok=>allocation.close(ok));report.endpointLease.releasedForCliAt=new Date().toISOString();
   endpoint=`http://127.0.0.1:${port}`;
   driver=spawn('/usr/bin/safaridriver',['--port',String(port)],{stdio:['ignore',log.fd,log.fd]});
   let spawnError;driver.once('error',error=>spawnError=error);
@@ -34,16 +37,19 @@ try {
   const addresses=listener.split('\n').filter(line=>line.startsWith('n'));
   report.listener={endpoint,raw:listener,owners,addresses};
   assert.equal(owners.length,1,'A single actual Safari listener owner is required');
-  report.driverTopology=[];let ancestor=Number(owners[0].slice(1));const seen=new Set();
-  while(ancestor>0&&!seen.has(ancestor)){
-    seen.add(ancestor);const identity=await processIdentity(ancestor);report.driverTopology.push(identity);
-    if(ancestor===driver.pid)break;ancestor=identity.ppid;
-  }
+  const service=await processIdentity(Number(owners[0].slice(1)));report.service={...service,ownership:'OS-managed Apple XPC; no signal authority'};
+  report.service.command=execFileSync('ps',['-ww','-p',String(service.pid),'-o','comm='],{encoding:'utf8'}).trim();
+  report.service.textMappings=execFileSync('/usr/sbin/lsof',['-a','-p',String(service.pid),'-d','txt','-Fn'],{encoding:'utf8'}).trim();
+  assert(report.service.textMappings.split('\n').includes('n'+report.service.command),'Actual Safari service executable mapping required');
+  report.service.executable=await realpath(report.service.command);
+  const signatureArgs=['--verify','--strict','-R',SAFARI_SERVICE_REQUIREMENT,report.service.executable];
+  const signature=spawnSync('/usr/bin/codesign',signatureArgs,{encoding:'utf8',timeout:10000});
+  report.service.signature={command:['/usr/bin/codesign',...signatureArgs],requirement:SAFARI_SERVICE_REQUIREMENT,status:signature.status,stdout:signature.stdout,stderr:signature.stderr,error:signature.error&&String(signature.error)};
+  const metadata=spawnSync('/usr/bin/codesign',['-d','-r-','--verbose=4',report.service.executable],{encoding:'utf8',timeout:10000});report.service.signatureMetadata={status:metadata.status,stdout:metadata.stdout,stderr:metadata.stderr};
   const currentRoot=await processIdentity(driver.pid);report.currentDriverRoot=currentRoot;
-  report.status='checking-driver-ownership';await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+  report.status='checking-endpoint-contract';await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
   assert(addresses.length&&addresses.every(line=>/^n(?:127\.0\.0\.1|\[::1\]|localhost):\d+$/.test(line)),'Driver must listen only on loopback');
-  verifySafariListener(driverIdentity,currentRoot,report.driverTopology);
-  listenerIdentity=report.driverTopology[0];report.listenerIdentity=listenerIdentity;
+  verifySafariEndpoint(driverIdentity,currentRoot,report.service,process.getuid());
   const created=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'safari'}}},30000);
   session=created.sessionId;assert(typeof session==='string'&&session.length,'Owned Safari automation session ID required');
   report.session={id:session,capabilities:created.capabilities};
@@ -64,11 +70,14 @@ finally {
     const response=await fetch(endpoint+`/session/${session}/url`,{signal:AbortSignal.timeout(5000)}),invalid=await response.json();
     assert.equal(invalid.value.error,'invalid session id','Deleted automation session must no longer accept commands');report.sessionDeleted=true;
   }catch(error){report.errors.push(`Automation session cleanup: ${error}`);process.exitCode=1;}
-  const cleanup=[];if(listenerIdentity&&listenerIdentity.pid!==driverIdentity.pid)cleanup.push(listenerIdentity);if(driverIdentity)cleanup.push(driverIdentity);
-  await cleanupSafariDrivers(report,cleanup,{alive,identity:processIdentity,signal:(pid,signal)=>process.kill(pid,signal),waitForExit:async pid=>{
+  await cleanupSafariCli(report,driverIdentity,{alive,identity:processIdentity,signal:(pid,signal)=>process.kill(pid,signal),waitForExit:async pid=>{
     const deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
   }});
-  if(listenerIdentity)try{report.listenerExited=!alive(listenerIdentity.pid);}catch(error){report.errors.push(`Listener exit observation unknown: ${error}`);}
+  if(endpointPort)try{
+    const deadline=Date.now()+10000;let closed=false;
+    do{closed=await endpointIsClosed(endpointPort);if(!closed)await delay(100);}while(!closed&&Date.now()<deadline);
+    report.endpointClosed=closed;assert(closed,'Allocated Safari endpoint lease did not close; OS service was NOT signaled');
+  }catch(error){report.errors.push(`Endpoint closure observation unknown: ${error}`);}
   if(driver)try{
     report.driverExited=driver.exitCode!==null||driver.signalCode!==null;
     if(!report.driverExited){report.errors.push('Owned wrapper did not exit; no successful cleanup claim');driver.unref();}
@@ -89,10 +98,16 @@ async function listen(server){await new Promise((ok,bad)=>{server.once('error',b
 function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}
 async function processIdentity(pid){
   assert(Number.isSafeInteger(pid)&&pid>0,'Actual process PID required');
-  const started=startIdentity(pid),ppid=Number(execFileSync('ps',['-p',String(pid),'-o','ppid='],{encoding:'utf8'}).trim()),argv=await processArgv(pid);
-  assert(started&&argv);assert.equal(startIdentity(pid),started,'Process identity changed during capture');return {pid,ppid,started,argv};
+  const started=startIdentity(pid),ppid=Number(execFileSync('ps',['-p',String(pid),'-o','ppid='],{encoding:'utf8'}).trim()),uid=Number(execFileSync('ps',['-p',String(pid),'-o','uid='],{encoding:'utf8'}).trim()),argv=await processArgv(pid);
+  assert(started&&argv);assert.equal(startIdentity(pid),started,'Process identity changed during capture');return {pid,ppid,uid,started,argv};
 }
 function alive(pid){try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}}
+async function endpointIsClosed(port){
+  return await new Promise((ok,bad)=>{
+    const socket=connect({host:'127.0.0.1',port});socket.setTimeout(1000,()=>{socket.destroy();bad(Error('Endpoint observation timed out'));});
+    socket.once('connect',()=>{socket.destroy();ok(false);});socket.once('error',error=>error.code==='ECONNREFUSED'?ok(true):bad(error));
+  });
+}
 function graphicsCapability(){
   const gl=document.querySelector('canvas').getContext('webgl2');const result={supported:!!gl,userAgent:navigator.userAgent,navigatorVendor:navigator.vendor,webdriver:navigator.webdriver};
   if(gl){
