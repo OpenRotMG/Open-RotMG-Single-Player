@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdir, writeFile, readdir} from 'node:fs/promises';
+import {mkdir, writeFile, readdir, lstat} from 'node:fs/promises';
 import {join} from 'node:path';
 
 const powershell = script => execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; ${script}`],{encoding:'utf8'}).trim();
@@ -16,21 +16,30 @@ export async function protectInstallation(path) {
   if(process.platform==='win32') {
     assert(process.env.GITHUB_ACTIONS==='true','Windows ACL tests require a dedicated CI VM');
     const sid=powershell('[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
-    return protectWindowsInstallation(path,sid);
+    const postorder=[];
+    const collect=async file=>{
+      const info=await lstat(file);assert(!info.isSymbolicLink(),`Windows ACL install must not traverse a symlink: ${file}`);
+      if(info.isDirectory())for(const name of await readdir(file))await collect(join(file,name));
+      postorder.push(file);
+    };
+    await collect(path);
+    return protectWindowsInstallation(postorder,sid);
   }
-  const {chmod,lstat}=await import('node:fs/promises');
+  const {chmod}=await import('node:fs/promises');
   const visit=async file=>{const info=await lstat(file);if(info.isSymbolicLink())return;if(info.isDirectory())for(const name of await readdir(file))await visit(join(file,name));await chmod(file,info.mode&~0o222);};
   await visit(path);
   return async()=>{};
 }
-export function protectWindowsInstallation(path,sid,run=execFileSync) {
+export function protectWindowsInstallation(postorder,sid,run=execFileSync) {
+  assert(Array.isArray(postorder)&&postorder.length,'Pre-enumerated owned install paths required');
   const restore=()=>{
-    run('icacls.exe',[path,'/remove:d',`*${sid}`,'/Q']);
-    run('icacls.exe',[path,'/remove:d',`*${sid}`,'/T','/Q']);
+    const errors=[];
+    for(const path of [...postorder].reverse())try{run('icacls.exe',[path,'/remove:d',`*${sid}`,'/Q']);}catch(error){errors.push(error);}
+    if(errors.length)throw new AggregateError(errors,`Install ACL rollback failed: ${errors.map(String).join('; ')}`);
   };
   try {
-    // Generic W also denies SYNCHRONIZE/READ_CONTROL, breaking traversal and native execution.
-    run('icacls.exe',[path,'/deny',`*${sid}:(OI)(CI)(WD,AD,WEA,WA,D,DC)`,'/T','/Q']);
+    // Root-last explicit paths avoid icacls /T traversing a directory it has just denied.
+    for(const path of postorder)run('icacls.exe',[path,'/deny',`*${sid}:(OI)(CI)(WD,AD,WEA,WA,D,DC)`,'/Q']);
   }catch(error){
     try{restore();}catch(rollback){throw new AggregateError([error,rollback],`Install ACL apply failed: ${error}; rollback failed: ${rollback}`);}
     throw error;
