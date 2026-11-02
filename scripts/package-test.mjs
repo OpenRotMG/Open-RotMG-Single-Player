@@ -209,11 +209,14 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     report.status = 'passed';
   } catch (error) {
     report.status = 'failed'; report.errors.push(String(error.stack ?? error)); process.exitCode = 1;
+    report.cleanupPending=true;console.error(report.errors.at(-1));
+    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
     const page=launcher?.windows()[0];
     if(page&&!page.isClosed())try{
       report.failureView=await page.evaluate(()=>window.launcher.status());
       const path=join(out,'integration-failure.png');await page.screenshot({path});report.screenshots.push(path);
     }catch(cause){report.failureEvidenceError=String(cause);}
+    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
   }
   finally {
     if (browserCleanup) try { await browserCleanup(); } catch(error) { report.errors.push(`browser cleanup: ${error}`); process.exitCode = 1; }
@@ -226,6 +229,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     if(restoreInstallation)try{await restoreInstallation();}catch(error){report.errors.push(`Install ACL cleanup: ${error}`);process.exitCode=1;}
     if(lease)try{await lease.release();}catch(error){report.errors.push(String(error));process.exitCode=1;}
     if(report.errors.length)report.status='failed';
+    report.cleanupPending=false;
     await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
     console.log(`${report.status}: ${join(out,'result.json')}`);
     if (report.errors.length) console.error(report.errors.join('\n'));
