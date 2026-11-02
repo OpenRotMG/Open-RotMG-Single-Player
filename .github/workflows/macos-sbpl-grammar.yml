@@ -1,0 +1,24 @@
+name: Mac SBPL grammar and own-address scope diagnostic
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  grammar-probe:
+    runs-on: macos-15
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+      - name: Read whitelisted OS grammar sources and measure ONE named Node-only scope case
+        run: node scripts/macos-sbpl-grammar.mjs
+      - name: Retain exact candidate and small diagnostic receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-sbpl-grammar
+          include-hidden-files: true
+          path: .qa/mac-sbpl-grammar/*
+          if-no-files-found: error
