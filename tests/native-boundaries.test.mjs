@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,rm,readdir} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
-import {consumerEnvironment,protectWindowsInstallation} from '../scripts/native-boundaries.mjs';
+import {consumerEnvironment,protectWindowsInstallation,windowsProcessIdentity} from '../scripts/native-boundaries.mjs';
 
 test('native-boundaries consumer PATH is empty and cannot inherit developer search paths',async()=>{
   await mkdir('.qa/unit',{recursive:true});
@@ -13,6 +13,16 @@ test('native-boundaries consumer PATH is empty and cannot inherit developer sear
     assert.deepEqual(await readdir(env.PATH),[]);
     assert.deepEqual(Object.keys(env).sort(),['HOME','PATH','SystemRoot']);
   }finally{await rm(out,{recursive:true});}
+});
+
+test('native-boundaries Windows process identity preserves actual PID/start/argv/image using explicit PS7',()=>{
+  const old=process.env.ProgramFiles;process.env.ProgramFiles='/owned/program-files';
+  const identity={pid:123,started:'actual-start',argv:'msedge --user-data-dir=fresh-profile',executable:'actual-msedge.exe'},calls=[];
+  try{
+    assert.deepEqual(windowsProcessIdentity(123,(...args)=>{calls.push(args);return JSON.stringify(identity);}),identity);
+    assert(calls[0][0].endsWith(join('PowerShell','7','pwsh.exe')));assert(calls[0][1].at(-1).includes("ProcessId=123"));assert(calls[0][1].at(-1).includes('CreationDate.ToUniversalTime()'));
+    assert.throws(()=>windowsProcessIdentity('123; injected'),/Positive Windows process PID required/);assert.equal(calls.length,1);
+  }finally{if(old===undefined)delete process.env.ProgramFiles;else process.env.ProgramFiles=old;}
 });
 
 const paths=['owned-install/nested/file','owned-install/nested','owned-install'];

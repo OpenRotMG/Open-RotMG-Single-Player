@@ -1,0 +1,28 @@
+name: Installed normal Windows Edge capability
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  edge-probe:
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      - name: Measure existing installed normal Edge without firewall or renderer changes
+        run: node scripts/windows-edge-probe.mjs
+      - name: Retain capability diagnostics, not game or default-browser acceptance
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-normal-edge-capability
+          include-hidden-files: true
+          path: .qa/windows-edge-probe/*
+          if-no-files-found: error

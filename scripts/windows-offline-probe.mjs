@@ -7,7 +7,7 @@ import {connect} from 'node:net';
 import {join,dirname} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
-import {windowsPowerShellExecutable} from './native-boundaries.mjs';
+import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-boundaries.mjs';
 import {tree} from './assets.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
@@ -50,7 +50,7 @@ if(process.argv.includes('--node-policy-check')) {
     await listen(server);const origin=`http://127.0.0.1:${server.address().port}`;report.origin=origin;
     context=await chromium.launchPersistentContext(profile,{executablePath:chrome,headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args:['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1000,800','about:blank'],timeout:30000});
     const browser=context.browser();assert(browser);protocol=await browser.newBrowserCDPSession();const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');const pid=processInfo.find(entry=>entry.type==='browser')?.id;assert(Number.isSafeInteger(pid)&&pid>0);
-    identity=processIdentity(pid);report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
+    identity=windowsProcessIdentity(pid);report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
     assert(identity.executable.toLowerCase()===chrome.toLowerCase()&&identity.argv.includes(profile));assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--use-angle|--ignore-gpu-blocklist/.test(identity.argv),'Normal Chromium sandbox/renderer configuration required');
     const page=context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
     report.webgl2=await page.evaluate(graphicsCapability);
@@ -68,7 +68,7 @@ if(process.argv.includes('--node-policy-check')) {
     if(identity)try{
       let deadline=Date.now()+10000;while(alive(identity.pid)&&Date.now()<deadline)await delay(100);
       if(alive(identity.pid)){
-        report.errors.push('Browser did not exit after protocol close');const current=processIdentity(identity.pid);
+        report.errors.push('Browser did not exit after protocol close');const current=windowsProcessIdentity(identity.pid);
         assert(current.started===identity.started&&current.argv===identity.argv&&current.executable===identity.executable,'Current owned browser identity required before SIGTERM');process.kill(identity.pid,'SIGTERM');report.browserCleanupSignal={...current,signal:'SIGTERM'};
         deadline=Date.now()+10000;while(alive(identity.pid)&&Date.now()<deadline)await delay(100);
       }
@@ -87,7 +87,6 @@ function hash(bytes){return createHash('sha256').update(bytes).digest('hex');}
 function psGitHead(){const result=spawnSync('git',['rev-parse','HEAD'],{encoding:'utf8'});assert.equal(result.status,0);return result.stdout.trim();}
 function ps(script,input){const result=spawnSync(windowsPowerShellExecutable(),['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; ${script}`],{encoding:'utf8',input:input===undefined?undefined:JSON.stringify(input),timeout:30000});assert.equal(result.status,0,`PowerShell failed: ${result.stderr}; ${result.error}`);return JSON.parse(result.stdout);}
 function readRules(names){return ps(`Import-Module NetSecurity -ErrorAction Stop; $names=@(ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())); $result=@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.Name -in $names } | ForEach-Object { [pscustomobject]@{name=$_.Name;enabled=$_.Enabled.ToString();direction=$_.Direction.ToString();action=$_.Action.ToString();program=($_ | Get-NetFirewallApplicationFilter).Program;remoteAddress=($_ | Get-NetFirewallAddressFilter).RemoteAddress} }); ConvertTo-Json -InputObject $result -Depth 6 -Compress`,names);}
-function processIdentity(pid){assert(Number.isSafeInteger(pid)&&pid>0);return ps(`$p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if(!$p) {throw 'Browser process missing'}; [pscustomobject]@{pid=$p.ProcessId;started=$p.CreationDate.ToUniversalTime().ToString('o');argv=$p.CommandLine;executable=$p.ExecutablePath} | ConvertTo-Json -Compress`);}
 function alive(pid){try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}}
 async function listen(server){await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok);});}
 async function deniedTcp(host){return await new Promise((ok,bad)=>{const socket=connect({host,port:80});socket.setTimeout(3000,()=>{socket.destroy();bad(Error('Timeout is not OS policy proof'));});socket.once('connect',()=>{socket.destroy();bad(Error('External TCP unexpectedly connected'));});socket.once('error',error=>{try{assert(['EACCES','EPERM'].includes(error.code),'Actual OS permission denial required');ok({host,port:80,error:error.code});}catch(cause){bad(cause);}});});}
