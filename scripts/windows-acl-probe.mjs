@@ -11,7 +11,7 @@ const out=resolve('.qa/windows-acl-probe');await mkdir(out,{recursive:true});
 const report={purpose:'Owned install ACL diagnostics, NOT package/game/clean-machine acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,release:release(),assertions:[],errors:[]};
 const fixture=await mkdtemp(join(process.env.RUNNER_TEMP,'acl with spaces-'));report.fixture=fixture;
 const nested=join(fixture,'nested directory'),program=join(nested,'owned-node.exe');let restore;
-report.aclSnapshots=[];report.intendedDenyMask=0x10156;
+report.aclSnapshots=[];report.intendedDenyMask=0x10156;report.aclPowerShell=join(process.env.ProgramFiles,'PowerShell/7/pwsh.exe');
 const aclPaths=[fixture,nested,join(nested,'nested-data.txt')];
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 try {
@@ -58,8 +58,8 @@ async function snapshotAcl(phase){
   for(const path of aclPaths){
     const entry={phase,path};report.aclSnapshots.push(entry);
     try{
-      const script=`$ErrorActionPreference='Stop'; $acl=Get-Acl -LiteralPath '${path.replaceAll("'","''")}'; [pscustomobject]@{owner=$acl.Owner;sddl=$acl.Sddl;aces=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { [pscustomobject]@{sid=$_.IdentityReference.Value;type=$_.AccessControlType.ToString();mask=[int64]$_.FileSystemRights;rights=$_.FileSystemRights.ToString();inherited=$_.IsInherited;inheritance=$_.InheritanceFlags.ToString();propagation=$_.PropagationFlags.ToString()} })} | ConvertTo-Json -Depth 6 -Compress`;
-      entry.acl=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:10000}));
+      const script=`$ErrorActionPreference='Stop'; [Console]::Error.WriteLine((@{version=$PSVersionTable.PSVersion.ToString();home=$PSHOME} | ConvertTo-Json -Compress)); Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; $module=Get-Module Microsoft.PowerShell.Security; $acl=Get-Acl -LiteralPath '${path.replaceAll("'","''")}'; [pscustomobject]@{engine=@{version=$PSVersionTable.PSVersion.ToString();home=$PSHOME};securityModule=@{path=$module.Path;version=$module.Version.ToString()};owner=$acl.Owner;sddl=$acl.Sddl;aces=@($acl.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier]) | ForEach-Object { [pscustomobject]@{sid=$_.IdentityReference.Value;type=$_.AccessControlType.ToString();mask=[int64]$_.FileSystemRights;rights=$_.FileSystemRights.ToString();inherited=$_.IsInherited;inheritance=$_.InheritanceFlags.ToString();propagation=$_.PropagationFlags.ToString()} })} | ConvertTo-Json -Depth 6 -Compress`;
+      entry.acl=JSON.parse(execFileSync(report.aclPowerShell,['-NoProfile','-NonInteractive','-Command',script],{encoding:'utf8',timeout:10000}));
       entry.denyMasks=entry.acl.aces.filter(ace=>ace.type==='Deny').map(ace=>({sid:ace.sid,mask:ace.mask,intendedMask:report.intendedDenyMask,unexpectedBits:ace.mask&~report.intendedDenyMask,readOrExecuteBits:ace.mask&(1|8|32|128),readControl:!!(ace.mask&0x20000),synchronize:!!(ace.mask&0x100000)}));
     }catch(error){entry.error=String(error);report.errors.push(`ACL diagnostic ${phase} ${path}: ${error}`);}
   }
