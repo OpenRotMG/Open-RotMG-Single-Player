@@ -20,7 +20,7 @@ test('native-boundaries Windows process identity preserves actual PID/start/argv
   const identity={pid:123,started:'actual-start',argv:'msedge --user-data-dir=fresh-profile',executable:'actual-msedge.exe'},calls=[];
   try{
     assert.deepEqual(windowsProcessIdentity(123,(...args)=>{calls.push(args);return JSON.stringify(identity);}),identity);
-    assert(calls[0][0].endsWith(join('PowerShell','7','pwsh.exe')));assert(calls[0][1].at(-1).includes("ProcessId=123"));assert(calls[0][1].at(-1).includes('CreationDate.ToUniversalTime()'));
+    assert(calls[0][0].endsWith(join('PowerShell','7','pwsh.exe')));assert(calls[0][1].at(-1).includes("ProcessId=123"));assert(calls[0][1].at(-1).includes('CreationDate.ToUniversalTime()'));assert.equal(calls[0][2].timeout,30000);
     assert.throws(()=>windowsProcessIdentity('123; injected'),/Positive Windows process PID required/);assert.equal(calls.length,1);
   }finally{if(old===undefined)delete process.env.ProgramFiles;else process.env.ProgramFiles=old;}
 });
