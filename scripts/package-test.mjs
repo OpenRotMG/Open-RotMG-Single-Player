@@ -96,8 +96,8 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       await page.getByRole('button',{name:'Start Server',exact:true}).click();
       await wait(async()=>{const view=await page.evaluate(()=>window.launcher.status());return view.status==='stopped'&&view.message.includes('before listening');},'invalid-state error',30000);
       const view=await page.evaluate(()=>window.launcher.status());report.invalidState=view;
-      const diagnostic=process.platform==='win32'?/\(os error (183|267)\)/:/File exists|Not a directory/;
-      check('packaged invalid state reports nonzero startup exit and readable diagnostics',view.message.includes('code=1')&&view.logs.some(line=>diagnostic.test(line)));
+      report.invalidStateSentinel=await readFile(join(userData,'state'),'utf8');
+      check('packaged invalid state exits1 without changing the sentinel and reports the actual IO error',view.message.includes('code=1')&&!view.pid&&report.invalidStateSentinel==='not a save directory'&&view.logs.some(line=>/^Error: .+\(os error \d+\)/.test(line)));
     } finally {await rm(join(userData,'state'));}
     restoreInstallation=await protectInstallation(packageDir);
     await assertInstallationProtected(packageDir,join(resources,'runtime'));
