@@ -3,7 +3,8 @@ import {execFileSync} from 'node:child_process';
 import {mkdir, writeFile, readdir, lstat} from 'node:fs/promises';
 import {join} from 'node:path';
 
-const powershell = script => execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; ${script}`],{encoding:'utf8'}).trim();
+export const windowsPowerShellExecutable=()=>join(process.env.ProgramFiles,'PowerShell/7/pwsh.exe');
+const powershell = script => execFileSync(windowsPowerShellExecutable(),['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; ${script}`],{encoding:'utf8'}).trim();
 const quote = text => `'${text.replaceAll("'","''")}'`;
 export async function consumerEnvironment(env, out) {
   const path=join(out,'no-developer-tools');await mkdir(path);
@@ -23,23 +24,25 @@ export async function protectInstallation(path) {
       postorder.push(file);
     };
     await collect(path);
-    return protectWindowsInstallation(postorder,sid);
+    return protectWindowsInstallation(postorder,sid,windowsPowerShellExecutable());
   }
   const {chmod}=await import('node:fs/promises');
   const visit=async file=>{const info=await lstat(file);if(info.isSymbolicLink())return;if(info.isDirectory())for(const name of await readdir(file))await visit(join(file,name));await chmod(file,info.mode&~0o222);};
   await visit(path);
   return async()=>{};
 }
-export function protectWindowsInstallation(postorder,sid,run=execFileSync) {
+export function protectWindowsInstallation(postorder,sid,engine,run=execFileSync) {
   assert(Array.isArray(postorder)&&postorder.length,'Pre-enumerated owned install paths required');
+  assert(/^S-\d+(?:-\d+)+$/.test(sid)&&engine,'Explicit Windows SID and PowerShell 7 executable required');
   const restore=()=>{
     const errors=[];
     for(const path of [...postorder].reverse())try{run('icacls.exe',[path,'/remove:d',`*${sid}`,'/Q']);}catch(error){errors.push(error);}
     if(errors.length)throw new AggregateError(errors,`Install ACL rollback failed: ${errors.map(String).join('; ')}`);
   };
   try {
-    // Root-last explicit paths avoid icacls /T traversing a directory it has just denied.
-    for(const path of postorder)run('icacls.exe',[path,'/deny',`*${sid}:(OI)(CI)(WD,AD,WEA,WA,D,DC)`,'/Q']);
+    // icacls adds SYNCHRONIZE even to granular denies; .NET preserves the intended mutation-only mask.
+    const script=`$ErrorActionPreference='Stop'; Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; $sid=[System.Security.Principal.SecurityIdentifier]::new('${sid}'); $paths=@(ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())); foreach($path in $paths) { $item=Get-Item -LiteralPath $path -Force; $acl=Get-Acl -LiteralPath $path; $inherit=[System.Security.AccessControl.InheritanceFlags]::None; if($item.PSIsContainer) { $inherit=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit' }; $rule=[System.Security.AccessControl.FileSystemAccessRule]::new($sid,[System.Security.AccessControl.FileSystemRights]0x10156,$inherit,[System.Security.AccessControl.PropagationFlags]::None,[System.Security.AccessControl.AccessControlType]::Deny); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl; $actual=@((Get-Acl -LiteralPath $path).GetAccessRules($true,$false,[System.Security.Principal.SecurityIdentifier]) | Where-Object { $_.IdentityReference.Value -eq $sid.Value -and $_.AccessControlType -eq 'Deny' }); if($actual.Count -ne 1 -or [int64]$actual[0].FileSystemRights -ne 0x10156) { throw \"Exact mutation-only deny mask verification failed: $path\" } }`;
+    run(engine,['-NoProfile','-NonInteractive','-Command',script],{input:JSON.stringify(postorder),encoding:'utf8'});
   }catch(error){
     try{restore();}catch(rollback){throw new AggregateError([error,rollback],`Install ACL apply failed: ${error}; rollback failed: ${rollback}`);}
     throw error;
