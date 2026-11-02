@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createServer} from 'node:http';
-import {mkdir,open,writeFile,realpath} from 'node:fs/promises';
+import {mkdir,open,writeFile,realpath,readdir,lstat,copyFile} from 'node:fs/promises';
+import {homedir} from 'node:os';
 import {connect} from 'node:net';
 import {resolve,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -13,15 +14,18 @@ assert(process.platform==='darwin'&&process.env.GITHUB_ACTIONS==='true','Safari 
 const out=resolve('.qa/mac-safari-probe');await mkdir(out,{recursive:true});
 const report={purpose:'Normal built-in Safari WebDriver capability diagnostics, NOT game/default-browser acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),driverVersion:execFileSync('/usr/bin/safaridriver',['--version'],{encoding:'utf8'}).trim(),errors:[],scriptResponses:[]};
 let driver,session,driverIdentity,endpoint,endpointPort;
+const probeStarted=Date.now(),diagnosticRoot=join(homedir(),'Library/Logs/com.apple.WebDriver');
+const diagnosticsBefore=new Set();report.diagnosticRoot=diagnosticRoot;report.requests=[];
 const page=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Safari WebGL2 diagnostic</title><h1>Safari WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
 const log=await open(join(out,'safaridriver.log'),'wx');
 try {
+  try{for(const name of await readdir(diagnosticRoot))diagnosticsBefore.add(name);report.diagnosticRootBefore='present';}catch(error){if(error.code!=='ENOENT')throw error;report.diagnosticRootBefore='absent';}
   await listen(page);const origin=`http://127.0.0.1:${page.address().port}`;
   const allocation=createServer();await listen(allocation);const port=allocation.address().port;endpointPort=port;
   report.endpointLease={address:'127.0.0.1',port,reservedByPid:process.pid,reservedAt:new Date().toISOString()};
   await new Promise(ok=>allocation.close(ok));report.endpointLease.releasedForCliAt=new Date().toISOString();
   endpoint=`http://127.0.0.1:${port}`;
-  driver=spawn('/usr/bin/safaridriver',['--port',String(port)],{stdio:['ignore',log.fd,log.fd]});
+  driver=spawn('/usr/bin/safaridriver',['--diagnose','--port',String(port)],{stdio:['ignore',log.fd,log.fd]});
   let spawnError;driver.once('error',error=>spawnError=error);
   driverIdentity=await processIdentity(driver.pid);report.driverRoot=driverIdentity;
   const deadline=Date.now()+20000;let ready=false;
@@ -50,7 +54,7 @@ try {
   const currentRoot=await processIdentity(driver.pid);report.currentDriverRoot=currentRoot;
   report.status='checking-endpoint-contract';await persist();
   assert(addresses.length&&addresses.every(line=>/^n(?:127\.0\.0\.1|\[::1\]|localhost):\d+$/.test(line)),'Driver must listen only on loopback');
-  verifySafariEndpoint(driverIdentity,currentRoot,report.service,process.getuid());
+  verifySafariEndpoint(driverIdentity,currentRoot,report.service,process.getuid());report.endpointContractVerified=true;
   const created=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'safari'}}},30000);
   session=created.sessionId;assert(typeof session==='string'&&session.length,'Owned Safari automation session ID required');
   report.session={id:session,capabilities:created.capabilities};
@@ -84,6 +88,7 @@ finally {
     if(!report.driverExited){report.errors.push('Owned wrapper did not exit; no successful cleanup claim');driver.unref();}
   }catch(error){report.errors.push(`Wrapper exit observation unknown: ${error}`);}
   try{if(page.listening){page.closeAllConnections();await new Promise((ok,bad)=>page.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`Diagnostic HTTP cleanup: ${error}`);}
+  try{await collectDiagnostics();}catch(error){report.errors.push(`Scoped WebDriver diagnostic collection: ${error}`);}
   try{await log.close();}catch(error){report.errors.push(`Driver log close: ${error}`);}
   if(report.errors.length){report.status='error';process.exitCode=1;}
   await persist();
@@ -95,10 +100,38 @@ async function persist(){
   catch(error){report.status='error';report.errors.push(`Receipt persistence: ${error}`);process.exitCode=1;console.error(JSON.stringify(report,null,2));}
 }
 async function request(method,path,body,timeout=20000){
-  const response=await fetch(endpoint+path,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(timeout)});
-  const data=JSON.parse(await response.text());
-  if(path.endsWith('/execute/sync')){report.scriptResponses.push({method,path,status:response.status,value:data.value});console.error(JSON.stringify(report.scriptResponses.at(-1)));await persist();}
-  return safariWebDriverValue(response.status,data);
+  const timing={method,path,startedAt:new Date().toISOString(),deadlineMs:timeout};report.requests.push(timing);const started=Date.now();
+  try{
+    const response=await fetch(endpoint+path,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(timeout)});timing.httpStatus=response.status;
+    const data=JSON.parse(await response.text());
+    if(path.endsWith('/execute/sync')){report.scriptResponses.push({method,path,status:response.status,value:data.value});console.error(JSON.stringify(report.scriptResponses.at(-1)));await persist();}
+    return safariWebDriverValue(response.status,data);
+  }catch(error){
+    timing.error=String(error);timing.failureElapsedMs=Date.now()-started;
+    if(method==='POST'&&path==='/session'&&error.name==='TimeoutError')await startupTimeoutEvidence();
+    throw error;
+  }finally{timing.elapsedMs=Date.now()-started;}
+}
+async function startupTimeoutEvidence(){
+  report.sessionStartupTimeout={observedAt:new Date().toISOString(),noSessionIdReturned:!session};
+  try{const response=await fetch(endpoint+'/status',{signal:AbortSignal.timeout(1500)});report.sessionStartupTimeout.driverStatus={httpStatus:response.status,value:await response.json()};}catch(error){report.sessionStartupTimeout.statusError=String(error);}
+  const path=join(out,'session-startup-timeout-desktop.png'),command=['/usr/sbin/screencapture','-x',path];
+  const captured=spawnSync(command[0],command.slice(1),{encoding:'utf8',timeout:10000});
+  report.sessionStartupTimeout.readOnlyDesktopCapture={command,status:captured.status,stderr:captured.stderr,error:captured.error&&String(captured.error)};
+  if(captured.status!==0)report.errors.push(`Owned CI desktop capture failed: ${captured.stderr}; ${captured.error}`);
+}
+async function collectDiagnostics(){
+  let names;try{names=await readdir(diagnosticRoot);}catch(error){if(error.code==='ENOENT'){report.diagnosticFiles=[];return;}throw error;}
+  report.diagnosticFiles=[];const pids=[driverIdentity?.pid,report.endpointContractVerified?report.service?.pid:undefined].filter(Number.isSafeInteger);
+  const marker=new RegExp(`(^|[^0-9])(${pids.join('|')})([^0-9]|$)`);
+  async function collect(source,relative){
+    const info=await lstat(source);if(info.isSymbolicLink()||info.uid!==process.getuid()||info.birthtimeMs<probeStarted){report.diagnosticFiles.push({relative,retained:false,reason:'not a new regular owned diagnostic tree'});return;}
+    if(info.isDirectory()){for(const name of await readdir(source))await collect(join(source,name),relative+'/'+name);return;}
+    if(!info.isFile())throw Error(`Unexpected WebDriver diagnostic type: ${source}`);
+    const destination=join(out,'webdriver-diagnostics',relative);await mkdir(resolve(destination,'..'),{recursive:true});await copyFile(source,destination);report.diagnosticFiles.push({relative,bytes:info.size,retained:true});
+  }
+  // Instance diagnostics use PID/timestamp; never sweep unrelated Library logs.
+  for(const name of names)if(!diagnosticsBefore.has(name)&&pids.length&&marker.test(name))await collect(join(diagnosticRoot,name),name);
 }
 async function listen(server){await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok);});}
 function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}

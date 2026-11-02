@@ -1,6 +1,13 @@
 name: macOS Safari capability diagnostics
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Standard native Mac diagnostic target (not game acceptance)
+        type: choice
+        required: true
+        default: macos-15
+        options: [macos-15, macos-15-intel, all]
 permissions:
   contents: read
 jobs:
@@ -8,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-15]
+        os: ${{ fromJSON('{"macos-15":["macos-15"],"macos-15-intel":["macos-15-intel"],"all":["macos-15-intel","macos-15"]}')[inputs.target] }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
