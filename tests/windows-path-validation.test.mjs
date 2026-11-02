@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {nativeServerBuild} from '../scripts/native-server-build.mjs';
-import {windowsPrepareTestCommand,assertWindowsPrepareResults,requiredTests,serverCommit,purpose} from '../scripts/windows-path-validation.mjs';
+import {windowsPrepareTestCommand,assertWindowsPrepareResults,requiredTests,serverCommit,purpose,assertWindowsPackagedBuild,assertWindowsPackagedProcess} from '../scripts/windows-path-validation.mjs';
+import {sha256} from '../scripts/assets.mjs';
 
 const source=resolve('.qa/ci-inputs/server');
 const receipt={platform:'win32',arch:'x64',head:serverCommit,dirty:false,command:nativeServerBuild(source,'win32','x64').command};
@@ -20,6 +21,35 @@ test('windows-path-validation requires actual passed Windows drive/key, linked-i
     assert.throws(()=>assertWindowsPrepareResults(passing.replace(`test ${name} ... ok`,`test ${name} ... ignored`)),/Required native regression/);
   }
   for(const output of ['', 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 527 filtered out;',passing.replace('12 passed','11 passed'),passing.replace('0 failed','1 failed')])assert.throws(()=>assertWindowsPrepareResults(output));
+});
+test('windows-path-validation binds copied binary and package generation to exact verified source/build receipt',async()=>{
+  const pins=JSON.parse(await readFile('source-pins.json','utf8'));
+  const binarySha256=sha256('actual installed server bytes'),receiptBytes=Buffer.from(JSON.stringify({...receipt,sha256:binarySha256}));
+  const build={platform:'win32',arch:'x64',pins,binarySha256,buildReceiptSha256:sha256(receiptBytes),assetsSha256:sha256('verified package assets')};
+  const fixture={pins,build,generatedBuild:structuredClone(build),input:{platform:'win32',arch:'x64',serverSource:source,serverBinarySha256:binarySha256},receiptBytes,binarySha256};
+  assert.doesNotThrow(()=>assertWindowsPackagedBuild(fixture));
+  for(const field of ['pins','binarySha256','buildReceiptSha256','platform','arch']) {
+    const wrong={...fixture,build:structuredClone(build)};wrong.build[field]=field==='pins'?{server:{commit:'wrong'}}:'wrong';
+    assert.throws(()=>assertWindowsPackagedBuild(wrong),/Copied build identity/);
+  }
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,binarySha256:sha256('wrong server')}),/Copied installed server/);
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,generatedBuild:{...build,assetsSha256:sha256('other generation')}}),/package generation/);
+  const wrongPins={...pins,server:{...pins.server,commit:'f73676768ff9fbb635eac9680a3fdc9a0739d178'}};
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,pins:wrongPins}),/Reviewed Windows source/);
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,build:{...build,pins:wrongPins},generatedBuild:{...build,pins:wrongPins}}),/Copied source\/data\/client/);
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,receiptBytes:Buffer.from(JSON.stringify({...receipt,sha256:binarySha256,rustc:'other compiler generation'}))}),/verified native receipt/);
+  assert.throws(()=>assertWindowsPackagedBuild({...fixture,input:{...fixture.input,serverBinarySha256:sha256('wrong input')}}),/Native input binary/);
+});
+test('windows-path-validation rejects wrong actual Windows image or PID generation even when argv names installed binary',()=>{
+  const binary='D:\\qa\\installed runtime with spaces\\resources\\runtime\\openrotmg.exe';
+  const identity={pid:123,executable:binary,started:'2026-11-02T15:00:01.1234567Z',argv:`"${binary}" --desktop --config D:\\state\\desktop-config.json`};
+  const launcherHead='24f30f57dda70e1890e64fe94096295e0812b5fe';
+  const expected={pid:123,binary,requestedAt:Date.parse('2026-11-02T15:00:00Z'),observedAt:Date.parse('2026-11-02T15:00:02Z'),health:{process:123,revision:launcherHead},launcherHead};
+  assert.doesNotThrow(()=>assertWindowsPackagedProcess(identity,expected));
+  assert.doesNotThrow(()=>assertWindowsPackagedProcess({...identity,executable:binary.toUpperCase()},expected));
+  assert.throws(()=>assertWindowsPackagedProcess(identity,{...expected,health:{...expected.health,process:456}}),/Health must belong/);
+  assert.throws(()=>assertWindowsPackagedProcess(identity,{...expected,health:{...expected.health,revision:serverCommit}}),/launcher build generation/);
+  for(const change of [{executable:'D:\\other\\openrotmg.exe'},{executable:binary+'.other.exe'},{executable:null},{pid:456},{started:'2026-11-02T14:59:59Z'},{started:'2026-11-02T15:00:03Z'},{started:'invalid'}])assert.throws(()=>assertWindowsPackagedProcess({...identity,...change},expected));
 });
 test('windows-path-validation pins explicit reviewed fork QA candidate and preserves every data/client/Ruffle pin',async()=>{
   assert.deepEqual(JSON.parse(await readFile('source-pins.json','utf8')),{
@@ -55,6 +85,10 @@ test('package-test focused branch protects installation before first focused lau
   assert.match(code,/chromiumSandbox: true, env:consumerEnv/);
   assert.match(code,/packagedChildReady[\s\S]*'packaged child readiness', 650000/);
   assert.match(code,/health\.process === serverPid/);
+  assert.match(code,/if\(failureTestsOnly&&process.platform==='win32'\) \{[\s\S]*assertWindowsPackagedBuild\(binding\)/);
+  assert(code.indexOf('assertWindowsPackagedBuild(binding)')<code.indexOf('    page=await launch();'));
+  assert.match(code,/windowsProcessIdentity\(serverPid\)[\s\S]*assertWindowsPackagedProcess\(identity,\{pid:serverPid,binary,requestedAt,observedAt,health,launcherHead:report.launcherSource.head\}\)/);
+  assert.match(focused,/assert\.deepEqual\(identity,readyIdentity/);
   assert.match(code,/finally \{[\s\S]*if\(restoreInstallation\)try\{await restoreInstallation\(\);/);
   assert.match(code,/NOT game, graphics, offline or all-platform acceptance/);
 });

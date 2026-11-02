@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {execFileSync,spawnSync} from 'node:child_process';
 import {mkdir,open,readFile,writeFile} from 'node:fs/promises';
-import {isAbsolute,join,resolve} from 'node:path';
+import {isAbsolute,join,resolve,win32} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {nativeServerBuild} from './native-server-build.mjs';
 import {sha256} from './assets.mjs';
@@ -29,6 +29,35 @@ export function windowsPrepareTestCommand(source,receipt) {
 export function assertWindowsPrepareResults(output) {
   for(const name of requiredTests)assert(output.split(/\r?\n/).includes(`test ${name} ... ok`),`Required native regression did not pass: ${name}`);
   assert(/test result: ok\. 12 passed; 0 failed; 0 ignored; 0 measured; \d+ filtered out;/.test(output),'Expected all 12 candidate terrain::prepare tests, not zero/ignored/filtered-only success');
+}
+
+export function assertWindowsPackagedBuild({pins,build,generatedBuild,input,receiptBytes,binarySha256}) {
+  const receipt=JSON.parse(receiptBytes);
+  assert.equal(pins.server.commit,serverCommit,'Reviewed Windows source pin required');
+  assert.deepEqual(build,generatedBuild,'Copied build identity must match this package generation');
+  assert.deepEqual(build.pins,pins,'Copied source/data/client identities must match verified pins');
+  for(const identity of [build,input]) {
+    assert.equal(identity.platform,'win32','Windows-specific packaged proof required');
+    assert.equal(identity.arch,'x64');
+  }
+  windowsPrepareTestCommand(input.serverSource,receipt);
+  assert.equal(build.buildReceiptSha256,sha256(receiptBytes),'Copied build must identify the verified native receipt');
+  assert.match(binarySha256,/^[0-9a-f]{64}$/);
+  assert.equal(binarySha256,receipt.sha256,'Copied installed server must match verified native binary');
+  assert.equal(build.binarySha256,receipt.sha256,'Copied build binary identity must match receipt');
+  assert.equal(input.serverBinarySha256,receipt.sha256,'Native input binary identity must match receipt');
+}
+export function assertWindowsPackagedProcess(identity,{pid,binary,requestedAt,observedAt,health,launcherHead}) {
+  assert(Number.isSafeInteger(pid)&&pid>0);
+  assert.equal(health.process,pid,'Health must belong to the installed child');
+  // CI inherits the launcher workflow SHA at compile time; the native receipt separately binds server source.
+  assert.match(launcherHead,/^[0-9a-f]{40}$/);
+  assert.equal(health.revision,launcherHead,'Compiled health revision must match this launcher build generation');
+  assert.equal(identity.pid,pid,'CIM identity must match the health-correlated child PID');
+  assert(win32.isAbsolute(binary)&&typeof identity.executable==='string'&&win32.isAbsolute(identity.executable),'Absolute Windows executable paths required');
+  assert.equal(win32.normalize(identity.executable).toLowerCase(),win32.normalize(binary).toLowerCase(),'Actual child executable must be the protected installed server');
+  const started=Date.parse(identity.started);
+  assert(Number.isFinite(started)&&started>=requestedAt&&started<=observedAt,'Child process generation must belong to this focused Start request');
 }
 
 async function main() {

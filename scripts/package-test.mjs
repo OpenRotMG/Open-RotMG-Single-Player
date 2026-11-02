@@ -13,9 +13,10 @@ import { release, type } from 'node:os';
 import {listenOnLoopback,acquireQaPortLease} from './qa-port.mjs';
 import {failureCloseTests} from './failure-close-test.mjs';
 import {PORT} from '../dist/runtime.js';
-import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage,windowsPowerShellExecutable} from './native-boundaries.mjs';
+import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage,windowsPowerShellExecutable,windowsProcessIdentity} from './native-boundaries.mjs';
 import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.mjs';
 import {packagedChildReady} from './package-readiness.mjs';
+import {assertWindowsPackagedBuild,assertWindowsPackagedProcess} from './windows-path-validation.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const child = spawn('dbus-run-session', [process.execPath, ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, OPENROTMG_PRIVATE_TEST: '1' } });
@@ -105,6 +106,16 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     }
     restoreInstallation=await protectInstallation(packageDir);
     await assertInstallationProtected(packageDir,join(resources,'runtime'));
+    if(failureTestsOnly&&process.platform==='win32') {
+      assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Explicit native build inputs required for Windows-focused binding');
+      const input=JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8'));
+      assert(isAbsolute(input.serverBuildReceipt),'Absolute verified native receipt required');
+      const receiptBytes=await readFile(input.serverBuildReceipt);
+      const binding={pins:JSON.parse(await readFile('source-pins.json','utf8')),build:report.build,generatedBuild:JSON.parse(await readFile('runtime/build-identity.json','utf8')),input,receiptBytes,binarySha256:sha256(await readFile(binary))};
+      assertWindowsPackagedBuild(binding);
+      report.windowsFocusedBinding={binary,binarySha256:binding.binarySha256,buildReceiptSha256:sha256(receiptBytes),buildReceipt:JSON.parse(receiptBytes)};
+      check('Windows-focused protected installed binary and package generation match verified native source/build receipt',true);
+    }
     if(launcher){await launcher.close();launcher=undefined;}
     page=await launch();
     userData = await launcher.evaluate(({app}) => app.getPath('userData'));
@@ -125,11 +136,18 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     check('server-authoritative fresh synthetic fixture validated before consumer start', true);
     }
     const start = async () => {
+      const requestedAt=Date.now();
       await page.getByRole('button', {name:'Start Server',exact:true}).click();
       await wait(async () => packagedChildReady(await page.evaluate(() => window.launcher.status())), 'packaged child readiness', 650000);
       const view = await page.evaluate(() => window.launcher.status()); serverPid = view.pid;
       const health = await (await fetch(view.origin+'/health')).json();
       check('health belongs to packaged spawned child', health.process === serverPid);
+      if(failureTestsOnly&&process.platform==='win32') {
+        const identity=windowsProcessIdentity(serverPid),observedAt=Date.now();
+        assertWindowsPackagedProcess(identity,{pid:serverPid,binary,requestedAt,observedAt,health,launcherHead:report.launcherSource.head});
+        report.windowsFocusedBinding.process={...identity,requestedAt,observedAt};
+        check('Windows-focused actual health child image and process generation belong to protected installed binary',true);
+      }
       check('consumer bots/LLM disabled', health.bots === 0 && !health.bot_dialogue.enabled);
       const childArgv=await processArgv(serverPid);
       check('compiled child has explicit desktop/config and no consumer test privilege',childArgv.includes('--desktop')&&childArgv.includes('--config')&&!/--dev-control|--test-state/.test(childArgv));
@@ -154,6 +172,11 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     if(failureTestsOnly) {
       await start();
       await rejectStateContender({binary,userData,out,env:consumerEnv,check,report});
+      if(process.platform==='win32') {
+        const identity=windowsProcessIdentity(serverPid),{requestedAt,observedAt,...readyIdentity}=report.windowsFocusedBinding.process;
+        assert.deepEqual(identity,readyIdentity,'Focused child PID/image/start/argv must retain the verified process generation before Stop');
+        report.windowsFocusedBinding.beforeStop=identity;
+      }
       await stop();
       const names=(await readdir(join(userData,'diagnostics'))).sort();
       check('focused packaged Stop records completed shutdown persistence',(await readFile(join(userData,'diagnostics',names.at(-1)),'utf8')).includes('shutdown persistence complete'));
