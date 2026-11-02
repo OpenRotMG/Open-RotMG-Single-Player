@@ -6,6 +6,10 @@ import {join} from 'node:path';
 export const windowsPowerShellExecutable=()=>join(process.env.ProgramFiles,'PowerShell/7/pwsh.exe');
 const powershell = script => execFileSync(windowsPowerShellExecutable(),['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; ${script}`],{encoding:'utf8'}).trim();
 const quote = text => `'${text.replaceAll("'","''")}'`;
+export function windowsProcessIdentity(pid,run=execFileSync) {
+  assert(Number.isSafeInteger(pid)&&pid>0,'Positive Windows process PID required');
+  return JSON.parse(run(windowsPowerShellExecutable(),['-NoProfile','-NonInteractive','-Command',`$ErrorActionPreference='Stop'; $p=Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}'; if(!$p) {throw 'Process missing'}; [pscustomobject]@{pid=$p.ProcessId;started=$p.CreationDate.ToUniversalTime().ToString('o');argv=$p.CommandLine;executable=$p.ExecutablePath} | ConvertTo-Json -Compress`],{encoding:'utf8',timeout:30000}));
+}
 export async function consumerEnvironment(env, out) {
   const path=join(out,'no-developer-tools');await mkdir(path);
   const clean={...env};
