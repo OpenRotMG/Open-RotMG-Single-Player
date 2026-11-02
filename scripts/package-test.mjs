@@ -151,7 +151,8 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     browserCleanup = game.close;
     await game.mutate();
     await stop();
-    await start();await game.verify(true);
+    await game.close();browserCleanup=undefined;
+    await start();await game.verify(true);browserCleanup=game.close;
     await closeActive('window-close');
     await game.close(); browserCleanup = undefined;
     page = await launch();
