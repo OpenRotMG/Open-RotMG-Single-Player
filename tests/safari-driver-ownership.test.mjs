@@ -7,6 +7,7 @@ import {resolve,join} from 'node:path';
 const root={pid:1306,ppid:1282,uid:501,started:'root-start',argv:'/usr/bin/safaridriver --port 49167'};
 const service={pid:1372,ppid:1,uid:501,started:'service-start',argv:'OS-managed service',executable:'/System/Volumes/Preboot/Cryptexes/App/System/Library/StagedFrameworks/Safari/WebDriver.framework/Versions/A/XPCServices/com.apple.WebDriver.HTTPService.xpc/Contents/MacOS/com.apple.WebDriver.HTTPService',signature:{requirement:SAFARI_SERVICE_REQUIREMENT,status:0}};
 test('safari-driver-ownership validates an OS-managed Apple service without claiming descendant ownership',()=>{
+  assert.equal(SAFARI_SERVICE_REQUIREMENT,'=anchor apple and identifier "com.apple.WebDriver.HTTPService"','codesign -R must receive inline source, not a requirement filename');
   verifySafariEndpoint(root,{...root},service,501);
 });
 test('safari-driver-ownership rejects foreign user, non-Apple signature and unexpected service executable',()=>{
