@@ -15,6 +15,7 @@ import {failureCloseTests} from './failure-close-test.mjs';
 import {PORT} from '../dist/runtime.js';
 import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage,windowsPowerShellExecutable} from './native-boundaries.mjs';
 import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.mjs';
+import {packagedChildReady} from './package-readiness.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const child = spawn('dbus-run-session', [process.execPath, ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, OPENROTMG_PRIVATE_TEST: '1' } });
@@ -117,7 +118,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     check('server-authoritative fresh synthetic fixture validated before consumer start', true);
     const start = async () => {
       await page.getByRole('button', {name:'Start Server',exact:true}).click();
-      await wait(async () => (await page.evaluate(() => window.launcher.status())).status === 'ready', 'packaged child readiness', 650000);
+      await wait(async () => packagedChildReady(await page.evaluate(() => window.launcher.status())), 'packaged child readiness', 650000);
       const view = await page.evaluate(() => window.launcher.status()); serverPid = view.pid;
       const health = await (await fetch(view.origin+'/health')).json();
       check('health belongs to packaged spawned child', health.process === serverPid);

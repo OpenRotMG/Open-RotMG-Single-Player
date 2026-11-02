@@ -4,6 +4,7 @@ import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
 import assert from 'node:assert/strict';
+import {packagedChildReady} from './package-readiness.mjs';
 
 export async function failureCloseTests({out,native,env,check,report}) {
   const args=profile=>[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])];
@@ -54,7 +55,7 @@ export async function failureCloseTests({out,native,env,check,report}) {
         };
       });
       await page.getByRole('button',{name:'Start Server',exact:true}).click();
-      await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='ready','failure-case child readiness',650000);
+      await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'failure-case child readiness',650000);
       server=(await page.evaluate(()=>window.launcher.status())).pid;
       if(kind==='unwritable-marker')await mkdir(join(profile,'shutdown-failed.json'));
       process.kill(server,'SIGKILL');
