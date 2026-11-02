@@ -1,27 +1,24 @@
 import assert from 'node:assert/strict';
 
+export const SAFARI_SERVICE_REQUIREMENT='anchor apple and identifier "com.apple.WebDriver.HTTPService"';
 export function verifySafariProcess(owned,current) {
-  // A proved child can be reparented during shutdown without changing its birth identity.
-  for(const key of ['pid','started','argv'])assert.equal(current[key],owned[key],`Safari driver process ${key} changed; ownership is not verified`);
+  for(const key of ['pid','started','argv'])assert.equal(current[key],owned[key],`Safari CLI process ${key} changed; ownership is not verified`);
 }
-export function verifySafariListener(root,currentRoot,lineage) {
+export function verifySafariEndpoint(root,currentRoot,service,uid) {
   verifySafariProcess(root,currentRoot);
-  assert.equal(currentRoot.ppid,root.ppid,'Spawned Safari wrapper parent changed');
-  assert(lineage.length,'Actual listener lineage is required');
-  assert.equal(new Set(lineage.map(entry=>entry.pid)).size,lineage.length,'Safari listener lineage must not cycle');
-  for(const [index,entry] of lineage.entries()) {
-    assert(Number.isSafeInteger(entry.pid)&&entry.pid>0&&Number.isSafeInteger(entry.ppid)&&entry.ppid>=0&&entry.started&&entry.argv,'Complete observed process identity required');
-    if(index+1<lineage.length)assert.equal(entry.ppid,lineage[index+1].pid,'Safari listener ancestry is disconnected');
-  }
-  verifySafariProcess(root,lineage.at(-1));
+  assert.equal(currentRoot.ppid,root.ppid,'Spawned Safari CLI parent changed');assert.equal(root.uid,uid);
+  assert.equal(service.uid,uid,'Safari XPC service must run as the current user');assert.equal(service.ppid,1,'Expected OS-managed launchd service');
+  assert(/^\/System\/Volumes\/Preboot\/Cryptexes\/App\/System\/Library\/StagedFrameworks\/Safari\/WebDriver\.framework\/Versions\/[^/]+\/XPCServices\/com\.apple\.WebDriver\.HTTPService\.xpc\/Contents\/MacOS\/com\.apple\.WebDriver\.HTTPService$/.test(service.executable),'Unexpected installed Safari HTTPService executable');
+  assert.equal(service.signature.requirement,SAFARI_SERVICE_REQUIREMENT);assert.equal(service.signature.status,0,'Apple signature/identifier verification failed');
 }
-export async function cleanupSafariDrivers(report,owned,operations) {
+export async function cleanupSafariCli(report,root,operations) {
   report.driverCleanup=[];
-  for(const target of owned)try{
-    if(!operations.alive(target.pid))continue;
-    const current=await operations.identity(target.pid);verifySafariProcess(target,current);
-    operations.signal(target.pid,'SIGTERM');report.driverCleanup.push({...current,signal:'SIGTERM'});
-    await operations.waitForExit(target.pid);
-    if(operations.alive(target.pid))throw Error(`Owned driver process ${target.pid} did not exit`);
-  }catch(error){report.errors.push(`Driver ownership/cleanup: ${error}; no successful cleanup claim`);report.status='error';}
+  if(!root)return;
+  try{
+    if(!operations.alive(root.pid))return;
+    const current=await operations.identity(root.pid);verifySafariProcess(root,current);
+    operations.signal(root.pid,'SIGTERM');report.driverCleanup.push({...current,signal:'SIGTERM'});
+    await operations.waitForExit(root.pid);
+    if(operations.alive(root.pid))throw Error(`Owned Safari CLI ${root.pid} did not exit`);
+  }catch(error){report.errors.push(`CLI ownership/cleanup: ${error}; no successful cleanup claim`);report.status='error';}
 }
