@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {closePrePidOfflineContext,persistMacOfflineEvidence} from '../scripts/macos-offline-evidence.mjs';
+import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands} from '../scripts/macos-offline-evidence.mjs';
+
+test('macos-offline-evidence confines both payload commands under one exact policy without changing normal graphics',()=>{
+  const commands=macOfflinePayloadCommands('/owned/offline.sb','/node','/canary.mjs','/chromium','/fresh/profile');
+  assert.deepEqual(commands.node,['/usr/bin/sandbox-exec','-f','/owned/offline.sb','/node','/canary.mjs','/owned/offline.sb']);
+  assert.deepEqual(commands.browser.slice(0,4),['/usr/bin/sandbox-exec','-f','/owned/offline.sb','/chromium']);
+  assert(commands.browser.includes('--remote-debugging-pipe'));assert(!commands.browser.some(arg=>/--no-sandbox|--use-angle|--ignore-gpu-blocklist|--disable-web-security/.test(arg)));
+});
 
 test('macos-offline-evidence closes a freshly created pre-PID context without claiming verified OS exit',async()=>{
   let closed=false;const report={status:'failed',errors:['CDP discovery failed']};

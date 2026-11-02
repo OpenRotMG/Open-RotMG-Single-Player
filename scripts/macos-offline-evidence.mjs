@@ -1,5 +1,10 @@
 import {writeFile} from 'node:fs/promises';
 
+export function macOfflinePayloadCommands(policy,node,canary,chromium,profile) {
+  const wrapper=['/usr/bin/sandbox-exec','-f',policy];
+  return {node:[...wrapper,node,canary,policy],browser:[...wrapper,chromium,'--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1000,800','about:blank']};
+}
+
 export async function closePrePidOfflineContext(context,report) {
   report.browserExitVerification='unverified';report.prePidFrameworkClose={attempted:true};report.status='failed';
   try{await context.close();report.prePidFrameworkClose.completed=true;}
