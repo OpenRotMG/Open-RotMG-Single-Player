@@ -97,3 +97,54 @@ const stop=()=>server.close(()=>process.exit(0));process.stdin.on('data',stop);p
     await assert.rejects(readFile(join(user,'shutdown-failed.json')),/ENOENT/);
   }finally{await runtime.stop();}
 });
+
+const healthy=String.raw`#!${process.execPath}
+const http=require('node:http'),fs=require('node:fs');let requested=false;
+const server=http.createServer((req,res)=>res.end(JSON.stringify({process:process.pid,bots:0,bot_dialogue:{enabled:false}})));
+const stop=()=>{requested=true;if(server.listening)server.close(()=>process.exit(0));};
+process.stdin.on('data',stop);process.stdin.on('end',stop);
+setTimeout(()=>server.listen(${PORT},'127.0.0.1',()=>{fs.writeSync(1,JSON.stringify({fields:{message:'game frontdoor listening'}})+'\n');if(requested)stop();}),100);
+`;
+async function startupFixture() {
+  await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/startup-'));
+  const resources=join(root,'resources'),user=join(root,'user');await mkdir(resources);await mkdir(user);
+  await writeFile(join(resources,'inventory.json'),'{"files":[]}');
+  return {runtime:new Runtime(resources,user),binary:join(resources,'openrotmg'),user};
+}
+async function waitStartup(predicate){const deadline=Date.now()+5000;while(!predicate()){assert(Date.now()<deadline,'Fixture event deadline');await delay(5);}}
+
+test('runtime startup settlement prevents a failed attempt draining an immediate replacement',{skip:process.platform==='win32'},async()=>{
+  const {runtime,binary,user}=await startupFixture();
+  try {
+    await writeFile(binary,`#!${process.execPath}\nprocess.exit(7);\n`,{mode:0o700});
+    let sawPid=false;runtime.on('change',view=>{if(view.pid)sawPid=true;});
+    let settled=false;const failed=runtime.start();const outcome=failed.then(()=>{settled=true;return undefined;},error=>{settled=true;return error;});
+    await waitStartup(()=>sawPid&&!runtime.view().pid);
+    assert.equal(settled,false,'Exercise the child-close versus still-pending startup boundary');
+    assert.notEqual(runtime.view().status,'stopped','Start must not appear admitted while failed bootstrap remains pending');
+    await assert.rejects(runtime.start(),/settled prior startup\/shutdown/);
+    assert.match(String(await outcome),/Server exited before listening: code=7/);
+    assert.doesNotMatch(runtime.view().message,/600 second/);
+    await writeFile(binary,healthy,{mode:0o700});
+    await runtime.start();const pid=runtime.view().pid;
+    await delay(750);
+    assert.equal(runtime.view().status,'ready');assert.equal(runtime.view().pid,pid);
+    assert.equal((await (await fetch(runtime.origin+'/health')).json()).process,pid);
+    await assert.rejects(readFile(join(user,'shutdown-failed.json')),/ENOENT/);
+    await runtime.stop();assert.equal(runtime.view().status,'stopped');assert.equal(runtime.view().pid,undefined);
+  }finally{if(runtime.view().pid)await runtime.stop();}
+});
+
+test('runtime Stop and Close await startup settlement before a new Start can be admitted',{skip:process.platform==='win32'},async()=>{
+  const {runtime,binary}=await startupFixture();
+  try{
+    await writeFile(binary,healthy,{mode:0o700});
+    const boot=runtime.start(),stop=runtime.stop();
+    await assert.rejects(runtime.start(),/settled prior startup\/shutdown/);
+    await Promise.all([boot,stop]);await runtime.verifyFailureGate();
+    assert.equal(runtime.view().status,'stopped');assert.equal(runtime.view().pid,undefined);
+    await runtime.start();const pid=runtime.view().pid;await delay(750);
+    assert.equal(runtime.view().status,'ready');assert.equal(runtime.view().pid,pid);
+    await runtime.stop();
+  }finally{if(runtime.view().pid)await runtime.stop();}
+});

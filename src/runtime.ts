@@ -65,13 +65,13 @@ export class Runtime extends EventEmitter {
     if (error) throw error;
   }
   start(): Promise<void> {
-    if (this.status !== 'stopped') return Promise.reject(new Error('Start requires a verified stopped server'));
+    if (this.status !== 'stopped' || this.boot || this.stopping) return Promise.reject(new Error('Start requires a verified stopped server and settled prior startup/shutdown'));
     this.update('starting', 'Checking bundled runtime and save ownership…');
     this.boot = this.startOwned().catch(error => {
       if (this.child || this.unsafe) this.fail(error);
       else this.update('stopped', `Cannot start: ${String(error)}. No server is running.`);
       throw error;
-    });
+    }).finally(() => { this.boot = undefined; });
     return this.boot;
   }
   private async startOwned() {
@@ -110,9 +110,10 @@ export class Runtime extends EventEmitter {
         try { await reading; await refresh(); await log.sync(); } catch(error) { this.diskError = error as Error; this.fail(error); }
         await log.close().catch(error => { this.diskError = error; this.fail(error); });
         this.child = undefined;
-        if (code === 0 && this.expectedStop && !this.diskError && !this.unsafe) this.update('stopped', 'Server stopped. Durable shutdown verified (exit 0).');
+        if (code === 0 && this.expectedStop && !this.diskError && !this.unsafe) this.update(this.boot ? 'stopping' : 'stopped', 'Server stopped. Durable shutdown verified (exit 0).');
         else if (!this.listenerSeen && !this.expectedStop && !this.unsafe) {
-          this.update('stopped', `Server exited before listening: code=${code}, signal=${signal}. Inspect the server logs, fix the startup error, then retry Start.`);
+          // Only the settled startup attempt may publish stopped and admit a replacement.
+          this.line(`Server exited before listening: code=${code}, signal=${signal}`);
         } else {
           const error = new Error(`Server exited without verified shutdown: code=${code}, signal=${signal}`);
           this.fail(error);
@@ -121,6 +122,7 @@ export class Runtime extends EventEmitter {
         ok({ code, signal });
       });
     });
+    const closed = this.closed;
     let offset = 0, partial = '', reading: Promise<void> = Promise.resolve();
     const decoder = new StringDecoder('utf8');
     const refresh = async () => {
@@ -168,8 +170,11 @@ export class Runtime extends EventEmitter {
       }
       await delay(500);
     }
-    if (this.status === 'stopping' || (this.status === 'stopped' && this.expectedStop)) return;
-    if (this.status === 'stopped') throw new Error(this.message);
+    if (this.status === 'stopping' || this.expectedStop) return;
+    if (this.child !== child) {
+      const result = await closed;
+      throw new Error(`Server exited before listening: code=${result.code}, signal=${result.signal}. Inspect diagnostics before retrying Start.`);
+    }
     await this.requestDrain();
     throw new Error('Server failed to become ready within the 600 second deadline; see diagnostics');
   }
@@ -194,6 +199,8 @@ export class Runtime extends EventEmitter {
       // Start may still be validating files; do not release ownership until its promise settles.
       if (!this.child) await this.boot;
       await this.requestDrain();
+      await this.boot;
+      if (!this.child && !this.unsafe) this.update('stopped', 'Server stopped. Durable shutdown verified (exit 0).');
     })().catch(error => { this.fail(error); throw error; }).finally(() => { this.stopping = undefined; });
     return this.stopping;
   }
