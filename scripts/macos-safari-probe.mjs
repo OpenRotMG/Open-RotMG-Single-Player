@@ -5,11 +5,12 @@ import {mkdir,open,writeFile} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
+import {verifySafariProcess,verifySafariListener} from './safari-driver-ownership.mjs';
 
 assert(process.platform==='darwin'&&process.env.GITHUB_ACTIONS==='true','Safari diagnostics require an owned native macOS CI runner');
 const out=resolve('.qa/mac-safari-probe');await mkdir(out,{recursive:true});
 const report={purpose:'Normal built-in Safari WebDriver capability diagnostics, NOT game/default-browser acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),driverVersion:execFileSync('/usr/bin/safaridriver',['--version'],{encoding:'utf8'}).trim(),errors:[]};
-let driver,session,driverIdentity,endpoint;
+let driver,session,driverIdentity,listenerIdentity,endpoint;
 const page=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Safari WebGL2 diagnostic</title><h1>Safari WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
 const log=await open(join(out,'safaridriver.log'),'wx');
 try {
@@ -18,6 +19,7 @@ try {
   endpoint=`http://127.0.0.1:${port}`;
   driver=spawn('/usr/bin/safaridriver',['--port',String(port)],{stdio:['ignore',log.fd,log.fd]});
   let spawnError;driver.once('error',error=>spawnError=error);
+  driverIdentity=await processIdentity(driver.pid);report.driverRoot=driverIdentity;
   const deadline=Date.now()+20000;let ready=false;
   while(!ready&&Date.now()<deadline){
     if(spawnError)throw spawnError;
@@ -30,11 +32,18 @@ try {
   const listener=execFileSync('/usr/sbin/lsof',['-nP',`-iTCP:${port}`,'-sTCP:LISTEN','-Fpn'],{encoding:'utf8'}).trim();
   const owners=listener.split('\n').filter(line=>line.startsWith('p'));
   const addresses=listener.split('\n').filter(line=>line.startsWith('n'));
-  assert.deepEqual(owners,[`p${driver.pid}`],'Only the spawned driver may own its allocated endpoint');
+  report.listener={endpoint,raw:listener,owners,addresses};
+  assert.equal(owners.length,1,'A single actual Safari listener owner is required');
+  report.driverTopology=[];let ancestor=Number(owners[0].slice(1));const seen=new Set();
+  while(ancestor>0&&!seen.has(ancestor)){
+    seen.add(ancestor);const identity=await processIdentity(ancestor);report.driverTopology.push(identity);
+    if(ancestor===driver.pid)break;ancestor=identity.ppid;
+  }
+  const currentRoot=await processIdentity(driver.pid);report.currentDriverRoot=currentRoot;
+  report.status='checking-driver-ownership';await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
   assert(addresses.length&&addresses.every(line=>/^n(?:127\.0\.0\.1|\[::1\]|localhost):\d+$/.test(line)),'Driver must listen only on loopback');
-  driverIdentity={pid:driver.pid,argv:await processArgv(driver.pid),started:startIdentity(driver.pid)};
-  assert(driverIdentity.argv.includes('/usr/bin/safaridriver')&&driverIdentity.argv.includes(String(port)),'Actual owned driver argv required');
-  report.driver={...driverIdentity,endpoint,listener};
+  verifySafariListener(driverIdentity,currentRoot,report.driverTopology);
+  listenerIdentity=report.driverTopology[0];report.listenerIdentity=listenerIdentity;
   const created=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'safari'}}},30000);
   session=created.sessionId;assert(typeof session==='string'&&session.length,'Owned Safari automation session ID required');
   report.session={id:session,capabilities:created.capabilities};
@@ -52,15 +61,18 @@ finally {
     const response=await fetch(endpoint+`/session/${session}/url`,{signal:AbortSignal.timeout(5000)}),invalid=await response.json();
     assert.equal(invalid.value.error,'invalid session id','Deleted automation session must no longer accept commands');report.sessionDeleted=true;
   }catch(error){report.errors.push(`Automation session cleanup: ${error}`);process.exitCode=1;}
-  if(driver&&driver.exitCode===null&&driver.signalCode===null)try{
-    const argv=await processArgv(driver.pid),started=startIdentity(driver.pid);
-    assert(driverIdentity&&argv===driverIdentity.argv&&started===driverIdentity.started,'Current owned Safari driver identity required before SIGTERM');
-    driver.kill('SIGTERM');report.driverSignal='SIGTERM';
-  }catch(error){report.errors.push(`Driver ownership/cleanup: ${error}; no unverified signal sent`);process.exitCode=1;}
+  const cleanup=[];if(listenerIdentity&&listenerIdentity.pid!==driverIdentity.pid)cleanup.push(listenerIdentity);if(driverIdentity)cleanup.push(driverIdentity);
+  report.driverCleanup=[];
+  for(const owned of cleanup)if(alive(owned.pid))try{
+    const current=await processIdentity(owned.pid);verifySafariProcess(owned,current);
+    process.kill(owned.pid,'SIGTERM');report.driverCleanup.push({...current,signal:'SIGTERM'});
+    const deadline=Date.now()+10000;while(alive(owned.pid)&&Date.now()<deadline)await delay(100);
+    if(alive(owned.pid))throw Error(`Owned driver process ${owned.pid} did not exit`);
+  }catch(error){report.errors.push(`Driver ownership/cleanup: ${error}; no successful cleanup claim`);process.exitCode=1;}
+  if(listenerIdentity)report.listenerExited=!alive(listenerIdentity.pid);
   if(driver){
-    const deadline=Date.now()+10000;while(driver.exitCode===null&&driver.signalCode===null&&Date.now()<deadline)await delay(100);
     report.driverExited=driver.exitCode!==null||driver.signalCode!==null;
-    if(!report.driverExited){report.errors.push('Owned driver did not exit; no successful cleanup claim');process.exitCode=1;driver.unref();}
+    if(!report.driverExited){report.errors.push('Owned wrapper did not exit; no successful cleanup claim');process.exitCode=1;driver.unref();}
   }
   if(page.listening){page.closeAllConnections();await new Promise(ok=>page.close(ok));}
   await log.close();await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
@@ -74,6 +86,12 @@ async function request(method,path,body,timeout=20000){
 }
 async function listen(server){await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok);});}
 function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}
+async function processIdentity(pid){
+  assert(Number.isSafeInteger(pid)&&pid>0,'Actual process PID required');
+  const started=startIdentity(pid),ppid=Number(execFileSync('ps',['-p',String(pid),'-o','ppid='],{encoding:'utf8'}).trim()),argv=await processArgv(pid);
+  assert(started&&argv);assert.equal(startIdentity(pid),started,'Process identity changed during capture');return {pid,ppid,started,argv};
+}
+function alive(pid){try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}}
 function graphicsCapability(){
   const gl=document.querySelector('canvas').getContext('webgl2');const result={supported:!!gl,userAgent:navigator.userAgent,navigatorVendor:navigator.vendor,webdriver:navigator.webdriver};
   if(gl){
