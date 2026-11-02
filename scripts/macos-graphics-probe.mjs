@@ -24,11 +24,11 @@ for(const configuration of configurations) {
     const browser=context.browser();assert(browser,'Diagnostic browser connection required');
     const protocol=await browser.newBrowserCDPSession();
     const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');pid=processInfo.find(process=>process.type==='browser')?.id;assert(Number.isSafeInteger(pid),'Actual browser PID required');
-    entry.pid=pid;entry.argv=await processArgv(pid);entry.browserVersion=browser.version();
+    entry.pid=pid;entry.argv=await processArgv(pid);entry.startIdentity=startIdentity(pid);entry.browserVersion=browser.version();
     assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security/.test(entry.argv),'No security bypass is permitted');
     entry.systemInfo=await protocol.send('SystemInfo.getInfo');
     const page=context.pages()[0];assert(page,'Fresh browser initial page required');
-    await page.setContent('<title>Mac WebGL2 capability diagnostic</title><h1>WebGL2 diagnostic — not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');
+    await page.setContent('<title>Mac WebGL2 capability diagnostic</title><h1>WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');
     entry.webgl2=await page.evaluate(()=>{
       const canvas=document.querySelector('canvas'),gl=canvas.getContext('webgl2');
       const result={supported:!!gl};
@@ -48,7 +48,14 @@ for(const configuration of configurations) {
     if(context){
       let timer;
       try{await Promise.race([context.close(),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Browser close exceeded10s')),10000))]);}
-      catch(error){entry.errors.push(`Browser cleanup: ${error}`);process.exitCode=1;if(pid&&alive(pid))process.kill(pid,'SIGTERM');}
+      catch(error){
+        entry.errors.push(`Browser cleanup: ${error}`);process.exitCode=1;
+        if(pid&&alive(pid))try{
+          const argv=await processArgv(pid),started=startIdentity(pid);
+          assert(entry.argv&&argv===entry.argv&&argv.includes(entry.profile)&&entry.startIdentity&&started===entry.startIdentity,'Current browser ownership identity mismatch');
+          process.kill(pid,'SIGTERM');entry.cleanupSignal={signal:'SIGTERM',argv,startIdentity:started};
+        }catch(cause){entry.errors.push(`Cleanup ownership could not be verified; no signal sent: ${cause}`);}
+      }
       finally{clearTimeout(timer);}
     }
     if(pid){
@@ -59,4 +66,5 @@ for(const configuration of configurations) {
     console.log(`${configuration.name}: ${entry.status}; cleanup=${entry.browserExited}; errors=${entry.errors.length}`);
   }
 }
+function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}
 function alive(pid){try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}}
