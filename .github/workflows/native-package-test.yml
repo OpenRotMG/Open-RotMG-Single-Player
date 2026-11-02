@@ -1,0 +1,49 @@
+name: Native Phase 1 package tests
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  package-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15-intel, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      OPENROTMG_TEST_BROWSER_MODE: ci-playwright
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - name: Install native test Chromium
+        run: npm exec -- playwright install --with-deps chromium
+      - name: Install private Linux display tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth dbus-x11
+      - name: Build exact native server and prepare verified client
+        run: node scripts/ci-inputs.mjs
+      - name: Allow controlled software WebGL on Linux QA only
+        if: runner.os == 'Linux'
+        shell: bash
+        run: echo 'PI_NATIVE_TEST_CHROME_ARGS=["--ignore-gpu-blocklist","--disable-gpu-driver-bug-workarounds"]' >> "$GITHUB_ENV"
+      - name: Package and play through native client
+        run: npm run package:test
+      - name: Retain small receipts and native screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase1-${{ matrix.os }}
+          include-hidden-files: true
+          path: |
+            .qa/package-tests/**/result.json
+            .qa/package-tests/**/*.png
+            .qa/package-tests/**/*.xml
+            .qa/package-tests/**/*console.json
+            .qa/ci-inputs/server-artifact.json
+            runtime/build-identity.json
+          if-no-files-found: warn
