@@ -4,14 +4,14 @@ import {mkdir,mkdtemp,writeFile,readFile,copyFile,appendFile,unlink,readdir,rm} 
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {release} from 'node:os';
-import {protectInstallation} from './native-boundaries.mjs';
+import {protectInstallation,windowsPowerShellExecutable} from './native-boundaries.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','ACL diagnostics require an owned native Windows x64 CI VM');
 const out=resolve('.qa/windows-acl-probe');await mkdir(out,{recursive:true});
 const report={purpose:'Owned install ACL diagnostics, NOT package/game/clean-machine acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,release:release(),assertions:[],errors:[]};
 const fixture=await mkdtemp(join(process.env.RUNNER_TEMP,'acl with spaces-'));report.fixture=fixture;
 const nested=join(fixture,'nested directory'),program=join(nested,'owned-node.exe');let restore;
-report.aclSnapshots=[];report.intendedDenyMask=0x10156;report.aclPowerShell=join(process.env.ProgramFiles,'PowerShell/7/pwsh.exe');
+report.aclSnapshots=[];report.intendedDenyMask=0x10156;report.aclPowerShell=windowsPowerShellExecutable();
 const aclPaths=[fixture,nested,join(nested,'nested-data.txt')];
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 try {

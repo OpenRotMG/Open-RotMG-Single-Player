@@ -13,7 +13,7 @@ import { release, type } from 'node:os';
 import {listenOnLoopback,acquireQaPortLease} from './qa-port.mjs';
 import {failureCloseTests} from './failure-close-test.mjs';
 import {PORT} from '../dist/runtime.js';
-import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage} from './native-boundaries.mjs';
+import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage,windowsPowerShellExecutable} from './native-boundaries.mjs';
 import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
@@ -77,6 +77,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     report.userData = userData;
     const resources = await launcher.evaluate(() => process.resourcesPath);
     const binary = join(resources, 'runtime', process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg');
+    if(process.platform==='win32')report.qaPowerShell=windowsPowerShellExecutable();
     report.serverLinkage=runtimeLinkage(binary);
     const occupied = createServer(); await listenOnLoopback(occupied,PORT);
     try {

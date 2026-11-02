@@ -16,19 +16,20 @@ test('native-boundaries consumer PATH is empty and cannot inherit developer sear
 });
 
 const paths=['owned-install/nested/file','owned-install/nested','owned-install'];
-test('native-boundaries Windows ACL applies granular rights in postorder without recursive self-denial',()=>{
-  const calls=[],restore=protectWindowsInstallation(paths,'S-1-5-21-500',(...args)=>calls.push(args));
-  assert.deepEqual(calls,paths.map(path=>['icacls.exe',[path,'/deny','*S-1-5-21-500:(OI)(CI)(WD,AD,WEA,WA,D,DC)','/Q']]));
+test('native-boundaries Windows ACL uses a PS7 mutation-only .NET deny batch with exact mask readback',()=>{
+  const calls=[],restore=protectWindowsInstallation(paths,'S-1-5-21-500','test-pwsh',(...args)=>calls.push(args));
+  assert.equal(calls.length,1);assert.equal(calls[0][0],'test-pwsh');assert.deepEqual(JSON.parse(calls[0][2].input),paths);
+  const script=calls[0][1].at(-1);assert(script.includes('FileSystemRights]0x10156'));assert(script.includes('AccessControlType]::Deny'));assert(script.includes('FileSystemRights -ne 0x10156'));assert(!script.includes('icacls'));
   restore();
-  assert.deepEqual(calls.slice(3),[...paths].reverse().map(path=>['icacls.exe',[path,'/remove:d','*S-1-5-21-500','/Q']]));
+  assert.deepEqual(calls.slice(1),[...paths].reverse().map(path=>['icacls.exe',[path,'/remove:d','*S-1-5-21-500','/Q']]));
 });
 test('native-boundaries partial Windows ACL application rolls back root-first before propagating the real error',()=>{
   const calls=[],failure=new Error('partial ACL apply denied');
-  assert.throws(()=>protectWindowsInstallation(paths,'S-1-5-21-500',(_file,args)=>{calls.push(args);if(args[0]===paths[1]&&args.includes('/deny'))throw failure;}),error=>error===failure);
-  assert.equal(calls.length,5);assert.deepEqual(calls.slice(2).map(args=>args[0]),[...paths].reverse());assert(calls.every(args=>!args.includes('/T')));
+  assert.throws(()=>protectWindowsInstallation(paths,'S-1-5-21-500','test-pwsh',(file,args)=>{calls.push(args);if(file==='test-pwsh')throw failure;}),error=>error===failure);
+  assert.equal(calls.length,4);assert.deepEqual(calls.slice(1).map(args=>args[0]),[...paths].reverse());assert(calls.every(args=>!args.includes('/T')));
 });
 test('native-boundaries Windows ACL rollback continues after errors and preserves apply plus rollback failures',()=>{
   const apply=new Error('apply denied'),rollback=new Error('rollback denied'),attempts=[];
-  assert.throws(()=>protectWindowsInstallation(paths,'S-1-5-21-500',(_file,args)=>{if(args.includes('/deny'))throw apply;attempts.push(args[0]);throw rollback;}),error=>error instanceof AggregateError&&error.errors[0]===apply&&error.errors[1].errors.length===3&&error.message.includes('rollback denied'));
+  assert.throws(()=>protectWindowsInstallation(paths,'S-1-5-21-500','test-pwsh',(file,args)=>{if(file==='test-pwsh')throw apply;attempts.push(args[0]);throw rollback;}),error=>error instanceof AggregateError&&error.errors[0]===apply&&error.errors[1].errors.length===3&&error.message.includes('rollback denied'));
   assert.deepEqual(attempts,[...paths].reverse());
 });
