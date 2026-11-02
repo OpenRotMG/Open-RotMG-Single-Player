@@ -69,18 +69,19 @@ test('windows-path-validation workflow is manual standard native Windows and nev
   assert(!/playwright install|BROWSER_MODE|self-hosted|NoSandbox|no-sandbox|gpu|offline-probe|native-game/.test(workflow));
   assert.match(workflow,/if: always\(\)/);assert.match(workflow,/\.qa\/windows-path-validation\/\*\.log/);
 });
-test('package-test focused branch protects installation before first focused launch, reuses ready/health/stop/lock assertions, skips nativeGame and preserves rollback',async()=>{
-  const code=await readFile('scripts/package-test.mjs','utf8');
+for(const [fixtureName,lineEnding] of [['LF','\n'],['CRLF','\r\n']]) {
+test(`package-test focused branch protects installation before first focused launch, reuses ready/health/stop/lock assertions, skips nativeGame and preserves rollback (${fixtureName} source fixture)`,async()=>{
+  const code=(await readFile('scripts/package-test.mjs','utf8')).split(/\r?\n/).join(lineEnding);
   const protection=code.indexOf('restoreInstallation=await protectInstallation(packageDir);');
   assert(protection>0);assert.equal(code.match(/protectInstallation\(packageDir\)/g).length,1);
-  assert.match(code.slice(0,protection),/if\(!failureTestsOnly\) \{\s*page = await launch\(\);[\s\S]*\n    \}\n    $/);
+  assert.match(code.slice(0,protection),/if\(!failureTestsOnly\) \{\s*page = await launch\(\);[\s\S]*\r?\n    \}\r?\n    $/);
   const shared=code.slice(protection,code.indexOf('    if(!failureTestsOnly) {',protection));
   assert(shared.indexOf('assertInstallationProtected')<shared.indexOf('page=await launch()'));
   assert.match(shared,/test userData is owned outside install/);
-  const focused=code.slice(code.indexOf('    if(failureTestsOnly) {'),code.indexOf('    } else {\n    const view = await start();'));
+  const focused=code.slice(code.indexOf('    if(failureTestsOnly) {'),code.indexOf(`    } else {${lineEnding}    const view = await start();`));
   for(const call of ['await start();','await rejectStateContender(','await stop();','shutdown persistence complete','await launcher.close();'])assert(focused.includes(call),call);
   assert(!/nativeGame|backup-fixture|\.mutate\(|\.verify\(/.test(focused));
-  assert.match(code,/else \{\n    const view = await start\(\);[\s\S]*const game = await nativeGame/);
+  assert.match(code,/else \{\r?\n    const view = await start\(\);[\s\S]*const game = await nativeGame/);
   assert.match(code,/await failureCloseTests\(\{out,native,env:consumerEnv,check,report\}\)/);
   assert.match(code,/chromiumSandbox: true, env:consumerEnv/);
   assert.match(code,/packagedChildReady[\s\S]*'packaged child readiness', 650000/);
@@ -92,3 +93,4 @@ test('package-test focused branch protects installation before first focused lau
   assert.match(code,/finally \{[\s\S]*if\(restoreInstallation\)try\{await restoreInstallation\(\);/);
   assert.match(code,/NOT game, graphics, offline or all-platform acceptance/);
 });
+}
