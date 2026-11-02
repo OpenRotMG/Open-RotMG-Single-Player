@@ -1,5 +1,5 @@
 import {_electron as electron} from '@playwright/test';
-import {mkdir,readFile} from 'node:fs/promises';
+import {mkdir,readFile,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -16,11 +16,35 @@ export async function failureCloseTests({out,native,env,check,report}) {
     });
     return {app,page,child:app.process(),pid:await app.evaluate(()=>process.pid)};
   };
-  for(const kind of ['delayed-marker','unwritable-marker']) {
+  for(const kind of ['startup-exit-close','delayed-marker','unwritable-marker']) {
     const profile=join(out,kind);let current,server;
     try {
       current=await launch(profile);
       const {app,page,child,pid}=current;
+      if(kind==='startup-exit-close') {
+        await writeFile(join(profile,'state'),'invalid-state sentinel');
+        await app.evaluate(({BrowserWindow})=>{
+          const fs=process.getBuiltinModule('fs/promises'),write=fs.writeFile;
+          const pending=new Promise(ok=>globalThis.qaReleaseFailureMarker=ok);
+          fs.writeFile=async(path,...args)=>{if(String(path).endsWith('shutdown-failed.json'))await pending;return write(path,...args);};
+          const require=process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js');
+          const {Runtime}=require('./runtime.js'),line=Runtime.prototype.line;
+          Runtime.prototype.line=function(text){
+            line.call(this,text);
+            if(/^Server exited before listening: code=1,/.test(text)&&!globalThis.qaEarlyExitClose){globalThis.qaEarlyExitClose=true;BrowserWindow.getAllWindows()[0].close();}
+          };
+        });
+        await page.getByRole('button',{name:'Start Server',exact:true}).click();
+        await wait(async()=>{const view=await page.evaluate(()=>window.launcher.status());return view.status==='failed'&&!view.pid;},'early failed child Close boundary',10000);
+        const view=await page.evaluate(()=>window.launcher.status());report.startupExitClose=view;
+        check('Close after actual early startup exit retains its nonzero error, never verified exit0',view.message.includes('code=1')&&!view.message.includes('Durable shutdown verified')&&await app.evaluate(()=>globalThis.qaEarlyExitClose));
+        await delay(200);check('early-exit Close retains ownership during pending failure-marker IO',alive(pid)&&child.exitCode===null);
+        const screenshot=join(out,'startup-exit-close.png');await page.screenshot({path:screenshot});report.screenshots.push(screenshot);
+        await app.evaluate(()=>globalThis.qaReleaseFailureMarker());
+        await wait(()=>!alive(pid)&&child.exitCode!==null,'early failed Close exits after marker',10000);current=undefined;
+        check('early-exit Close exits1 only after actual failure marker is durable',child.exitCode===1&&JSON.parse(await readFile(join(profile,'shutdown-failed.json'),'utf8')).error.includes('code=1')&&await readFile(join(profile,'state'),'utf8')==='invalid-state sentinel');
+        continue;
+      }
       if(kind==='delayed-marker')await app.evaluate(()=>{
         const fs=process.getBuiltinModule('fs/promises'),write=fs.writeFile;
         const pending=new Promise(ok=>globalThis.qaReleaseFailureMarker=ok);

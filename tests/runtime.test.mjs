@@ -148,3 +148,28 @@ test('runtime Stop and Close await startup settlement before a new Start can be 
     await runtime.stop();
   }finally{if(runtime.view().pid)await runtime.stop();}
 });
+
+test('runtime exit7 while bootstrap is pending cannot become verified exit0 through Stop or Close',async t=>{
+  if(process.platform==='win32'){t.skip('Supplementary shebang child requires POSIX');return;}
+  const {runtime,binary,user}=await startupFixture();
+  await writeFile(binary,`#!${process.execPath}\nprocess.exit(7);\n`,{mode:0o700});
+  const original=fs.writeFile;let unblock,entered;
+  const pending=new Promise(ok=>unblock=ok),writing=new Promise(ok=>entered=ok);
+  t.mock.method(fs,'writeFile',async(path,...args)=>{if(String(path).endsWith('shutdown-failed.json')){entered();await pending;}return original(path,...args);});
+  let sawPid=false;runtime.on('change',view=>{if(view.pid)sawPid=true;});
+  const boot=runtime.start().then(()=>undefined,error=>error);
+  try{
+    await waitStartup(()=>sawPid&&!runtime.view().pid);
+    const stopped=runtime.stop().then(()=>undefined,error=>error);
+    assert.match(String(await boot),/Server exited before listening: code=7/);
+    assert.match(String(await stopped),/Server exited before listening: code=7/);
+    assert.equal(runtime.view().status,'failed');assert.doesNotMatch(runtime.view().message,/Durable shutdown verified/);
+    await writing;let mayExit=false;
+    const closeGate=runtime.verifyFailureGate().then(()=>mayExit=true);
+    await delay(50);assert.equal(mayExit,false,'Close must retain ownership until the failure is recorded');
+    await assert.rejects(runtime.start(),/verified stopped server/);
+    unblock();await closeGate;
+    assert.match(JSON.parse(await readFile(join(user,'shutdown-failed.json'),'utf8')).error,/code=7/);
+    await assert.rejects(new Runtime(runtime.resources,user).start(),/Previous server shutdown/);
+  }finally{unblock();if(runtime.view().pid)await runtime.stop();}
+});

@@ -170,11 +170,12 @@ export class Runtime extends EventEmitter {
       }
       await delay(500);
     }
-    if (this.status === 'stopping' || this.expectedStop) return;
     if (this.child !== child) {
       const result = await closed;
-      throw new Error(`Server exited before listening: code=${result.code}, signal=${result.signal}. Inspect diagnostics before retrying Start.`);
+      if (result.code !== 0 || !this.expectedStop || this.unsafe || this.diskError) throw new Error(`Server exited before listening: code=${result.code}, signal=${result.signal}. Inspect diagnostics before retrying Start.`);
+      return;
     }
+    if (this.status === 'stopping' || this.expectedStop) return;
     await this.requestDrain();
     throw new Error('Server failed to become ready within the 600 second deadline; see diagnostics');
   }
@@ -200,7 +201,7 @@ export class Runtime extends EventEmitter {
       if (!this.child) await this.boot;
       await this.requestDrain();
       await this.boot;
-      if (!this.child && !this.unsafe) this.update('stopped', 'Server stopped. Durable shutdown verified (exit 0).');
+      if (!this.child && !this.unsafe && this.expectedStop) this.update('stopped', 'Server stopped. Durable shutdown verified (exit 0).');
     })().catch(error => { this.fail(error); throw error; }).finally(() => { this.stopping = undefined; });
     return this.stopping;
   }
