@@ -4,10 +4,12 @@ import {spawnSync,execFile} from 'node:child_process';
 import {mkdir,mkdtemp,copyFile,cp,readFile,writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {connect} from 'node:net';
-import {join,resolve,dirname} from 'node:path';
+import {join,dirname} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {windowsPowerShellExecutable} from './native-boundaries.mjs';
+import {tree} from './assets.mjs';
+import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
 if(process.argv.includes('--node-policy-check')) {
@@ -19,17 +21,20 @@ if(process.argv.includes('--node-policy-check')) {
   }catch(error){result.status='failed';result.errors.push(String(error.stack??error));process.exitCode=1;}
   finally{try{if(server.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){result.errors.push(String(error));result.status='failed';process.exitCode=1;}console.log(JSON.stringify(result));}
 } else {
-  const out=resolve('.qa/windows-offline-probe');await mkdir(out,{recursive:true});
-  const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'win offline-'));
-  const node=join(tmp,'owned-node.exe'),chromeDirectory=join(tmp,'owned-chromium'),chrome=join(chromeDirectory,'chrome.exe'),profile=join(tmp,'browser-profile');
-  const group='openrotmg-offline-'+randomUUID(),plans=[{name:group+'-node',program:node},{name:group+'-chromium',program:chrome}];
+  const out='.qa/windows-offline-probe';
   const ranges=['0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/128','::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'];
   const profileQuery="Get-NetFirewallProfile | Sort-Object Name | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='DefaultInboundAction';e={$_.DefaultInboundAction.ToString()}},@{n='DefaultOutboundAction';e={$_.DefaultOutboundAction.ToString()}}";
-  const report={purpose:'Per-executable OS firewall/normal graphics diagnostic, NOT game/default-browser/whole-VM acceptance',head:psGitHead(),os:process.platform,arch:process.arch,engine:windowsPowerShellExecutable(),rulePlans:plans,remoteAddresses:ranges,errors:[]};
-  const server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Windows offline diagnostic</title><h1>Offline WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
-  let context,protocol,identity;
+  const report={purpose:'Per-executable OS firewall/normal graphics diagnostic, NOT game/default-browser/whole-VM acceptance',status:'initializing',os:process.platform,arch:process.arch,remoteAddresses:ranges,errors:[]};
+  let context,protocol,identity,server;
   try {
-    await copyFile(process.execPath,node);await cp(dirname(chromium.executablePath()),chromeDirectory,{recursive:true,verbatimSymlinks:true});
+    await mkdir(out,{recursive:true});report.head=psGitHead();report.engine=windowsPowerShellExecutable();
+    const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'win offline-'));
+    const node=join(tmp,'owned-node.exe'),chromeDirectory=join(tmp,'owned-chromium'),chrome=join(chromeDirectory,'chrome.exe'),profile=join(tmp,'browser-profile');
+    const group='openrotmg-offline-'+randomUUID(),plans=[{name:group+'-node',program:node},{name:group+'-chromium',program:chrome}];report.rulePlans=plans;
+    server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Windows offline diagnostic</title><h1>Offline WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
+    const sourceDirectory=dirname(chromium.executablePath());report.chromiumImage={sourceDirectory,copyDirectory:chromeDirectory,source:await tree(sourceDirectory,[''])};
+    await copyFile(process.execPath,node);await cp(sourceDirectory,chromeDirectory,{recursive:true,verbatimSymlinks:true});
+    report.chromiumImage.copy=await tree(chromeDirectory,['']);assert.deepEqual(report.chromiumImage.copy,report.chromiumImage.source,'Complete copied Chromium relative-path/hash inventory must match');report.chromiumImage.verified=true;
     report.programs=[];for(const [source,copy] of [[process.execPath,node],[chromium.executablePath(),chrome]]){const sourceHash=hash(await readFile(source)),copyHash=hash(await readFile(copy));assert.equal(copyHash,sourceHash);report.programs.push({source,copy,sha256:copyHash});}
     report.initialFirewall=ps(`Import-Module NetSecurity -ErrorAction Stop; [pscustomobject]@{engine=$PSVersionTable.PSVersion.ToString();module=(Get-Module NetSecurity).Path;administrator=([System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator);service=(Get-Service MpsSvc).Status.ToString();profiles=@(${profileQuery});connections=@(Get-NetConnectionProfile | Select-Object Name,NetworkCategory,InterfaceIndex)} | ConvertTo-Json -Depth 6 -Compress`);
     assert.equal(report.initialFirewall.administrator,true,'Owned CI user must already have firewall rule permission; no elevation is attempted');
@@ -40,8 +45,8 @@ if(process.argv.includes('--node-policy-check')) {
     ps(`Import-Module NetSecurity -ErrorAction Stop; $data=ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd()); foreach($plan in $data.plans) { New-NetFirewallRule -Name $plan.name -DisplayName $plan.name -Group $data.group -PolicyStore PersistentStore -Direction Outbound -Action Block -Enabled True -Profile Any -Protocol Any -Program $plan.program -RemoteAddress $data.ranges -ErrorAction Stop | Out-Null }; '{}'`,{plans,group,ranges});
     report.actualRules=readRules(plans.map(plan=>plan.name));assert.equal(report.actualRules.length,2);
     for(const plan of plans){const actual=report.actualRules.find(rule=>rule.name===plan.name);assert(actual&&actual.enabled==='True'&&actual.direction==='Outbound'&&actual.action==='Block'&&actual.program.toLowerCase()===plan.program.toLowerCase(),'Actual program-scoped block rule required');}
-    const proof=await new Promise(ok=>execFile(node,[process.argv[1],'--node-policy-check'],{encoding:'utf8',timeout:15000,windowsHide:true},(error,stdout,stderr)=>ok({exitCode:error?.code??0,error:error&&String(error),stdout,stderr})));
-    report.nodeProcess=proof;report.nodeProof=JSON.parse(proof.stdout);assert.equal(proof.exitCode,0,'Copied Node must prove OS denial and permitted loopback');assert.equal(report.nodeProof.status,'passed');assert.equal(report.nodeProof.executable,node);
+    const proof=await new Promise(ok=>execFile(node,[process.argv[1],'--node-policy-check'],{encoding:'utf8',timeout:15000,windowsHide:true},(error,stdout,stderr)=>ok(windowsOfflineCanaryResult(error,stdout,stderr))));
+    report.nodeProcess=proof;report.nodeProof=verifyWindowsOfflineCanary(proof,node);
     await listen(server);const origin=`http://127.0.0.1:${server.address().port}`;report.origin=origin;
     context=await chromium.launchPersistentContext(profile,{executablePath:chrome,headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args:['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1000,800','about:blank'],timeout:30000});
     const browser=context.browser();assert(browser);protocol=await browser.newBrowserCDPSession();const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');const pid=processInfo.find(entry=>entry.type==='browser')?.id;assert(Number.isSafeInteger(pid)&&pid>0);
@@ -68,11 +73,9 @@ if(process.argv.includes('--node-policy-check')) {
       }
       report.browserExited=!alive(identity.pid);assert(report.browserExited,'Browser exit unverified');if(context)await context.close();
     }catch(error){report.errors.push(`Browser cleanup: ${error}`);}
-    try{if(server.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`HTTP cleanup: ${error}`);}
+    try{if(server?.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`HTTP cleanup: ${error}`);}
     if(report.ruleCleanupRegistered){
-      try{report.rulesBeforeCleanup=readRules(report.ruleCleanupRegistered);}catch(error){report.errors.push(`Pre-cleanup rule observation: ${error}`);}
-      try{ps(`Import-Module NetSecurity -ErrorAction Stop; $names=@(ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())); $rules=@(Get-NetFirewallRule -PolicyStore PersistentStore -ErrorAction Stop | Where-Object { $_.Name -in $names }); foreach($rule in $rules) { Remove-NetFirewallRule -Name $rule.Name -PolicyStore PersistentStore -ErrorAction Stop }; '{}'`,report.ruleCleanupRegistered);}catch(error){report.errors.push(`Exact firewall rule cleanup: ${error}`);}
-      try{report.rulesAfterCleanup=readRules(report.ruleCleanupRegistered);assert.equal(report.rulesAfterCleanup.length,0,'Exact owned rules must be removed');}catch(error){report.errors.push(`Final rule observation: ${error}`);}
+      await cleanupWindowsFirewallRules(report,report.ruleCleanupRegistered,{observe:readRules,remove:name=>ps(`Import-Module NetSecurity -ErrorAction Stop; $name=ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd()); try { Remove-NetFirewallRule -Name $name -PolicyStore PersistentStore -ErrorAction Stop; [pscustomobject]@{name=$name;removed=$true} | ConvertTo-Json -Compress } catch { [pscustomobject]@{name=$name;removed=$false;errorId=$_.FullyQualifiedErrorId;category=$_.CategoryInfo.Category.ToString();detail=($_ | Out-String)} | ConvertTo-Json -Compress }`,name)});
       try{report.finalFirewallProfiles=ps(`Import-Module NetSecurity -ErrorAction Stop; @(${profileQuery}) | ConvertTo-Json -Depth 4 -Compress`);assert.deepEqual(report.finalFirewallProfiles,report.initialFirewall.profiles,'Global firewall profile policy must remain unchanged');}catch(error){report.errors.push(`Global profile observation: ${error}`);}
     }
     if(report.errors.length){report.status='failed';process.exitCode=1;}await persist();console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
