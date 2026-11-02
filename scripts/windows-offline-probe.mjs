@@ -53,12 +53,13 @@ if(process.argv.includes('--node-policy-check')) {
     identity=processIdentity(pid);report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
     assert(identity.executable.toLowerCase()===chrome.toLowerCase()&&identity.argv.includes(profile));assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--use-angle|--ignore-gpu-blocklist/.test(identity.argv),'Normal Chromium sandbox/renderer configuration required');
     const page=context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
-    report.webgl2=await page.evaluate(graphicsCapability);assert(report.webgl2.supported&&!report.webgl2.lost,'Normal sandboxed WebGL2 required');assert.equal(report.webgl2.error,0);assert(report.webgl2.pixel.every((value,index)=>Math.abs(value-[64,128,191,255][index])<=1));
+    report.webgl2=await page.evaluate(graphicsCapability);
     const network=await context.newCDPSession(page),requests=new Map();report.browserNetworkFailures=[];
     network.on('Network.requestWillBeSent',event=>requests.set(event.requestId,event.request.url));network.on('Network.loadingFailed',event=>{if(requests.get(event.requestId)==='http://1.1.1.1/')report.browserNetworkFailures.push({url:requests.get(event.requestId),errorText:event.errorText,blockedReason:event.blockedReason});});await network.send('Network.enable');
     report.browserExternalFetch=await page.evaluate(async()=>{try{await fetch('http://1.1.1.1/',{mode:'no-cors',cache:'no-store',signal:AbortSignal.timeout(5000)});return {connected:true};}catch(error){return {error:String(error)};}});
     const deadline=Date.now()+3000;while(!report.browserNetworkFailures.length&&Date.now()<deadline)await delay(50);
     assert(!report.browserExternalFetch.connected&&report.browserNetworkFailures.some(entry=>['net::ERR_NETWORK_ACCESS_DENIED','net::ERR_ACCESS_DENIED'].includes(entry.errorText)),'Browser must report actual OS access denial, not CORS/timeout');
+    assert(report.webgl2.supported&&!report.webgl2.lost,'Normal sandboxed WebGL2 required');assert.equal(report.webgl2.error,0);assert(report.webgl2.pixel.every((value,index)=>Math.abs(value-[64,128,191,255][index])<=1));
     await page.screenshot({path:join(out,'offline-webgl2.png')});report.status='passed';
   }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;await persist();}
   finally {
