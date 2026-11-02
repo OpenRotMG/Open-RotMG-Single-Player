@@ -8,6 +8,7 @@ import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
+import {closePrePidOfflineContext,persistMacOfflineEvidence} from './macos-offline-evidence.mjs';
 
 assert(process.platform==='darwin'&&process.arch==='arm64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native macOS ARM64 CI VM');
 const out=resolve('.qa/mac-offline-probe');await mkdir(out,{recursive:true});
@@ -21,10 +22,10 @@ if(!process.argv.includes('--confined')) {
   const child=spawn(command[0],command.slice(1),{stdio:['ignore','inherit',log.fd]});
   let spawnError;child.once('error',error=>spawnError=String(error));
   const outcome=await new Promise(ok=>child.once('close',(code,signal)=>ok({code,signal})));
-  const launch={command,policySha256,...outcome,spawnError};
-  try{await log.close();}catch(error){launch.logCloseError=String(error);}
-  await writeFile(join(out,'launch.json'),JSON.stringify(launch,null,2));
-  process.exitCode=launch.logCloseError?1:outcome.code??1;
+  const launch={command,policySha256,...outcome,spawnError,status:outcome.code===0?'passed':'failed',errors:[]};
+  try{await log.close();}catch(error){launch.errors.push(`Sandbox log close: ${error}`);}
+  const persisted=await persistMacOfflineEvidence(launch,join(out,'launch.json'));
+  process.exitCode=!persisted||launch.errors.length?1:outcome.code??1;
 } else {
   assert.equal(await readFile(policyPath,'utf8'),policy);
   const report={purpose:'Process-tree OS egress/normal Chromium capability diagnostics, NOT full game/default-browser/whole-VM acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),node:{pid:process.pid,argv:await processArgv(process.pid),version:process.version},policyPath,policy,policySha256,errors:[],externalTcp:[]};
@@ -43,8 +44,9 @@ if(!process.argv.includes('--confined')) {
     const profile=join(tmp,'browser');report.profile=profile;
     context=await chromium.launchPersistentContext(profile,{headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args:['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1000,800','about:blank'],env:process.env,timeout:30000});
     const browser=context.browser();assert(browser);protocol=await browser.newBrowserCDPSession();
-    const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');pid=processInfo.find(entry=>entry.type==='browser')?.id;assert(Number.isSafeInteger(pid));
-    identity={pid,argv:await processArgv(pid),started:startIdentity(pid)};report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
+    const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');const observedPid=processInfo.find(entry=>entry.type==='browser')?.id;report.observedBrowserPid=observedPid;assert(Number.isSafeInteger(observedPid)&&observedPid>0);
+    const observedIdentity={pid:observedPid,argv:await processArgv(observedPid),started:startIdentity(observedPid)};
+    pid=observedPid;identity=observedIdentity;report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
     assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--use-angle|--ignore-gpu-blocklist/.test(identity.argv),'Normal browser and native sandbox policy must remain intact');
     const page=context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
     report.webgl2=await page.evaluate(()=>{
@@ -61,9 +63,10 @@ if(!process.argv.includes('--confined')) {
     const deadline=Date.now()+3000;while(!report.browserNetworkFailures.length&&Date.now()<deadline)await delay(50);
     assert(!report.browserExternalFetch.connected&&report.browserNetworkFailures.some(event=>['net::ERR_NETWORK_ACCESS_DENIED','net::ERR_ACCESS_DENIED'].includes(event.errorText)),'Browser must report OS access denial, not CORS/timeout');
     await page.screenshot({path:join(out,'offline-webgl2.png')});report.status='passed';
-  }catch(error){report.status='failed';report.errors.push(String(error.stack??error));console.error(report.errors.at(-1));await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}
+  }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;await persistMacOfflineEvidence(report,join(out,'result.json'));}
   finally {
     if(protocol){let timer;try{await Promise.race([protocol.send('Browser.close'),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Protocol close exceeded10s')),10000))]);}catch(error){report.errors.push(`Protocol cleanup: ${error}`);}finally{clearTimeout(timer);}}
+    if(context&&!pid)await closePrePidOfflineContext(context,report);
     if(pid)try{
       let deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
       if(alive(pid)){
@@ -75,7 +78,8 @@ if(!process.argv.includes('--confined')) {
     }catch(error){report.errors.push(`Browser cleanup: ${error}`);}
     try{if(server.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`Loopback cleanup: ${error}`);}
     if(report.errors.length){report.status='failed';process.exitCode=1;}
-    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
+    if(!await persistMacOfflineEvidence(report,join(out,'result.json')))process.exitCode=1;
+    console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
   }
 }
 function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}
