@@ -1,21 +1,18 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile} from 'node:fs/promises';
-import {join,isAbsolute,basename} from 'node:path';
-import {createHash} from 'node:crypto';
-import {setTimeout as delay} from 'node:timers/promises';
-import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-boundaries.mjs';
+import {mkdir,mkdtemp,writeFile} from 'node:fs/promises';
+import {join} from 'node:path';
+import {windowsProcessIdentity} from './native-boundaries.mjs';
+import {installedEdgeImage} from './windows-edge-image.mjs';
+import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Edge capability probe requires an owned standard Windows x64 CI VM');
 const out='.qa/windows-edge-probe',report={purpose:'Existing installed normal Microsoft Edge capability ONLY, NOT game/default-browser/offline acceptance',status:'initializing',errors:[]};
 let context,protocol,identity;
 try{
   await mkdir(out,{recursive:true});report.head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();
-  const metadata=`$ErrorActionPreference='Stop'; Import-Module Microsoft.PowerShell.Security -ErrorAction Stop; $path=(Get-Item -LiteralPath 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\msedge.exe').GetValue(''); $file=Get-Item -LiteralPath $path; $signature=Get-AuthenticodeSignature -LiteralPath $path; [pscustomobject]@{executable=$path;product=$file.VersionInfo.ProductName;company=$file.VersionInfo.CompanyName;fileVersion=$file.VersionInfo.FileVersion;signature=$signature.Status.ToString();signer=$signature.SignerCertificate.Subject} | ConvertTo-Json -Compress`;
-  report.edge=JSON.parse(execFileSync(windowsPowerShellExecutable(),['-NoProfile','-NonInteractive','-Command',metadata],{encoding:'utf8'}));
-  assert(isAbsolute(report.edge.executable)&&basename(report.edge.executable).toLowerCase()==='msedge.exe');assert.equal(report.edge.product,'Microsoft Edge');assert.equal(report.edge.signature,'Valid','Installed Edge signature must validate');
-  report.edge.sha256=createHash('sha256').update(await readFile(report.edge.executable)).digest('hex');
+  report.edge=await installedEdgeImage();
   const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'edge-capability-')),profile=join(tmp,'fresh-profile');report.profile=profile;
   const args=['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1000,800','about:blank'];report.command=[report.edge.executable,...args];
   context=await chromium.launchPersistentContext(profile,{executablePath:report.edge.executable,headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args,timeout:30000});
@@ -34,18 +31,7 @@ try{
   assert(report.webgl2.supported&&!report.webgl2.lost,'Normal installed Edge must provide nonlost WebGL2');assert.equal(report.webgl2.error,0);assert(report.webgl2.pixel.every((value,index)=>Math.abs(value-[64,128,191,255][index])<=1));report.status='passed';
 }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;await persist();}
 finally{
-  if(protocol){let timer;try{await Promise.race([protocol.send('Browser.close'),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Protocol close exceeded10s')),10000))]);}catch(error){report.errors.push(`Protocol cleanup: ${error}`);}finally{clearTimeout(timer);}}
-  if(context&&!identity)try{report.browserExitVerification='unverified';await context.close();}catch(error){report.errors.push(`Fresh pre-identity framework cleanup: ${error}`);}
-  if(identity)try{
-    let deadline=Date.now()+10000;while(alive(identity.pid)&&Date.now()<deadline)await delay(100);
-    if(alive(identity.pid)){
-      report.errors.push('Edge did not exit after protocol close');const current=windowsProcessIdentity(identity.pid);
-      assert(current.started===identity.started&&current.argv===identity.argv&&current.argv.includes(report.profile)&&current.executable.toLowerCase()===identity.executable.toLowerCase(),'Immediate owned Edge identity required before signal');
-      process.kill(identity.pid,'SIGTERM');report.cleanupSignal={...current,signal:'SIGTERM'};deadline=Date.now()+10000;while(alive(identity.pid)&&Date.now()<deadline)await delay(100);
-    }
-    report.browserExited=!alive(identity.pid);assert(report.browserExited,'Edge cleanup unverified');await context.close();
-  }catch(error){report.errors.push(`Observed Edge cleanup: ${error}`);}
+  try{await closeWindowsEdge({context,protocol,identity,profile:report.profile,record:report});}catch(error){report.errors.push(`Observed Edge cleanup: ${error}`);}
   if(report.errors.length){report.status='failed';process.exitCode=1;}await persist();console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
 }
 async function persist(){try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}catch(error){report.errors.push(`Report IO: ${error}`);report.status='failed';process.exitCode=1;console.error(JSON.stringify(report,null,2));}}
-function alive(pid){try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}}

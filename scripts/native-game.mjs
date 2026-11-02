@@ -6,12 +6,13 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
+import {openNativeEdge} from './native-edge.mjs';
 
 const credentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
 export async function nativeGame({out,origin,env,check,report}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
-  assert(['vps-managed','ci-playwright'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed or ci-playwright explicitly');
-  if(mode==='ci-playwright')assert(process.env.GITHUB_ACTIONS==='true','ci-playwright mode is restricted to GitHub Actions owned runners');
+  assert(['vps-managed','ci-playwright','ci-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright or ci-edge explicitly');
+  if(mode!=='vps-managed')assert(process.env.GITHUB_ACTIONS==='true','CI browser modes are restricted to GitHub Actions owned runners');
   else {
     assert(process.env.PI_BROWSER_TOOLS, 'PI_BROWSER_TOOLS must select the managed browser helper directory');
     assert(process.env.PI_NATIVE_TEST_CHROME, 'PI_NATIVE_TEST_CHROME must select the native Chrome binary');
@@ -30,7 +31,7 @@ export async function nativeGame({out,origin,env,check,report}) {
   const open = async name => {
     const owner=`single-player-package:${out}:${sequence++}`;
     const profile=join(out,'game-profile-'+sequence);
-    let browser,context,page,chrome,errors='',consoleLog=[];
+    let browser,context,page,chrome,edgeClose,errors='',consoleLog=[];
     if(mode==='vps-managed') {
       const probe=createServer();await new Promise(ok=>probe.listen(0,'127.0.0.1',ok));const port=probe.address().port;await new Promise(ok=>probe.close(ok));
       chrome=spawn(process.execPath,[join(process.env.PI_BROWSER_TOOLS,'launch-browser.mjs'),`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,'--ozone-platform=x11','--window-size=1280,960','--window-position=0,0','--no-first-run','--no-default-browser-check',...JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS ?? '[]'),'about:blank'],{
@@ -42,6 +43,9 @@ export async function nativeGame({out,origin,env,check,report}) {
       (report.browsers??=[]).push(receipt);
       browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
       context=browser.contexts()[0];page=context.pages()[0];assert(page,'Managed browser must create its initial owned page');
+    } else if(mode==='ci-edge') {
+      ({browser,context,page,close:edgeClose}=await openNativeEdge({owner,profile,env,report}));
+      check(`${name}: actual CI Edge argv has no sandbox bypass`,!/--no-sandbox|--disable-setuid-sandbox/.test(report.browsers.at(-1).argv));
     } else {
       const args=['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1280,960',...(process.platform==='linux'?['--ozone-platform=x11']:[]),...JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS ?? '[]')];
       context=await chromium.launchPersistentContext(profile,{headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args,env,timeout:30000});
@@ -64,12 +68,15 @@ export async function nativeGame({out,origin,env,check,report}) {
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
     let frames=0;page.on('websocket',socket=>{if(socket.url()===origin.replace('http:','ws:')+'/game')socket.on('framereceived',()=>frames++);});
     const close=async()=>{
-      if(mode==='vps-managed'){
+      const failures=[];
+      try{if(mode==='vps-managed'){
         const cdp=await browser.newBrowserCDPSession();await cdp.send('Browser.close');await browser.close();
         const deadline=Date.now()+10000;while(chrome.exitCode===null&&Date.now()<deadline)await delay(100);
         assert(chrome.exitCode===0,`Browser cleanup did not exit cleanly: ${chrome.exitCode}`);
-      }else await context.close({timeout:10000});
-      await writeFile(join(out,`${name}-browser.log`),errors+'\n'+JSON.stringify(consoleLog,null,2));
+      }else if(mode==='ci-edge')await edgeClose();
+      else await context.close({timeout:10000});}catch(error){failures.push(error);}
+      try{await writeFile(join(out,`${name}-browser.log`),errors+'\n'+JSON.stringify(consoleLog,null,2));}catch(error){failures.push(error);}
+      if(failures.length)throw new AggregateError(failures,failures.map(error=>String(error.stack??error)).join('\n'));
     };
     session={page,close};
     try {
@@ -97,7 +104,11 @@ export async function nativeGame({out,origin,env,check,report}) {
       check(`${name}: no browser page exceptions`,!consoleLog.some(entry=>entry.type==='pageerror'));
       const shot=join(out,`${name}-native-game.png`);await page.screenshot({path:shot});report.screenshots.push(shot);
       return {page,rect,close};
-    } catch(error) {await page.screenshot({path:join(out,`${name}-failure.png`)});await close();session=undefined;throw error;}
+    } catch(error) {
+      const failures=[error];try{await page.screenshot({path:join(out,`${name}-failure.png`)});}catch(capture){failures.push(capture);}
+      try{await close();}catch(cleanup){failures.push(cleanup);}session=undefined;
+      if(failures.length>1)throw new AggregateError(failures,failures.map(failure=>String(failure.stack??failure)).join('\n'));throw error;
+    }
   };
   const close=async()=>{if(session){const current=session;session=undefined;await current.close();}};
   const current=await open('before');
