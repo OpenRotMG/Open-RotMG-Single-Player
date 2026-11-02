@@ -31,8 +31,14 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: echo 'PI_NATIVE_TEST_CHROME_ARGS=["--ignore-gpu-blocklist","--disable-gpu-driver-bug-workarounds"]' >> "$GITHUB_ENV"
-      - name: Package and play through native client
-        run: npm run package:test
+      - name: Package native runtime
+        run: npm test && npm run package
+      - name: Play through Linux client with OS-wide egress blocked
+        if: runner.os == 'Linux'
+        run: node scripts/offline-linux.mjs
+      - name: Play through native client
+        if: runner.os != 'Linux'
+        run: node scripts/package-test.mjs
       - name: Retain small receipts and native screenshots
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -44,6 +50,10 @@ jobs:
             .qa/package-tests/**/*.png
             .qa/package-tests/**/*.xml
             .qa/package-tests/**/*console.json
+            .qa/package-tests/**/*browser.log
+            .qa/package-tests/**/state-contender.log
+            .qa/package-tests/**/server-crash-restart.jsonl
+            .qa/integration/offline-proof.json
             .qa/ci-inputs/server-artifact.json
             runtime/build-identity.json
           if-no-files-found: warn

@@ -14,13 +14,13 @@ export async function failureCloseTests({out,native,env,check,report}) {
       globalThis.qaDialogs=[];
       dialog.showErrorBox=(title,body)=>globalThis.qaDialogs.push({title,body});
     });
-    return {app,page,child:app.process()};
+    return {app,page,child:app.process(),pid:await app.evaluate(()=>process.pid)};
   };
   for(const kind of ['delayed-marker','unwritable-marker']) {
     const profile=join(out,kind);let current,server;
     try {
       current=await launch(profile);
-      const {app,page,child}=current;
+      const {app,page,child,pid}=current;
       if(kind==='delayed-marker')await app.evaluate(()=>{
         const fs=process.getBuiltinModule('fs/promises'),write=fs.writeFile;
         const pending=new Promise(ok=>globalThis.qaReleaseFailureMarker=ok);
@@ -40,12 +40,12 @@ export async function failureCloseTests({out,native,env,check,report}) {
       await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
       if(kind==='delayed-marker') {
         await delay(200);
-        check('immediate Close retains launcher ownership during delayed failure-marker IO',alive(child.pid));
+        check('immediate Close retains launcher ownership during delayed failure-marker IO',alive(pid));
         const second=spawn(native,args(profile),{env,stdio:'ignore'});
         await wait(()=>second.exitCode!==null||second.signalCode!==null,'second launcher refusal during pending gate',10000);
-        check('failure marker pending: second launcher cannot take ownership',second.exitCode===0&&alive(child.pid));
+        check('failure marker pending: second launcher cannot take ownership',second.exitCode===0&&alive(pid));
         await app.evaluate(()=>globalThis.qaReleaseFailureMarker());
-        await wait(()=>!alive(child.pid)&&child.exitCode!==null,'Close waits for marker then exits',10000);current=undefined;
+        await wait(()=>!alive(pid)&&child.exitCode!==null,'Close waits for marker then exits',10000);current=undefined;
         const marker=JSON.parse(await readFile(join(profile,'shutdown-failed.json'),'utf8'));
         check('failed shutdown Close exits only after marker write completes',child.exitCode===1&&marker.error.includes('without verified shutdown')&&performance.now()-started>=200);
         current=await launch(profile);
@@ -55,10 +55,10 @@ export async function failureCloseTests({out,native,env,check,report}) {
         await current.app.close();current=undefined;
       } else {
         await wait(async()=>(await app.evaluate(()=>globalThis.qaDialogs)).some(dialog=>dialog.title==='Failure gate was NOT recorded'),'marker IO error dialog',10000);
-        check('actual marker IO failure is explicit and Close retains ownership',alive(child.pid)&&(await page.evaluate(()=>window.launcher.status())).message.includes('NOT recorded'));
+        check('actual marker IO failure is explicit and Close retains ownership',alive(pid)&&(await page.evaluate(()=>window.launcher.status())).message.includes('NOT recorded'));
         const second=spawn(native,args(profile),{env,stdio:'ignore'});
         await wait(()=>second.exitCode!==null||second.signalCode!==null,'second launcher refusal after failed marker IO',10000);
-        check('marker write failure never silently releases single-instance ownership',second.exitCode===0&&alive(child.pid));
+        check('marker write failure never silently releases single-instance ownership',second.exitCode===0&&alive(pid));
         report.failureMarkerErrorDialogs=await app.evaluate(()=>globalThis.qaDialogs);
       }
     } finally {
@@ -69,8 +69,8 @@ export async function failureCloseTests({out,native,env,check,report}) {
           assert(!alive(server),'Failure regression cleanup must not abandon its server');
         }
         // Unwritable-gate tests must explicitly terminate their owned failed launcher; this is not a successful Close/save.
-        const child=current.child;
-        if(alive(child.pid)){child.kill('SIGKILL');await wait(()=>!alive(child.pid),'owned failed launcher teardown',10000);}
+        const pid=current.pid;
+        if(alive(pid)){process.kill(pid,'SIGKILL');await wait(()=>!alive(pid),'owned failed launcher teardown',10000);}
       }
     }
   }

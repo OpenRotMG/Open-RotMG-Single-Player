@@ -1,7 +1,7 @@
 import { _electron as electron } from '@playwright/test';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, writeFile, chmod, readdir, rename, stat, lstat, rm, cp } from 'node:fs/promises';
-import { resolve, join } from 'node:path';
+import { mkdir, mkdtemp, readFile, writeFile, chmod, readdir, rename, rm, cp } from 'node:fs/promises';
+import { resolve, join, isAbsolute } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -13,6 +13,8 @@ import { release, type } from 'node:os';
 import {listenOnLoopback,acquireQaPortLease} from './qa-port.mjs';
 import {failureCloseTests} from './failure-close-test.mjs';
 import {PORT} from '../dist/runtime.js';
+import {consumerEnvironment,protectInstallation,assertInstallationProtected,suspendServer,runtimeLinkage} from './native-boundaries.mjs';
+import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const child = spawn('dbus-run-session', [process.execPath, ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, OPENROTMG_PRIVATE_TEST: '1' } });
@@ -22,13 +24,17 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const out = await mkdtemp(resolve('.qa/package-tests/run-'));
   const report = { status: 'running', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
   const check = (name, value) => { assert(value, name); report.assertions.push(name); console.log(`PASS ${name}`); };
-  let display, launcher, browserCleanup, serverPid, lease;
-  const tmp=await mkdtemp(process.env.GITHUB_ACTIONS==='true'?join(process.env.RUNNER_TEMP,'openrotmg-'):resolve('.qa/t-'));
-  assert(process.platform!=='linux'||Buffer.byteLength(tmp)<65,'Private on-disk TMPDIR must fit Chromium Unix socket paths');
-  report.tmp=tmp;process.env.TMPDIR=tmp;process.env.TEMP=tmp;process.env.TMP=tmp;
+  let display, launcher, launcherPid, browserCleanup, serverPid, lease, restoreInstallation;
   const env = { ...process.env, XDG_CONFIG_HOME: join(out, 'config'), XDG_CACHE_HOME: join(out, 'cache') };
   delete env.WAYLAND_DISPLAY;
   try {
+    const tmpRoot=process.env.OPENROTMG_TEST_TMP_ROOT;
+    assert(!tmpRoot||isAbsolute(tmpRoot),'OPENROTMG_TEST_TMP_ROOT must be an absolute owned on-disk directory');
+    if(tmpRoot)await mkdir(tmpRoot,{recursive:true});
+    const tmp=await mkdtemp(tmpRoot?join(tmpRoot,'t-'):process.env.GITHUB_ACTIONS==='true'?join(process.env.RUNNER_TEMP,'openrotmg-'):resolve('.qa/t-'));
+    report.tmp=tmp;
+    assert(process.platform!=='linux'||Buffer.byteLength(tmp)<65,'Private on-disk TMPDIR must fit Chromium Unix socket paths; set OPENROTMG_TEST_TMP_ROOT to a shorter owned path');
+    Object.assign(process.env,{TMPDIR:tmp,TEMP:tmp,TMP:tmp});Object.assign(env,{TMPDIR:tmp,TEMP:tmp,TMP:tmp});
     report.launcherSource={head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),dirty:execFileSync('git',['status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim()!==''};
     lease=await acquireQaPortLease();report.qaOwnership=lease.kind;
     const probe=createServer();await listenOnLoopback(probe,PORT);await new Promise(ok=>probe.close(ok));
@@ -49,13 +55,17 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     report.executable = native; report.sha256 = sha256(await readFile(native));
     report.appAsarSha256=sha256(await readFile(process.platform==='darwin'?join(packageDir,'Open RotMG Single Player.app/Contents/Resources/app.asar'):join(packageDir,'resources/app.asar')));
     report.build = JSON.parse(await readFile(process.platform === 'darwin' ? join(packageDir,'Open RotMG Single Player.app/Contents/Resources/runtime/build-identity.json') : join(packageDir,'resources/runtime/build-identity.json')));
+    const consumerEnv=await consumerEnvironment(env,out);
+    report.consumerPath=consumerEnv.PATH;
     let profile = join(out,'launcher-profile');
     const launch = async () => {
-      launcher = await electron.launch({ executablePath: native, args: [`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])], chromiumSandbox: true, env, timeout: 30000 });
+      launcher = await electron.launch({ executablePath: native, args: [`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])], chromiumSandbox: true, env:consumerEnv, timeout: 30000 });
       const page = await launcher.firstWindow(); await page.waitForFunction(() => !!window.launcher);
-      const argvText = await processArgv(launcher.process().pid);
-      (report.launches??=[]).push({pid:launcher.process().pid,argv:argvText,versions:await launcher.evaluate(()=>process.versions)});
+      launcherPid=await launcher.evaluate(()=>process.pid);
+      const argvText = await processArgv(launcherPid);
+      (report.launches??=[]).push({pid:launcherPid,controllerPid:launcher.process().pid,argv:argvText,versions:await launcher.evaluate(()=>process.versions)});
       check('actual packaged Electron argv has no --no-sandbox', !argvText.includes('--no-sandbox'));
+      check('packaged launcher has no developer-tool PATH or injected Node options',await launcher.evaluate(()=>process.env.PATH)===consumerEnv.PATH&&!(await launcher.evaluate(()=>process.env.NODE_OPTIONS)));
       const preferences = await launcher.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences());
       check('renderer contextIsolation and sandbox are enabled', preferences.contextIsolation && preferences.sandbox && !preferences.nodeIntegration);
       return page;
@@ -67,6 +77,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     report.userData = userData;
     const resources = await launcher.evaluate(() => process.resourcesPath);
     const binary = join(resources, 'runtime', process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg');
+    report.serverLinkage=runtimeLinkage(binary);
     const occupied = createServer(); await listenOnLoopback(occupied,PORT);
     try {
       await page.getByRole('button',{name:'Start Server',exact:true}).click();
@@ -84,13 +95,14 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     try {
       await page.getByRole('button',{name:'Start Server',exact:true}).click();
       await wait(async()=>{const view=await page.evaluate(()=>window.launcher.status());return view.status==='stopped'&&view.message.includes('before listening');},'invalid-state error',30000);
-      const view=await page.evaluate(()=>window.launcher.status());
-      check('packaged invalid state reports nonzero startup exit and readable diagnostics',view.message.includes('code=1')&&view.logs.some(line=>/File exists|Not a directory/.test(line)));
+      const view=await page.evaluate(()=>window.launcher.status());report.invalidState=view;
+      const diagnostic=process.platform==='win32'?/\(os error (183|267)\)/:/File exists|Not a directory/;
+      check('packaged invalid state reports nonzero startup exit and readable diagnostics',view.message.includes('code=1')&&view.logs.some(line=>diagnostic.test(line)));
     } finally {await rm(join(userData,'state'));}
-    if (process.platform !== 'win32') {
-      await readOnly(packageDir);
-      check('native package runs from non-writable installation with spaces',packageDir.includes(' ')&&((await stat(packageDir)).mode&0o222)===0);
-    }
+    restoreInstallation=await protectInstallation(packageDir);
+    await assertInstallationProtected(packageDir,join(resources,'runtime'));
+    await launcher.close();launcher=undefined;page=await launch();
+    check('native package launches from OS-enforced non-writable installation with spaces',packageDir.includes(' '));
     if(process.platform!=='win32') {
       await mkdir(join(userData,'state'),{mode:0o000});
       try {
@@ -121,7 +133,16 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       await wait(async () => (await page.evaluate(() => window.launcher.status())).status === 'stopped', 'verified consumer drain', 650000);
       check('spawned server is gone after stop', !alive(serverPid));
     };
+    const closeActive=async kind=>{
+      const child=launcher.process(),pid=serverPid,mainPid=launcherPid;
+      await launcher.evaluate(({BrowserWindow,app},kind)=>{if(kind==='window-close')BrowserWindow.getAllWindows()[0].close();else app.quit();},kind);
+      await wait(()=>!alive(mainPid)&&child.exitCode!==null,'active-character Close/Quit drains and exits',650000);launcher=undefined;
+      check(`${kind}: packaged Close/Quit exits0 after active-character durable drain`,child.exitCode===0&&!alive(pid));
+      const names=(await readdir(join(userData,'diagnostics'))).sort();
+      check(`${kind}: actual child records completed shutdown persistence`,(await readFile(join(userData,'diagnostics',names.at(-1)),'utf8')).includes('shutdown persistence complete'));
+    };
     const view = await start();
+    await rejectStateContender({binary,userData,out,env:consumerEnv,check,report});
     const second=spawn(native,[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])],{env,stdio:'ignore'});
     await wait(()=>second.exitCode!==null||second.signalCode!==null,'second launcher refuses same userData owner',10000);
     check('single-instance lock rejects a second packaged launcher without stopping child',second.exitCode===0&&alive(serverPid));
@@ -130,18 +151,19 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     browserCleanup = game.close;
     await game.mutate();
     await stop();
+    await start();await game.verify(true);
+    await closeActive('window-close');
     await game.close(); browserCleanup = undefined;
-    await launcher.close(); launcher = undefined;
     page = await launch();
     await start();
-    await game.verify();
-    await stop();
-    await launcher.close(); launcher = undefined;
+    await game.verify(true);browserCleanup=game.close;
+    await closeActive('application-quit');
+    await game.close();browserCleanup=undefined;
     page = await launch(); await start();
     await game.verify(true); browserCleanup = game.close;
-    const crashedPid = serverPid, crashedLauncher = launcher.process();
-    crashedLauncher.kill('SIGKILL');
-    await wait(() => !alive(crashedLauncher.pid), 'launcher crash', 10000); launcher = undefined;
+    const crashedPid = serverPid, crashedLauncherPid = launcherPid;
+    process.kill(crashedLauncherPid,'SIGKILL');
+    await wait(() => !alive(crashedLauncherPid), 'launcher crash', 10000); launcher = undefined;
     await wait(() => !alive(crashedPid), 'server drains private stdin EOF after launcher crash', 650000);
     check('launcher crash leaves no orphan child', true);
     const diagnostics = join(userData, 'diagnostics');
@@ -149,31 +171,49 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     const crashLog = await readFile(join(diagnostics,logNames.at(-1)), 'utf8');
     check('abrupt parent EOF requests durable drain while native character connected', crashLog.includes('parent_eof') && crashLog.includes('shutdown persistence complete'));
     await game.close(); browserCleanup = undefined;
-    page = await launch(); await start(); await game.verify(); await stop();
+    page = await launch(); await start(); await game.verify(true);browserCleanup=game.close;
+    process.kill(serverPid,'SIGKILL');
+    await wait(async()=>{const view=await page.evaluate(()=>window.launcher.status());return view.status==='failed'&&!view.pid;},'actual server crash releases process',10000);
+    check('actual server crash gates consumer restart without a false save-success claim',await page.getByRole('button',{name:'Start Server',exact:true}).isDisabled());
+    const crashShot=join(out,'server-crash-gated.png');await page.screenshot({path:crashShot});report.screenshots.push(crashShot);
+    await game.close();browserCleanup=undefined;
+    await crashReleasedRestart({binary,userData,out,env:consumerEnv,origin:view.origin,game,check,report});
+    await launcher.evaluate(({dialog})=>{dialog.showErrorBox=()=>{};});
+    const failedPid=launcherPid;await launcher.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
+    await wait(()=>!alive(failedPid),'failed launcher closes after durable gate',10000);launcher=undefined;
+    check('server crash failure marker remains intact after independent OS-lock proof',JSON.parse(await readFile(join(userData,'shutdown-failed.json'),'utf8')).error.includes('without verified shutdown'));
+    profile=join(out,'initialization-profile');page=await launch();
     await page.getByRole('button',{name:'Start Server',exact:true}).click();
     await page.getByRole('button',{name:'Stop Server',exact:true}).click();
     await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='stopped','close during synchronous initialization drains after boot',650000);
     check('stop during initialization waits for verified shutdown',true);
     await launcher.close(); launcher = undefined;
-    if(process.platform!=='win32') {
+    {
       profile=join(out,'timeout-profile');page=await launch();await start();
-      process.kill(serverPid,'SIGSTOP');
+      suspendServer(serverPid,true);
       try {
         await page.getByRole('button',{name:'Stop Server',exact:true}).click();
         await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='failed','real shutdown timeout',60000);
         const failed=await page.evaluate(()=>window.launcher.status());
         check('shutdown timeout blocks save mutations and never claims forced-stop success',failed.message.includes('NOT force-killed')&&await page.getByRole('button',{name:'Start Server',exact:true}).isDisabled());
-      } finally {process.kill(serverPid,'SIGCONT');}
+      } finally {suspendServer(serverPid,false);}
       await wait(()=>!alive(serverPid),'owned suspended child resumes and drains',60000);
       const failedData=await launcher.evaluate(({app})=>app.getPath('userData'));
       check('failed shutdown leaves durable diagnostic gate',JSON.parse(await readFile(join(failedData,'shutdown-failed.json'),'utf8')).error.length>0);
-      const failedLauncher=launcher.process();failedLauncher.kill('SIGKILL');await wait(()=>!alive(failedLauncher.pid),'failed launcher test teardown',10000);launcher=undefined;
+      process.kill(launcherPid,'SIGKILL');await wait(()=>!alive(launcherPid),'failed launcher test teardown',10000);launcher=undefined;
     }
     }
     await failureCloseTests({out,native,env,check,report});
     }
     report.status = 'passed';
-  } catch (error) { report.status = 'failed'; report.errors.push(String(error.stack ?? error)); process.exitCode = 1; }
+  } catch (error) {
+    report.status = 'failed'; report.errors.push(String(error.stack ?? error)); process.exitCode = 1;
+    const page=launcher?.windows()[0];
+    if(page&&!page.isClosed())try{
+      report.failureView=await page.evaluate(()=>window.launcher.status());
+      const path=join(out,'integration-failure.png');await page.screenshot({path});report.screenshots.push(path);
+    }catch(cause){report.failureEvidenceError=String(cause);}
+  }
   finally {
     if (browserCleanup) try { await browserCleanup(); } catch(error) { report.errors.push(`browser cleanup: ${error}`); process.exitCode = 1; }
     if (launcher) try { await launcher.close(); } catch(error) { report.errors.push(`launcher cleanup: ${error}`); process.exitCode = 1; }
@@ -182,18 +222,13 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       display.kill('SIGTERM');
       try{await wait(()=>display.exitCode!==null||display.signalCode!==null,'private Xvfb cleanup',5000);}catch(error){report.errors.push(String(error));process.exitCode=1;}
     }
+    if(restoreInstallation)try{await restoreInstallation();}catch(error){report.errors.push(`Install ACL cleanup: ${error}`);process.exitCode=1;}
     if(lease)try{await lease.release();}catch(error){report.errors.push(String(error));process.exitCode=1;}
     if(report.errors.length)report.status='failed';
     await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
     console.log(`${report.status}: ${join(out,'result.json')}`);
     if (report.errors.length) console.error(report.errors.join('\n'));
   }
-}
-async function readOnly(path) {
-  const info=await lstat(path);
-  if(info.isSymbolicLink())return;
-  if(info.isDirectory())for(const name of await readdir(path))await readOnly(join(path,name));
-  await chmod(path,info.mode&~0o222);
 }
 function alive(pid) { try { process.kill(pid,0); return true; } catch (error) { if (error.code === 'ESRCH') return false; throw error; } }
 async function wait(predicate, message, timeout) {
