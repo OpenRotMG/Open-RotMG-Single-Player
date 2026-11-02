@@ -48,8 +48,11 @@ try {
 finally {
   if(restore)try{await restore();report.rollbackCompleted=true;}catch(error){report.errors.push(`ACL rollback: ${error}`);process.exitCode=1;}
   if(!report.aclSnapshots.some(entry=>entry.phase==='after-rollback'))await snapshotAcl('after-rollback');
-  if(report.errors.length)report.status='failed';
-  await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report,null,2));
+  if(report.errors.length){report.status='failed';process.exitCode=1;}
+  console.error(JSON.stringify(report,null,2));
+  try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}
+  catch(error){report.status='failed';report.errors.push(`Receipt persistence: ${error}`);process.exitCode=1;console.error(JSON.stringify(report,null,2));}
+  console.log(`${report.status}: ${join(out,'result.json')}`);
 }
 async function snapshotAcl(phase){
   for(const path of aclPaths){
