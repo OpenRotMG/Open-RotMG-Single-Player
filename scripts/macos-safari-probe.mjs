@@ -7,10 +7,11 @@ import {resolve,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
 import {verifySafariEndpoint,cleanupSafariCli,SAFARI_SERVICE_REQUIREMENT} from './safari-driver-ownership.mjs';
+import {safariWebDriverValue} from './safari-webdriver-response.mjs';
 
 assert(process.platform==='darwin'&&process.env.GITHUB_ACTIONS==='true','Safari diagnostics require an owned native macOS CI runner');
 const out=resolve('.qa/mac-safari-probe');await mkdir(out,{recursive:true});
-const report={purpose:'Normal built-in Safari WebDriver capability diagnostics, NOT game/default-browser acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),driverVersion:execFileSync('/usr/bin/safaridriver',['--version'],{encoding:'utf8'}).trim(),errors:[]};
+const report={purpose:'Normal built-in Safari WebDriver capability diagnostics, NOT game/default-browser acceptance',head:execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim(),os:process.platform,arch:process.arch,system:execFileSync('sw_vers',[],{encoding:'utf8'}),driverVersion:execFileSync('/usr/bin/safaridriver',['--version'],{encoding:'utf8'}).trim(),errors:[],scriptResponses:[]};
 let driver,session,driverIdentity,endpoint,endpointPort;
 const page=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Safari WebGL2 diagnostic</title><h1>Safari WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
 const log=await open(join(out,'safaridriver.log'),'wx');
@@ -47,7 +48,7 @@ try {
   report.service.signature={command:['/usr/bin/codesign',...signatureArgs],requirement:SAFARI_SERVICE_REQUIREMENT,status:signature.status,stdout:signature.stdout,stderr:signature.stderr,error:signature.error&&String(signature.error)};
   const metadata=spawnSync('/usr/bin/codesign',['-d','-r-','--verbose=4',report.service.executable],{encoding:'utf8',timeout:10000});report.service.signatureMetadata={status:metadata.status,stdout:metadata.stdout,stderr:metadata.stderr};
   const currentRoot=await processIdentity(driver.pid);report.currentDriverRoot=currentRoot;
-  report.status='checking-endpoint-contract';await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+  report.status='checking-endpoint-contract';await persist();
   assert(addresses.length&&addresses.every(line=>/^n(?:127\.0\.0\.1|\[::1\]|localhost):\d+$/.test(line)),'Driver must listen only on loopback');
   verifySafariEndpoint(driverIdentity,currentRoot,report.service,process.getuid());
   const created=await request('POST','/session',{capabilities:{alwaysMatch:{browserName:'safari'}}},30000);
@@ -62,7 +63,7 @@ try {
   const screenshot=Buffer.from(await request('GET',`/session/${session}/screenshot`),'base64');assert.equal(screenshot.subarray(0,8).toString('hex'),'89504e470d0a1a0a');await writeFile(join(out,'safari.png'),screenshot);
 }catch(error){
   report.status='error';report.errors.push(String(error.stack??error));process.exitCode=1;
-  console.error(report.errors.at(-1));await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+  console.error(report.errors.at(-1));await persist();
 }
 finally {
   if(session)try{
@@ -85,14 +86,19 @@ finally {
   try{if(page.listening){page.closeAllConnections();await new Promise((ok,bad)=>page.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`Diagnostic HTTP cleanup: ${error}`);}
   try{await log.close();}catch(error){report.errors.push(`Driver log close: ${error}`);}
   if(report.errors.length){report.status='error';process.exitCode=1;}
-  await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+  await persist();
   console.log(JSON.stringify({status:report.status,sessionDeleted:report.sessionDeleted,driverExited:report.driverExited,errors:report.errors},null,2));
+}
+async function persist(){
+  console.error(JSON.stringify(report,null,2));
+  try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}
+  catch(error){report.status='error';report.errors.push(`Receipt persistence: ${error}`);process.exitCode=1;console.error(JSON.stringify(report,null,2));}
 }
 async function request(method,path,body,timeout=20000){
   const response=await fetch(endpoint+path,{method,headers:{'Content-Type':'application/json'},...(body===undefined?{}:{body:JSON.stringify(body)}),signal:AbortSignal.timeout(timeout)});
   const data=JSON.parse(await response.text());
-  if(!response.ok||data.value?.error)throw Error(`Safari WebDriver ${method} ${path}: HTTP${response.status} ${JSON.stringify(data.value)}`);
-  return data.value;
+  if(path.endsWith('/execute/sync')){report.scriptResponses.push({method,path,status:response.status,value:data.value});console.error(JSON.stringify(report.scriptResponses.at(-1)));await persist();}
+  return safariWebDriverValue(response.status,data);
 }
 async function listen(server){await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok);});}
 function startIdentity(pid){return execFileSync('ps',['-p',String(pid),'-o','lstart='],{encoding:'utf8'}).trim();}
