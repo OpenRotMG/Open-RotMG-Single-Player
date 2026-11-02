@@ -5,7 +5,7 @@ import {mkdir,open,writeFile} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
-import {verifySafariProcess,verifySafariListener} from './safari-driver-ownership.mjs';
+import {verifySafariListener,cleanupSafariDrivers} from './safari-driver-ownership.mjs';
 
 assert(process.platform==='darwin'&&process.env.GITHUB_ACTIONS==='true','Safari diagnostics require an owned native macOS CI runner');
 const out=resolve('.qa/mac-safari-probe');await mkdir(out,{recursive:true});
@@ -54,7 +54,10 @@ try {
   if(report.webgl2.supported){assert(!report.webgl2.lost);assert.equal(report.webgl2.error,0);assert(report.webgl2.pixel.every((value,index)=>Math.abs(value-[64,128,191,255][index])<=1),'Actual WebGL2 clear/readback must match');}
   report.status=report.webgl2.supported?'supported':'unsupported';
   const screenshot=Buffer.from(await request('GET',`/session/${session}/screenshot`),'base64');assert.equal(screenshot.subarray(0,8).toString('hex'),'89504e470d0a1a0a');await writeFile(join(out,'safari.png'),screenshot);
-}catch(error){report.status='error';report.errors.push(String(error.stack??error));process.exitCode=1;}
+}catch(error){
+  report.status='error';report.errors.push(String(error.stack??error));process.exitCode=1;
+  console.error(report.errors.at(-1));await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+}
 finally {
   if(session)try{
     await request('DELETE',`/session/${session}`,undefined,15000);
@@ -62,20 +65,18 @@ finally {
     assert.equal(invalid.value.error,'invalid session id','Deleted automation session must no longer accept commands');report.sessionDeleted=true;
   }catch(error){report.errors.push(`Automation session cleanup: ${error}`);process.exitCode=1;}
   const cleanup=[];if(listenerIdentity&&listenerIdentity.pid!==driverIdentity.pid)cleanup.push(listenerIdentity);if(driverIdentity)cleanup.push(driverIdentity);
-  report.driverCleanup=[];
-  for(const owned of cleanup)if(alive(owned.pid))try{
-    const current=await processIdentity(owned.pid);verifySafariProcess(owned,current);
-    process.kill(owned.pid,'SIGTERM');report.driverCleanup.push({...current,signal:'SIGTERM'});
-    const deadline=Date.now()+10000;while(alive(owned.pid)&&Date.now()<deadline)await delay(100);
-    if(alive(owned.pid))throw Error(`Owned driver process ${owned.pid} did not exit`);
-  }catch(error){report.errors.push(`Driver ownership/cleanup: ${error}; no successful cleanup claim`);process.exitCode=1;}
-  if(listenerIdentity)report.listenerExited=!alive(listenerIdentity.pid);
-  if(driver){
+  await cleanupSafariDrivers(report,cleanup,{alive,identity:processIdentity,signal:(pid,signal)=>process.kill(pid,signal),waitForExit:async pid=>{
+    const deadline=Date.now()+10000;while(alive(pid)&&Date.now()<deadline)await delay(100);
+  }});
+  if(listenerIdentity)try{report.listenerExited=!alive(listenerIdentity.pid);}catch(error){report.errors.push(`Listener exit observation unknown: ${error}`);}
+  if(driver)try{
     report.driverExited=driver.exitCode!==null||driver.signalCode!==null;
-    if(!report.driverExited){report.errors.push('Owned wrapper did not exit; no successful cleanup claim');process.exitCode=1;driver.unref();}
-  }
-  if(page.listening){page.closeAllConnections();await new Promise(ok=>page.close(ok));}
-  await log.close();await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+    if(!report.driverExited){report.errors.push('Owned wrapper did not exit; no successful cleanup claim');driver.unref();}
+  }catch(error){report.errors.push(`Wrapper exit observation unknown: ${error}`);}
+  try{if(page.listening){page.closeAllConnections();await new Promise((ok,bad)=>page.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`Diagnostic HTTP cleanup: ${error}`);}
+  try{await log.close();}catch(error){report.errors.push(`Driver log close: ${error}`);}
+  if(report.errors.length){report.status='error';process.exitCode=1;}
+  await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
   console.log(JSON.stringify({status:report.status,sessionDeleted:report.sessionDeleted,driverExited:report.driverExited,errors:report.errors},null,2));
 }
 async function request(method,path,body,timeout=20000){

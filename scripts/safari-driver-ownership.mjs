@@ -15,3 +15,13 @@ export function verifySafariListener(root,currentRoot,lineage) {
   }
   verifySafariProcess(root,lineage.at(-1));
 }
+export async function cleanupSafariDrivers(report,owned,operations) {
+  report.driverCleanup=[];
+  for(const target of owned)try{
+    if(!operations.alive(target.pid))continue;
+    const current=await operations.identity(target.pid);verifySafariProcess(target,current);
+    operations.signal(target.pid,'SIGTERM');report.driverCleanup.push({...current,signal:'SIGTERM'});
+    await operations.waitForExit(target.pid);
+    if(operations.alive(target.pid))throw Error(`Owned driver process ${target.pid} did not exit`);
+  }catch(error){report.errors.push(`Driver ownership/cleanup: ${error}; no successful cleanup claim`);report.status='error';}
+}
