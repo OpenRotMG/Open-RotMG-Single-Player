@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-export const SAFARI_SERVICE_REQUIREMENT='anchor apple and identifier "com.apple.WebDriver.HTTPService"';
+export const SAFARI_SERVICE_REQUIREMENT='=anchor apple and identifier "com.apple.WebDriver.HTTPService"';
 export function verifySafariProcess(owned,current) {
   for(const key of ['pid','started','argv'])assert.equal(current[key],owned[key],`Safari CLI process ${key} changed; ownership is not verified`);
 }
