@@ -1,7 +1,7 @@
 {
   "server": {
     "repository": "https://github.com/dginovker/Open-RotMG-Server",
-    "commit": "f73676768ff9fbb635eac9680a3fdc9a0739d178",
+    "commit": "850968f05358edbc89fa1af535e1a08bfd5b1f58",
     "dataSha256": "457afcb2ed6eef68c28b6d3c0020f8fa9c2ecf2b4bcbae6db12eea17b68d3bf3",
     "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
   },

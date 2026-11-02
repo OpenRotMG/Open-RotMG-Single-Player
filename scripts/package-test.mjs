@@ -23,7 +23,8 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
 } else {
   await mkdir('.qa/package-tests', { recursive: true });
   const out = await mkdtemp(resolve('.qa/package-tests/run-'));
-  const report = { status: 'running', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
+  const failureTestsOnly=process.argv.includes('--failure-tests-only');
+  const report = { status: 'running', purpose: failureTestsOnly ? 'focused packaged startup/health/stop/failure ownership; NOT game, graphics, offline or all-platform acceptance' : 'full packaged game journey (native platform only)', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
   const check = (name, value) => { assert(value, name); report.assertions.push(name); console.log(`PASS ${name}`); };
   let display, launcher, launcherPid, browserCleanup, serverPid, lease, restoreInstallation;
   const env = { ...process.env, XDG_CONFIG_HOME: join(out, 'config'), XDG_CACHE_HOME: join(out, 'cache') };
@@ -66,20 +67,20 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       const argvText = await processArgv(launcherPid);
       (report.launches??=[]).push({pid:launcherPid,controllerPid:launcher.process().pid,argv:argvText,versions:await launcher.evaluate(()=>process.versions)});
       check('actual packaged Electron argv has no --no-sandbox', !argvText.includes('--no-sandbox'));
+      check('packaged resources belong to copied installation',await launcher.evaluate(()=>process.resourcesPath)===resources);
       check('packaged launcher has no developer-tool PATH or injected Node options',await launcher.evaluate(()=>process.env.PATH)===consumerEnv.PATH&&!(await launcher.evaluate(()=>process.env.NODE_OPTIONS)));
       const preferences = await launcher.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences());
       check('renderer contextIsolation and sandbox are enabled', preferences.contextIsolation && preferences.sandbox && !preferences.nodeIntegration);
       return page;
     };
-    if(!process.argv.includes('--failure-tests-only')) {
-    let page = await launch();
-    const userData = await launcher.evaluate(({app}) => app.getPath('userData'));
-    check('test userData is owned outside install', userData.startsWith(out) && !userData.startsWith(packageDir));
-    report.userData = userData;
-    const resources = await launcher.evaluate(() => process.resourcesPath);
+    const resources=process.platform==='darwin'?join(packageDir,'Open RotMG Single Player.app/Contents/Resources'):join(packageDir,'resources');
     const binary = join(resources, 'runtime', process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg');
     if(process.platform==='win32')report.qaPowerShell=windowsPowerShellExecutable();
     report.serverLinkage=runtimeLinkage(binary);
+    let page,userData;
+    if(!failureTestsOnly) {
+    page = await launch();
+    userData = await launcher.evaluate(({app}) => app.getPath('userData'));
     const occupied = createServer(); await listenOnLoopback(occupied,PORT);
     try {
       await page.getByRole('button',{name:'Start Server',exact:true}).click();
@@ -101,10 +102,16 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       report.invalidStateSentinel=await readFile(join(userData,'state'),'utf8');
       check('packaged invalid state exits1 without changing the sentinel and reports the actual IO error',view.message.includes('code=1')&&!view.pid&&report.invalidStateSentinel==='not a save directory'&&view.logs.some(line=>/^Error: .+\(os error \d+\)/.test(line)));
     } finally {await rm(join(userData,'state'));}
+    }
     restoreInstallation=await protectInstallation(packageDir);
     await assertInstallationProtected(packageDir,join(resources,'runtime'));
-    await launcher.close();launcher=undefined;page=await launch();
+    if(launcher){await launcher.close();launcher=undefined;}
+    page=await launch();
+    userData = await launcher.evaluate(({app}) => app.getPath('userData'));
+    check('test userData is owned outside install', userData.startsWith(out) && !userData.startsWith(packageDir));
+    report.userData = userData;
     check('native package launches from OS-enforced non-writable installation with spaces',packageDir.includes(' '));
+    if(!failureTestsOnly) {
     if(process.platform!=='win32') {
       await mkdir(join(userData,'state'),{mode:0o000});
       try {
@@ -116,6 +123,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     execFileSync(binary, ['--backup-fixture', join(userData, 'state'), join(resources, 'runtime/data')], { timeout: 30000 });
     execFileSync(binary, ['--backup-load', join(userData, 'state/game.db'), join(resources, 'runtime/data')], { timeout: 30000 });
     check('server-authoritative fresh synthetic fixture validated before consumer start', true);
+    }
     const start = async () => {
       await page.getByRole('button', {name:'Start Server',exact:true}).click();
       await wait(async () => packagedChildReady(await page.evaluate(() => window.launcher.status())), 'packaged child readiness', 650000);
@@ -143,6 +151,14 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       const names=(await readdir(join(userData,'diagnostics'))).sort();
       check(`${kind}: actual child records completed shutdown persistence`,(await readFile(join(userData,'diagnostics',names.at(-1)),'utf8')).includes('shutdown persistence complete'));
     };
+    if(failureTestsOnly) {
+      await start();
+      await rejectStateContender({binary,userData,out,env:consumerEnv,check,report});
+      await stop();
+      const names=(await readdir(join(userData,'diagnostics'))).sort();
+      check('focused packaged Stop records completed shutdown persistence',(await readFile(join(userData,'diagnostics',names.at(-1)),'utf8')).includes('shutdown persistence complete'));
+      await launcher.close();launcher=undefined;
+    } else {
     const view = await start();
     await rejectStateContender({binary,userData,out,env:consumerEnv,check,report});
     const second=spawn(native,[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])],{env,stdio:'ignore'});
@@ -206,7 +222,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       process.kill(launcherPid,'SIGKILL');await wait(()=>!alive(launcherPid),'failed launcher test teardown',10000);launcher=undefined;
     }
     }
-    await failureCloseTests({out,native,env,check,report});
+    await failureCloseTests({out,native,env:consumerEnv,check,report});
     }
     report.status = 'passed';
   } catch (error) {
