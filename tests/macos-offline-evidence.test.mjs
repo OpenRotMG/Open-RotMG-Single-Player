@@ -1,6 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands} from '../scripts/macos-offline-evidence.mjs';
+import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands,macOfflineCanaryResult,verifyMacOfflineCanary} from '../scripts/macos-offline-evidence.mjs';
+
+test('macos-offline-evidence rejects signal or timeout errors even after valid passed canary output',()=>{
+  const stdout=JSON.stringify({status:'passed',policySha256:'owned-policy'});
+  for(const message of ['signal termination','timeout']){
+    const error=Object.assign(new Error(message),{code:null,signal:'SIGTERM'}),result=macOfflineCanaryResult(error,stdout,'native evidence');
+    assert.equal(result.exitCode,null);assert.equal(result.signal,'SIGTERM');assert(result.error.includes(message));
+    let exit=0;try{verifyMacOfflineCanary(result,'owned-policy');}catch{exit=1;}assert.equal(exit,1);
+  }
+  assert.equal(verifyMacOfflineCanary(macOfflineCanaryResult(null,stdout,''),'owned-policy').status,'passed');
+});
 
 test('macos-offline-evidence confines both payload commands under one exact policy without changing normal graphics',()=>{
   const commands=macOfflinePayloadCommands('/owned/offline.sb','/node','/canary.mjs','/chromium','/fresh/profile');

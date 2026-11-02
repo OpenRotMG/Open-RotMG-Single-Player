@@ -7,7 +7,7 @@ import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
-import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands} from './macos-offline-evidence.mjs';
+import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands,macOfflineCanaryResult,verifyMacOfflineCanary} from './macos-offline-evidence.mjs';
 
 assert(process.platform==='darwin'&&process.arch==='arm64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native macOS ARM64 CI VM');
 const out=resolve('.qa/mac-offline-probe'),policyPath=join(out,'offline.sb');
@@ -21,8 +21,8 @@ try {
   const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'mac-offline-'));Object.assign(process.env,{TMPDIR:tmp,TEMP:tmp,TMP:tmp});
   const profile=join(tmp,'browser'),commands=macOfflinePayloadCommands(policyPath,process.execPath,resolve('scripts/macos-offline-canary.mjs'),chromium.executablePath(),profile);
   const nodeCommand=commands.node;report.nodeCommand=nodeCommand;
-  report.nodeProcess=await new Promise(ok=>execFile(nodeCommand[0],nodeCommand.slice(1),{encoding:'utf8',timeout:15000},(error,stdout,stderr)=>ok({exitCode:error?.code??0,error:error&&String(error),stdout,stderr})));
-  report.nodeProof=JSON.parse(report.nodeProcess.stdout);assert.equal(report.nodeProcess.exitCode,0,'Confined Node canary must prove OS denial and loopback');assert.equal(report.nodeProof.status,'passed');assert.equal(report.nodeProof.policySha256,report.policySha256);
+  report.nodeProcess=await new Promise(ok=>execFile(nodeCommand[0],nodeCommand.slice(1),{encoding:'utf8',timeout:15000},(error,stdout,stderr)=>ok(macOfflineCanaryResult(error,stdout,stderr))));
+  report.nodeProof=verifyMacOfflineCanary(report.nodeProcess,report.policySha256);
   await new Promise((ok,bad)=>{server.once('error',bad);server.listen(0,'127.0.0.1',ok);});
   const origin=`http://127.0.0.1:${server.address().port}`;report.origin=origin;report.profile=profile;
   // The observer stays outside; both payloads execute through the same unchanged OS policy.

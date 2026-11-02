@@ -1,4 +1,13 @@
 import {writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+
+export function macOfflineCanaryResult(error,stdout,stderr) {
+  return {exitCode:error?error.code??null:0,signal:error?.signal??null,error:error?String(error):null,stdout,stderr};
+}
+export function verifyMacOfflineCanary(result,policySha256) {
+  assert.equal(result.error,null,'Confined Node canary execution failed');assert.equal(result.exitCode,0);
+  const proof=JSON.parse(result.stdout);assert.equal(proof.status,'passed');assert.equal(proof.policySha256,policySha256);return proof;
+}
 
 export function macOfflinePayloadCommands(policy,node,canary,chromium,profile) {
   const wrapper=['/usr/bin/sandbox-exec','-f',policy];
