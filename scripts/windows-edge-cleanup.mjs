@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {setTimeout as delay} from 'node:timers/promises';
 import {windowsProcessIdentity} from './native-boundaries.mjs';
 
-export async function closeWindowsEdge({context,protocol,identity,profile,record},operations={identity:windowsProcessIdentity,signal:(pid,signal)=>process.kill(pid,signal),waitForExit}) {
+export async function closeWindowsEdge({context,protocol,identity,profile,record,expectedExecutable},operations={identity:windowsProcessIdentity,signal:(pid,signal)=>process.kill(pid,signal),waitForExit}) {
   const errors=[];
   if(protocol){let timer;try{await Promise.race([protocol.send('Browser.close'),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Protocol close exceeded10s')),10000))]);}catch(error){errors.push(error);}finally{clearTimeout(timer);}}
   if(context&&!identity){record.browserExitVerification='unverified';try{await context.close();}catch(error){errors.push(error);}errors.push(Error('Fresh Edge identity was not captured; exit unverified'));}
@@ -10,6 +10,7 @@ export async function closeWindowsEdge({context,protocol,identity,profile,record
     if(!await operations.waitForExit(identity.pid)){
       errors.push(Error('Edge did not exit after protocol close'));const current=operations.identity(identity.pid);
       assert(current.started===identity.started&&current.argv===identity.argv&&current.argv.includes(profile)&&current.executable.toLowerCase()===identity.executable.toLowerCase(),'Immediate owned Edge identity required before signal');
+      if(expectedExecutable)assert.equal(current.executable.toLowerCase(),expectedExecutable.toLowerCase(),'Never signal a redirected installed Edge image');
       operations.signal(identity.pid,'SIGTERM');record.cleanupSignal={...current,signal:'SIGTERM'};assert(await operations.waitForExit(identity.pid),'Edge cleanup unverified');
     }
     record.browserExited=true;await context.close();

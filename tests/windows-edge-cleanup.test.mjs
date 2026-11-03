@@ -14,6 +14,10 @@ test('windows-edge-cleanup refuses changed/reused PID and never signals an unkno
   await assert.rejects(closeWindowsEdge(s,{waitForExit:async()=>false,identity:()=>({...identity,started:'different-start'}),signal:()=>signals++}),/Immediate owned Edge identity required/);
   assert.equal(signals,0);assert.equal(disposed,0);assert.equal(s.record.browserExited,undefined);
 });
+test('windows-edge-cleanup never signals a copied-image redirect into installed Edge',async()=>{
+  const s=state();s.expectedExecutable='owned-copy/msedge.exe';let signals=0;
+  await assert.rejects(closeWindowsEdge(s,{waitForExit:async()=>false,identity:()=>({...identity}),signal:()=>signals++}),/Never signal a redirected installed Edge image/);assert.equal(signals,0);
+});
 test('windows-edge-cleanup retains protocol failure even when exit is later observed',async()=>{
   const s=state();s.protocol.send=async()=>{throw Error('original protocol error');};
   await assert.rejects(closeWindowsEdge(s,{waitForExit:async()=>true}),/original protocol error/);assert.equal(s.record.browserExited,true);
