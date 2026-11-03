@@ -1,4 +1,4 @@
-import { spawn, ChildProcessByStdio } from 'node:child_process';
+import { spawn, ChildProcessByStdio, SpawnOptions } from 'node:child_process';
 import { Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { EventEmitter } from 'node:events';
@@ -12,6 +12,11 @@ export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
 export type View = { status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
+
+export function desktopServerSpawnOptions(platform: NodeJS.Platform, resources: string, env: NodeJS.ProcessEnv, logFd: number): SpawnOptions {
+  // Windows libuv otherwise kills this child with the parent's job before its private EOF drain finishes.
+  return { cwd: resources, env, windowsHide: true, detached: platform === 'win32', stdio: ['pipe', logFd, logFd] };
+}
 
 export class Runtime extends EventEmitter {
   private child?: ChildProcessByStdio<Writable, null, null>;
@@ -101,7 +106,7 @@ export class Runtime extends EventEmitter {
     // Environment is deliberately small: host bot/proxy/API-key settings cannot enter the consumer child.
     const env: NodeJS.ProcessEnv = { RUST_LOG: 'openrotmg=info,lag=info' };
     for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
-    const child = spawn(binary, ['--desktop', '--config', config], { cwd: this.resources, env, windowsHide: true, stdio: ['pipe', log.fd, log.fd] }) as ChildProcessByStdio<Writable, null, null>;
+    const child = spawn(binary, ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
     this.child = child;
     this.closed = new Promise((ok) => {
       child.once('error', error => this.fail(new Error(`Server spawn failed: ${error.message}`)));
