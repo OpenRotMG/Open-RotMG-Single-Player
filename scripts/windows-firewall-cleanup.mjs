@@ -14,6 +14,7 @@ export async function cleanupWindowsOwnedRules(report,plans,operations) {
     if(processes.length)report.retainedRules.push({...plan,processes,reason:'containment retained until disposable VM teardown'});else removable.push(plan.name);
   }catch(error){report.retainedRules.push({...plan,inspectionError:String(error.stack??error),reason:'exit UNVERIFIED; containment retained until disposable VM teardown'});}
   for(const rule of report.retainedRules)report.errors.push(`Containment retained for exact owned rule ${rule.name}: ${JSON.stringify(rule)}`);
+  report.allOwnedImagesExited=plans.length>0&&report.retainedRules.length===0;
   report.cleanupPending=report.retainedRules.length>0;
   await cleanupWindowsFirewallRules(report,removable,operations);
   try{report.rulesAfterCleanup=await operations.observe(plans.map(plan=>plan.name));if(report.rulesAfterCleanup.length)report.cleanupPending=true;assert(report.rulesAfterCleanup.every(rule=>report.retainedRules.some(retained=>retained.name===rule.name)),'Nonretained exact rules must be absent');for(const retained of report.retainedRules)assert(report.rulesAfterCleanup.some(rule=>rule.name===retained.name),`Retained containment rule absent: ${retained.name}`);}catch(error){report.cleanupPending=true;report.errors.push(`All owned rule final observation: ${error}`);}

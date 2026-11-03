@@ -269,7 +269,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   finally {
     if (browserCleanup) try { await browserCleanup(); } catch(error) { report.errors.push(`browser cleanup: ${error}`); process.exitCode = 1; }
     if (launcher) try { await launcher.close(); } catch(error) { report.errors.push(`launcher cleanup: ${error}`); process.exitCode = 1; }
-    if (serverPid && alive(serverPid)) { report.errors.push(`Server PID ${serverPid} still alive; NOT force-killed; save success not claimed`); process.exitCode = 1; }
+    try{if (serverPid && alive(serverPid)) { report.errors.push(`Server PID ${serverPid} still alive; NOT force-killed; save success not claimed`); process.exitCode = 1; }}catch(error){report.errors.push(`Server PID ${serverPid} exit observation: ${error.stack??error}`);process.exitCode=1;}
     if(display){
       display.kill('SIGTERM');
       try{await wait(()=>display.exitCode!==null||display.signalCode!==null,'private Xvfb cleanup',5000);}catch(error){report.errors.push(String(error));process.exitCode=1;}
