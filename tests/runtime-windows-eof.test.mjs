@@ -35,13 +35,19 @@ process.stdin.resume();publish('ready.json',{pid:process.pid});
   await writeFile(parentFile,`
 import {spawn} from 'node:child_process';
 import {open,writeFile} from 'node:fs/promises';
+import {writeFileSync,renameSync} from 'node:fs';
 import {join} from 'node:path';
 import {desktopServerSpawnOptions} from ${JSON.stringify(pathToFileURL(resolve('dist/runtime.js')).href)};
 const root=process.argv[2],log=await open(join(root,'diagnostics.jsonl'),'wx+');
 const child=spawn(process.execPath,[join(root,'child.mjs'),root],desktopServerSpawnOptions(process.platform,root,process.env,log.fd));
 child.once('error',error=>{throw error;});
 child.once('close',async(code,signal)=>{await log.sync();await log.close();await writeFile(join(root,'parent-result.json'),JSON.stringify({code,signal}));process.exit(code===0?0:1);});
-process.stdin.on('data',bytes=>child.stdin.end(bytes));process.stdin.resume();
+let first=true;
+process.stdin.on('data',bytes=>{
+  child.stdin.write(bytes);
+  if(first){first=false;writeFileSync(join(root,'forwarded.tmp'),JSON.stringify({text:bytes.toString()}));renameSync(join(root,'forwarded.tmp'),join(root,'forwarded.json'));}
+});
+process.stdin.on('end',()=>child.stdin.end());process.stdin.resume();
 `);
   return root;
 }
@@ -58,7 +64,8 @@ for(const mode of ['stop','parent_eof'])test(`runtime Windows ${mode} completes 
   });
   const ready=await wait(()=>jsonIfPresent(join(root,'ready.json')),'owned child readiness');childPid=ready.pid;
   if(mode==='stop'){
-    parent.stdin.end('stop\n');assert.equal((await closed).code,0);assert.deepEqual(await jsonIfPresent(join(root,'parent-result.json')),{code:0,signal:null});
+    parent.stdin.write('st');assert.deepEqual(await wait(()=>jsonIfPresent(join(root,'forwarded.json')),'first fragment forwarded'),{text:'st'});
+    parent.stdin.end('op\n');assert.equal((await closed).code,0);assert.deepEqual(await jsonIfPresent(join(root,'parent-result.json')),{code:0,signal:null});
   }else{assert(parent.kill('SIGKILL'));await closed;}
   const complete=await wait(()=>jsonIfPresent(join(root,'complete.json')),'delayed EOF drain completion');assert.equal(complete.pid,childPid);assert.equal(complete.reason,mode);
   await wait(async()=>!alive(childPid),'actual child exit');
