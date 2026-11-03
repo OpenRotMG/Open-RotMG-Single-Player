@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir} from 'node:fs/promises';
 import {dirname,join} from 'node:path';
 import {installedEdgeImage} from './windows-edge-image.mjs';
 import {requireMicrosoftEdgePublisher} from './windows-owned-edge.mjs';
-import {captureEdgeMetrics,metricsHeaderLimit,metricsFormatPrimary} from './windows-metrics-format.mjs';
+import {captureEdgeMetrics,metricsHeaderLimit,metricsFormatPrimary,persistMetricsEvidence} from './windows-metrics-format.mjs';
 
 const out='.qa/windows-edge-metrics-format',report={purpose:'READ-ONLY bounded installer-metrics header evidence; NOT data admission, mutation policy, browser, firewall or game acceptance',status:'initializing',head:process.env.GITHUB_SHA,headerLimit:metricsHeaderLimit,primary:metricsFormatPrimary,errors:[]};
 await mkdir(out,{recursive:true});
@@ -16,4 +16,4 @@ try{
   assert.deepEqual(report.sourceAfter,report.sourceBefore,'Installed signed Edge image identity changed');assert.deepEqual(report.after,report.before,'Source PMA inventory/size/hash/header changed across capture');
   report.unknownHeaders=report.before.filter(file=>file.format.status==='UNKNOWN').length;report.status='captured';
 }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;}
-finally{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2)+'\n');}
+finally{await persistMetricsEvidence(join(out,'result.json'),report);}

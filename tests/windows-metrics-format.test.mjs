@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,writeFile,readFile,readdir,rm,symlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {captureEdgeMetrics,decodeMetricsHeader,metricsHeaderLimit} from '../scripts/windows-metrics-format.mjs';
+import {captureEdgeMetrics,decodeMetricsHeader,metricsHeaderLimit,persistMetricsEvidence} from '../scripts/windows-metrics-format.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 function fixture(name='SetupMetrics'){
   const bytes=Buffer.alloc(8192);bytes.writeUInt32LE(0x408305dc,0);bytes.writeUInt32LE(bytes.length,4);bytes.writeUInt32LE(3,12);bytes.writeUInt32LE(64,24);bytes.writeUInt32LE(32,64);bytes.writeUInt32LE(0xc8799269,68);bytes.write(name,80,'ascii');return bytes;
@@ -24,6 +24,13 @@ test('windows-metrics-format reads only numeric PMAs, binds full-file hash and b
 test('windows-metrics-format rejects empty or oversized enumerations and retains partial capture before an invalid numeric entry',async t=>{
   const root=await source(t);await assert.rejects(captureEdgeMetrics(root),/1\.\.64/);const dir=join(root,'SetupMetrics');await writeFile(join(dir,'1_2.pma'),fixture());await mkdir(join(dir,'2_3.pma'));const partial=[];await assert.rejects(captureEdgeMetrics(root,partial),/regular file/);assert.equal(partial.length,1);await rm(join(dir,'2_3.pma'),{recursive:true});
   for(let i=0;i<65;i++)await writeFile(join(dir,`${i}_99.pma`),Buffer.alloc(1));await assert.rejects(captureEdgeMetrics(root),/1\.\.64/);
+});
+test('windows-metrics-format receipt failure exposes original capture errors and partial data without fallback success',async()=>{
+  const report={status:'failed',errors:['original-capture-error'],before:[{relativePath:'SetupMetrics/1_2.pma',headerHex:'aabb',sha256:'partial-full-hash'}]},fault=Object.assign(Error('ENOSPC actual receipt failure'),{code:'ENOSPC'}),messages=[];let writes=0;
+  await assert.rejects(persistMetricsEvidence('only-result.json',report,async path=>{assert.equal(path,'only-result.json');writes++;throw fault;},text=>messages.push(text)),error=>error===fault);
+  assert.equal(writes,1);assert.equal(report.status,'failed');assert.equal(report.errors[0],'original-capture-error');assert.match(messages.join(''),/NOT PERSISTED/);assert.match(messages.join(''),/original-capture-error/);assert.match(messages.join(''),/SetupMetrics\/1_2.pma/);assert.match(messages.join(''),/partial-full-hash/);assert.match(messages.join(''),/ENOSPC actual receipt failure/);
+  const captured={status:'captured',errors:[]};await assert.rejects(persistMetricsEvidence('only-result.json',captured,async()=>{throw fault;},()=>{}));assert.equal(captured.status,'failed');
+  let saved;await persistMetricsEvidence('only-result.json',{status:'captured',errors:[]},async(_path,text)=>saved=JSON.parse(text),()=>assert.fail('No stderr on actual write success'));assert.equal(saved.status,'captured');
 });
 test('windows-metrics-format rejects symlinked numeric files and redirected directories',{skip:process.platform==='win32'},async t=>{
   const root=await source(t),target=join(root,'unrelated');await writeFile(target,fixture());await symlink(target,join(root,'SetupMetrics','1_2.pma'));await assert.rejects(captureEdgeMetrics(root),/regular file/);await rm(join(root,'SetupMetrics'),{recursive:true});await mkdir(join(root,'elsewhere'));await symlink(join(root,'elsewhere'),join(root,'SetupMetrics'));await assert.rejects(captureEdgeMetrics(root),/real installed-source directory/);

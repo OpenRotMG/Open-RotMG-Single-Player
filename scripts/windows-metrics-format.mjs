@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {lstat,realpath,readdir,open} from 'node:fs/promises';
+import {lstat,realpath,readdir,open,writeFile} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {createHash} from 'node:crypto';
 
@@ -42,4 +42,8 @@ export async function captureEdgeMetrics(sourceDirectory,files=[]) {
     if(failure)throw failure;
   }
   return files;
+}
+export async function persistMetricsEvidence(path,report,write=writeFile,stderr=text=>process.stderr.write(text)) {
+  try{await write(path,JSON.stringify(report,null,2)+'\n');}
+  catch(error){report.status='failed';report.errors.push(`Receipt persistence: ${error.stack??error}`);stderr(`Metrics evidence NOT PERSISTED; partial report and errors:\n${JSON.stringify(report,null,2)}\n`);throw error;}
 }
