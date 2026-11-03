@@ -42,12 +42,13 @@ const root=process.argv[2],log=await open(join(root,'diagnostics.jsonl'),'wx+');
 const child=spawn(process.execPath,[join(root,'child.mjs'),root],desktopServerSpawnOptions(process.platform,root,process.env,log.fd));
 child.once('error',error=>{throw error;});
 child.once('close',async(code,signal)=>{await log.sync();await log.close();await writeFile(join(root,'parent-result.json'),JSON.stringify({code,signal}));process.exit(code===0?0:1);});
-let first=true;
+let forwarded='',acknowledged=false;
+const acknowledge=()=>{writeFileSync(join(root,'forwarded.tmp'),JSON.stringify({text:forwarded}));renameSync(join(root,'forwarded.tmp'),join(root,'forwarded.json'));acknowledged=true;};
 process.stdin.on('data',bytes=>{
-  child.stdin.write(bytes);
-  if(first){first=false;writeFileSync(join(root,'forwarded.tmp'),JSON.stringify({text:bytes.toString()}));renameSync(join(root,'forwarded.tmp'),join(root,'forwarded.json'));}
+  child.stdin.write(bytes);forwarded+=bytes.toString();
+  if(!acknowledged&&forwarded.length>=2)acknowledge();
 });
-process.stdin.on('end',()=>child.stdin.end());process.stdin.resume();
+process.stdin.on('end',()=>{if(!acknowledged)acknowledge();child.stdin.end();});process.stdin.resume();
 `);
   return root;
 }
