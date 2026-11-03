@@ -11,7 +11,7 @@ import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-bound
 import {tree} from './assets.mjs';
 import {installedEdgeImage,edgeImageAt} from './windows-edge-image.mjs';
 import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
-import {ownedEdgeMode,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from './windows-owned-edge.mjs';
+import {ownedEdgeMode,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from './windows-owned-edge.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
@@ -33,6 +33,7 @@ if(process.argv.includes('--node-policy-check')) {
     await mkdir(out,{recursive:true});report.head=psGitHead();report.engine=windowsPowerShellExecutable();
     const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'win offline-'));
     const sourceEdge=ownedEdge?await installedEdgeImage():undefined,sourceExecutable=ownedEdge?sourceEdge.executable:chromium.executablePath();
+    if(ownedEdge){report.installedEdgeSource=sourceEdge;requireMicrosoftEdgePublisher(sourceEdge);}
     const node=join(tmp,'owned-node.exe'),chromeDirectory=join(tmp,ownedEdge?'owned-edge':'owned-chromium'),chrome=join(chromeDirectory,ownedEdge?basename(sourceExecutable):'chrome.exe'),profile=join(tmp,'browser-profile');report.expectedBrowserExecutable=chrome;report.profile=profile;
     const group='openrotmg-offline-'+randomUUID(),plans=[{name:group+'-node',program:node},{name:group+(ownedEdge?'-edge':'-chromium'),program:chrome}];report.rulePlans=plans;
     server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Windows offline diagnostic</title><h1>Offline WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
