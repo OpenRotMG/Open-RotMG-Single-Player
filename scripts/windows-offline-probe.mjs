@@ -11,7 +11,7 @@ import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-bound
 import {tree} from './assets.mjs';
 import {installedEdgeImage,edgeImageAt} from './windows-edge-image.mjs';
 import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
-import {ownedEdgeMode,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from './windows-owned-edge.mjs';
+import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from './windows-owned-edge.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
@@ -63,7 +63,7 @@ if(process.argv.includes('--node-policy-check')) {
     identity=windowsProcessIdentity(pid);report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
     assert(identity.executable.toLowerCase()===chrome.toLowerCase()&&identity.argv.includes(profile),'Browser must execute the owned image, never redirect to installed Edge');assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--use-angle|--ignore-gpu-blocklist/.test(identity.argv),'Normal Chromium sandbox/renderer configuration required');
     if(ownedEdge){assert(!identity.argv.includes('--disable-gpu-sandbox'));assert.equal(report.browser.systemInfo.gpu.auxAttributes.sandboxed,true,'Actual owned Edge GPU sandbox must remain enabled');}
-    const page=context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
+    const page=ownedEdge?await openOwnedEdgePage(context):context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
     report.webgl2=await page.evaluate(graphicsCapability);
     const network=await context.newCDPSession(page),requests=new Map();report.browserNetworkFailures=[];
     network.on('Network.requestWillBeSent',event=>requests.set(event.requestId,event.request.url));network.on('Network.loadingFailed',event=>{if(requests.get(event.requestId)==='http://1.1.1.1/')report.browserNetworkFailures.push({url:requests.get(event.requestId),errorText:event.errorText,blockedReason:event.blockedReason});});await network.send('Network.enable');

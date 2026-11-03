@@ -3,11 +3,15 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,writeFile,cp,rm} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {tree} from '../scripts/assets.mjs';
-import {ownedEdgeMode,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from '../scripts/windows-owned-edge.mjs';
+import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from '../scripts/windows-owned-edge.mjs';
 import {edgeImageAt} from '../scripts/windows-edge-image.mjs';
 
 test('windows-owned-edge requires explicit named mode and never falls back from missing copied image',()=>{
   assert.equal(ownedEdgeMode([]),false);assert.equal(ownedEdgeMode(['--owned-edge-image']),true);assert.throws(()=>ownedEdgeMode(['--automatic']));assert.throws(()=>ownedEdgeMode(['--owned-edge-image','--retry']));assert.throws(()=>edgeImageAt('relative/msedge.exe'),/absolute Edge image/);
+});
+test('windows-owned-edge explicitly creates its own page regardless of preexisting pages',async()=>{
+  let created=0;const page={owned:true};const context={pages:()=>assert.fail('Must not select or fall back from existing pages'),newPage:async()=>{created++;return page;}};
+  assert.equal(await openOwnedEdgePage(context),page);assert.equal(created,1);
 });
 test('windows-owned-edge compares complete original/source/copy inventories and rejects either changed tree',async()=>{
   await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/owned-edge-'));

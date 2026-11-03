@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 export function ownedEdgeMode(args) {
   assert(args.length===0||(args.length===1&&args[0]==='--owned-edge-image'),'Select only explicit --owned-edge-image or the existing Chromium diagnostic');return args.length===1;
 }
+export function openOwnedEdgePage(context) { return context.newPage(); }
 export function requireMicrosoftEdgePublisher(image) {
   assert.equal(image.signature,'Valid','Microsoft Edge Authenticode must validate');assert.equal(image.company,'Microsoft Corporation','Microsoft Edge company must match');
   assert.equal(image.signer,'CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US','Microsoft Edge signer identity must match the validated publisher');
