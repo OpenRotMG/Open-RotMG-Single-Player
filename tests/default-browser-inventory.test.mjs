@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import ts from 'typescript';
 import * as inventory from '../scripts/default-browser-inventory.mjs';
 import {inventoryMode,desktopEntry,desktopWords,localMount,packageOwner,processEvidence,profileOverride,requireRootImage,observe,completeInventory,persistInventory,nativeInventoryJSON} from '../scripts/default-browser-inventory.mjs';
-import {linuxEnvironment,proposedLinuxEnvironment,localInventoryPath,linuxInventoryRoots,qualifyLinuxResolver} from '../scripts/linux-default-browser-inventory.mjs';
+import {linuxEnvironment,proposedLinuxEnvironment,localInventoryPath,linuxInventoryRoots,qualifyLinuxResolver,requireObservedLinuxImage} from '../scripts/linux-default-browser-inventory.mjs';
 
 test('default-browser-inventory refuses caller-selected or nonnative scope',()=>{
   assert.equal(inventoryMode([],'win32','true'),false);assert.equal(inventoryMode(['--private-query'],'linux','true'),true);
@@ -68,6 +68,19 @@ test('default-browser-inventory image/package ownership is explicit and not gues
   assert.equal(packageOwner('browser:amd64: /usr/bin/browser','/usr/bin/browser'),'browser:amd64');
   for(const text of ['other: /wrong','a: /usr/bin/browser\nb: /usr/bin/browser','/evil: /usr/bin/browser'])assert.throws(()=>packageOwner(text,'/usr/bin/browser'));
 });
+test('default-browser-inventory rejected target retains actual stat attributes and unchanged trust error',async()=>{
+  const base={uid:0,gid:0,mode:0o100755,dev:1,ino:42,size:1234,mtimeMs:100,ctimeMs:200,isFile:()=>true,isDirectory:()=>false,isSymbolicLink:()=>false};
+  for(const patch of [{uid:1001},{mode:0o100777},{mode:0o100644},{mode:0o40755,isFile:()=>false,isDirectory:()=>true}]){
+    const info={...base,...patch},observation={declaredPath:'/usr/bin/declared-browser',resolvedPath:'/opt/resolved-browser'},report={errors:[],notReady:['Original equivalence UNPROVEN'],targetObservation:observation};
+    await observe(report,'fixedObserverCapture',()=>requireObservedLinuxImage(info,observation));
+    assert.equal(report.errors.length,1);assert.equal(report.errors[0].code,'ERR_ASSERTION');assert.equal(report.errors[0].message,'Executable must be root-owned, executable and not group/world-writable');
+    assert.equal(observation.declaredPath,'/usr/bin/declared-browser');assert.equal(observation.resolvedPath,'/opt/resolved-browser');assert.equal(observation.kind,info.isFile()?'regular-file':'directory');
+    for(const key of ['uid','gid','mode','dev','ino','size','mtimeMs','ctimeMs'])assert.equal(observation[key],info[key]);assert.equal(observation.permissions,info.mode&0o7777);
+    assert.equal(completeInventory(report),1);assert.equal(report.status,'failed');assert.equal(report.readiness,'not-ready');assert.equal(report.acceptance,false);assert(!('target' in report));assert(!('sha256' in observation));
+    let saved;await persistInventory('/owned/result.json',report,async(path,bytes)=>saved=JSON.parse(bytes));assert.deepEqual(saved.targetObservation,observation);assert.deepEqual(saved.errors,report.errors);
+  }
+  const positive={};requireObservedLinuxImage(base,positive);assert.equal(positive.uid,0);assert.equal(positive.permissions,0o755);
+});
 test('default-browser-inventory process evidence excludes full argv and URLs/secrets',()=>{
   const result=processEvidence({pid:42,birth:{bootId:'boot',startTicks:'123'},image:'/opt/chrome',words:['chrome','--password=secret','https://secret.invalid/token','--user-data-dir=/owned']});
   assert.deepEqual(result,{pid:42,birth:{bootId:'boot',startTicks:'123'},image:'/opt/chrome',profileOverride:'/owned'});assert(!JSON.stringify(result).includes('secret'));
@@ -97,6 +110,7 @@ test('default-browser-inventory receipt write failure preserves evidence and rep
 });
 test('default-browser-inventory fixed workflow and observers never launch/alter a browser or network/default',async()=>{
   const workflow=await readFile('.github/workflows/default-browser-inventory.yml','utf8');assert.match(workflow,/workflow_dispatch:/);assert.match(workflow,/os: \[windows-2022, ubuntu-22\.04\]/);assert.match(workflow,/if: always\(\)/);assert(!/inputs:|npm |ci-inputs|package-test|playwright|sudo |self-hosted|macos|browser.*install/i.test(workflow));
+  const linuxOnly=await readFile('.github/workflows/linux-default-browser-inventory.yml','utf8');assert.match(linuxOnly,/workflow_dispatch:/);assert.match(linuxOnly,/runs-on: ubuntu-22\.04/);assert.match(linuxOnly,/if: always\(\)/);assert(!/inputs:|matrix:|windows|npm |ci-inputs|package-test|playwright|sudo |self-hosted|macos/i.test(linuxOnly));assert.equal((linuxOnly.match(/run: node scripts\/default-browser-inventory-probe\.mjs/g)??[]).length,1);
   const ps=await readFile('scripts/windows-default-browser-inventory.ps1','utf8');assert.match(ps,/executable=\[DefaultBrowserNative\]::Query\(2\)/);assert.match(ps,/flags=0x1010/);assert.match(ps,/SHGetKnownFolderPath\(ref id,0x4000/);assert.match(ps,/finally \{ \$report \| ConvertTo-Json/);assert(!/Start-Process|Get-AuthenticodeSignature|Invoke-WebRequest|Set-Item|New-Item|Remove-Item|--version|Get-Content/.test(ps));
   const linux=await readFile('scripts/linux-default-browser-inventory.mjs','utf8');assert(!/--version|\.launch\(|fetch\(|https?:\/\//.test(linux));assert.match(linux,/xdg-mime'[^\n]*\['query','default','x-scheme-handler\/http'\]/);assert.match(linux,/ListNames only; no service activation/);
 });

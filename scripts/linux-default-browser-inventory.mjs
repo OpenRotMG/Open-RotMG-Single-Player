@@ -52,6 +52,11 @@ export async function localInventoryPath(path,mounts,operations={lstat,readlink}
   };
   return walk(path);
 }
+// A rejected image needs raw attributes in the partial receipt to identify the failed predicate.
+export function requireObservedLinuxImage(info,observation) {
+  Object.assign(observation,{kind:info.isFile()?'regular-file':info.isDirectory()?'directory':info.isSymbolicLink()?'symlink':'other',uid:info.uid,gid:info.gid,mode:info.mode,permissions:info.mode&0o7777,dev:info.dev,ino:info.ino,size:info.size,mtimeMs:info.mtimeMs,ctimeMs:info.ctimeMs});
+  requireRootImage(info);
+}
 export async function linuxObservation(env,report) {
   report.environment=linuxEnvironment(env);report.observerPath='/usr/bin:/bin';report.profileContentsRead=false;qualifyLinuxResolver(report);
   const roots=linuxInventoryRoots(env),mounts=await readFile('/proc/self/mountinfo','utf8'),local=path=>localInventoryPath(path,mounts);
@@ -60,8 +65,8 @@ export async function linuxObservation(env,report) {
     try {const actual=await local(path),info=await lstat(actual);return {path,exists:true,actual,uid:info.uid};}
     catch(error){if(error.code==='ENOENT')return {path,exists:false,observation:'ENOENT'};throw error;}
   };
-  const image=async path=>{
-    const actual=await local(path),info=await lstat(actual);requireRootImage(info);
+  const image=async(path,observation={declaredPath:path})=>{
+    const actual=await local(path);observation.resolvedPath=actual;const info=await lstat(actual);requireObservedLinuxImage(info,observation);
     for(let parent=dirname(actual);;parent=dirname(parent)){const stat=await lstat(parent);assert(stat.uid===0&&!(stat.mode&0o022),'Executable ancestor is not trusted');if(parent==='/')break;}
     const owner=packageOwner(command('/usr/bin/dpkg-query',['-S',actual],env),actual),version=command('/usr/bin/dpkg-query',['-W','-f=${binary:Package}\t${Version}\t${Architecture}',owner],env);
     const sumsPath=await local(`/var/lib/dpkg/info/${owner}.md5sums`),sums=await readFile(sumsPath,'utf8'),entry=sums.split('\n').filter(line=>line.slice(34)===actual.slice(1));assert.equal(entry.length,1,'Resolved file must have one installed package digest');
@@ -103,7 +108,8 @@ export async function linuxObservation(env,report) {
     throw Error('Desktop executable not found in original PATH');
   };
   if(entry.TryExec)report.tryExec=await image(await find(entry.TryExec));
-  report.target=await image(await find(words[0]));
+  report.targetObservation={declaredPath:words[0]};
+  report.target=await image(await find(words[0]),report.targetObservation);
   if(report.target.kind!=='ELF')report.notReady.push('Desktop target is a wrapper/unknown image; browser execution target is not inferred');
   const targetName=basename(report.target.path),packageName=report.target.package.split(':')[0];let profile;
   const config=env.XDG_CONFIG_HOME||join(env.HOME,'.config');
