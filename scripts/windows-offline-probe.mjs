@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {spawnSync,execFile} from 'node:child_process';
-import {mkdir,mkdtemp,copyFile,cp,readFile,writeFile,lstat} from 'node:fs/promises';
+import {mkdir,mkdtemp,copyFile,cp,readFile,writeFile} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {connect} from 'node:net';
 import {join,dirname,basename} from 'node:path';
@@ -9,10 +9,8 @@ import {createHash,randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-boundaries.mjs';
 import {tree} from './assets.mjs';
-import {installedEdgeImage,edgeImageAt} from './windows-edge-image.mjs';
-import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
-import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity,ownedEdgeImageDifference,requireOwnedEdgeAfterRun,classifyOwnedEdgeInstallerMetrics} from './windows-owned-edge.mjs';
-import {captureEdgeMetrics} from './windows-metrics-format.mjs';
+import {ownedEdgeMode} from './windows-owned-edge.mjs';
+import {createWindowsOwnedOffline} from './windows-owned-offline.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
@@ -24,31 +22,28 @@ if(process.argv.includes('--node-policy-check')) {
     await listen(server);assert.equal(await (await fetch(`http://127.0.0.1:${server.address().port}`)).text(),'loopback-ok');result.loopback=true;result.status='passed';
   }catch(error){result.status='failed';result.errors.push(String(error.stack??error));process.exitCode=1;}
   finally{try{if(server.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){result.errors.push(String(error));result.status='failed';process.exitCode=1;}console.log(JSON.stringify(result));}
+} else if(ownedEdgeMode(process.argv.slice(2))) {
+  const out='.qa/windows-owned-edge-policy',report={purpose:'Per-executable OS firewall/normal graphics diagnostic, NOT game/default-browser/whole-VM acceptance',browserMode:'owned-edge-image',status:'initializing',os:process.platform,arch:process.arch,head:psGitHead(),errors:[]};await mkdir(out,{recursive:true});
+  const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'win offline-')),policy=createWindowsOwnedOffline({report,out,tmp,installed:null,env:process.env});
+  try{await policy.prepare();}catch(error){report.errors.push(String(error.stack??error));}
+  finally{await policy.finish();report.status=report.errors.length?'failed':'passed';if(report.errors.length)process.exitCode=1;console.error(JSON.stringify(report,null,2));try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}catch(error){report.status='failed';report.errors.push(`Receipt persistence: ${error}`);console.error(JSON.stringify(report,null,2));throw error;}}
 } else {
-  const ownedEdge=ownedEdgeMode(process.argv.slice(2)),out=ownedEdge?'.qa/windows-owned-edge-policy':'.qa/windows-offline-probe';
+  const out='.qa/windows-offline-probe';
   const ranges=['0.0.0.0-126.255.255.255','128.0.0.0-255.255.255.255','::/128','::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'];
   const profileQuery="Get-NetFirewallProfile | Sort-Object Name | Select-Object Name,@{n='Enabled';e={$_.Enabled.ToString()}},@{n='DefaultInboundAction';e={$_.DefaultInboundAction.ToString()}},@{n='DefaultOutboundAction';e={$_.DefaultOutboundAction.ToString()}}";
-  const report={purpose:'Per-executable OS firewall/normal graphics diagnostic, NOT game/default-browser/whole-VM acceptance',browserMode:ownedEdge?'owned-edge-image':'existing-chromium-diagnostic',status:'initializing',os:process.platform,arch:process.arch,remoteAddresses:ranges,errors:[]};
+  const report={purpose:'Per-executable OS firewall/normal graphics diagnostic, NOT game/default-browser/whole-VM acceptance',browserMode:'existing-chromium-diagnostic',status:'initializing',os:process.platform,arch:process.arch,remoteAddresses:ranges,errors:[]};
   let context,protocol,identity,server;
   try {
     await mkdir(out,{recursive:true});report.head=psGitHead();report.engine=windowsPowerShellExecutable();
     const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'win offline-'));
-    const sourceEdge=ownedEdge?await installedEdgeImage():undefined,sourceExecutable=ownedEdge?sourceEdge.executable:chromium.executablePath();
-    if(ownedEdge){report.installedEdgeSource=sourceEdge;requireMicrosoftEdgePublisher(sourceEdge);}
-    const node=join(tmp,'owned-node.exe'),chromeDirectory=join(tmp,ownedEdge?'owned-edge':'owned-chromium'),chrome=join(chromeDirectory,ownedEdge?basename(sourceExecutable):'chrome.exe'),profile=join(tmp,'browser-profile');report.expectedBrowserExecutable=chrome;report.profile=profile;
-    const group='openrotmg-offline-'+randomUUID(),plans=[{name:group+'-node',program:node},{name:group+(ownedEdge?'-edge':'-chromium'),program:chrome}];report.rulePlans=plans;
+    const sourceExecutable=chromium.executablePath();
+    const node=join(tmp,'owned-node.exe'),chromeDirectory=join(tmp,'owned-chromium'),chrome=join(chromeDirectory,'chrome.exe'),profile=join(tmp,'browser-profile');report.expectedBrowserExecutable=chrome;report.profile=profile;
+    const group='openrotmg-offline-'+randomUUID(),plans=[{name:group+'-node',program:node},{name:group+'-chromium',program:chrome}];report.rulePlans=plans;
     server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Windows offline diagnostic</title><h1>Offline WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
     const sourceDirectory=dirname(sourceExecutable);
-    if(ownedEdge)report.ownedEdgeImage={sourceDirectory,copyDirectory:chromeDirectory,sourceImage:sourceEdge,original:await tree(sourceDirectory,[''])};
-    else report.chromiumImage={sourceDirectory,copyDirectory:chromeDirectory,source:await tree(sourceDirectory,[''])};
+    report.chromiumImage={sourceDirectory,copyDirectory:chromeDirectory,source:await tree(sourceDirectory,[''])};
     await copyFile(process.execPath,node);await cp(sourceDirectory,chromeDirectory,{recursive:true,verbatimSymlinks:true});
-    if(ownedEdge){
-      const image=report.ownedEdgeImage;image.sourceMetadataBeforeRun=await edgeImageAt(sourceExecutable);assert.deepEqual(image.sourceMetadataBeforeRun,sourceEdge,'Installed Edge metadata changed during copy');image.copyMetadataBeforeRun=await edgeImageAt(chrome);requireOwnedEdgeIdentity(sourceEdge,image.copyMetadataBeforeRun);
-      image.metricsBeforeRun=[];await captureEdgeMetrics(sourceDirectory,image.metricsBeforeRun);image.metricsCopySizesBeforeRun={};
-      for(const file of image.metricsBeforeRun){const info=await lstat(join(chromeDirectory,file.relativePath));assert(info.isFile()&&!info.isSymbolicLink(),`Copied installer metrics must be regular: ${file.relativePath}`);image.metricsCopySizesBeforeRun[file.relativePath]=info.size;}
-      image.sourceAfterCopy=await tree(sourceDirectory,['']);image.copyBeforeRun=await tree(chromeDirectory,['']);requireOwnedEdgeInventory(image.original,image.sourceAfterCopy,image.copyBeforeRun);image.prevalidatedInstallerMetrics=classifyOwnedEdgeInstallerMetrics(image);
-      requireOwnedEdgeRulePrograms(plans.map(plan=>plan.program),node,sourceEdge,image.copyMetadataBeforeRun);image.verifiedBeforeRun=true;
-    }else{report.chromiumImage.copy=await tree(chromeDirectory,['']);assert.deepEqual(report.chromiumImage.copy,report.chromiumImage.source,'Complete copied Chromium relative-path/hash inventory must match');report.chromiumImage.verified=true;}
+    report.chromiumImage.copy=await tree(chromeDirectory,['']);assert.deepEqual(report.chromiumImage.copy,report.chromiumImage.source,'Complete copied Chromium relative-path/hash inventory must match');report.chromiumImage.verified=true;
     report.programs=[];for(const [source,copy] of [[process.execPath,node],[sourceExecutable,chrome]]){const sourceHash=hash(await readFile(source)),copyHash=hash(await readFile(copy));assert.equal(copyHash,sourceHash);report.programs.push({source,copy,sha256:copyHash});}
     report.initialFirewall=ps(`Import-Module NetSecurity -ErrorAction Stop; [pscustomobject]@{engine=$PSVersionTable.PSVersion.ToString();module=(Get-Module NetSecurity).Path;administrator=([System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator);service=(Get-Service MpsSvc).Status.ToString();profiles=@(${profileQuery});connections=@(Get-NetConnectionProfile | Select-Object Name,NetworkCategory,InterfaceIndex)} | ConvertTo-Json -Depth 6 -Compress`);
     assert.equal(report.initialFirewall.administrator,true,'Owned CI user must already have firewall rule permission; no elevation is attempted');
@@ -66,8 +61,7 @@ if(process.argv.includes('--node-policy-check')) {
     const browser=context.browser();assert(browser);protocol=await browser.newBrowserCDPSession();const {processInfo}=await protocol.send('SystemInfo.getProcessInfo');const pid=processInfo.find(entry=>entry.type==='browser')?.id;assert(Number.isSafeInteger(pid)&&pid>0);
     identity=windowsProcessIdentity(pid);report.browser={...identity,version:browser.version(),systemInfo:await protocol.send('SystemInfo.getInfo')};
     assert(identity.executable.toLowerCase()===chrome.toLowerCase()&&identity.argv.includes(profile),'Browser must execute the owned image, never redirect to installed Edge');assert(!/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--use-angle|--ignore-gpu-blocklist/.test(identity.argv),'Normal Chromium sandbox/renderer configuration required');
-    if(ownedEdge){assert(!identity.argv.includes('--disable-gpu-sandbox'));assert.equal(report.browser.systemInfo.gpu.auxAttributes.sandboxed,true,'Actual owned Edge GPU sandbox must remain enabled');}
-    const page=ownedEdge?await openOwnedEdgePage(context):context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
+    const page=context.pages()[0];assert(page);await page.goto(origin);report.browserLoopback=true;
     report.webgl2=await page.evaluate(graphicsCapability);
     const network=await context.newCDPSession(page),requests=new Map();report.browserNetworkFailures=[];
     network.on('Network.requestWillBeSent',event=>requests.set(event.requestId,event.request.url));network.on('Network.loadingFailed',event=>{if(requests.get(event.requestId)==='http://1.1.1.1/')report.browserNetworkFailures.push({url:requests.get(event.requestId),errorText:event.errorText,blockedReason:event.blockedReason});});await network.send('Network.enable');
@@ -78,8 +72,6 @@ if(process.argv.includes('--node-policy-check')) {
     await page.screenshot({path:join(out,'offline-webgl2.png')});report.status='passed';
   }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;await persist();}
   finally {
-    if(ownedEdge){try{await closeWindowsEdge({context,protocol,identity,profile:report.profile,record:report,expectedExecutable:report.expectedBrowserExecutable});}catch(error){report.errors.push(`Owned Edge cleanup: ${error}`);}}
-    else {
     if(protocol){let timer;try{await Promise.race([protocol.send('Browser.close'),new Promise((_,bad)=>timer=setTimeout(()=>bad(Error('Protocol close exceeded10s')),10000))]);}catch(error){report.errors.push(`Protocol cleanup: ${error}`);}finally{clearTimeout(timer);}}
     if(context&&!identity)try{report.browserExitVerification='unverified';await context.close();}catch(error){report.errors.push(`Fresh pre-identity framework cleanup: ${error}`);}
     if(identity)try{
@@ -91,18 +83,10 @@ if(process.argv.includes('--node-policy-check')) {
       }
       report.browserExited=!alive(identity.pid);assert(report.browserExited,'Browser exit unverified');if(context)await context.close();
     }catch(error){report.errors.push(`Browser cleanup: ${error}`);}
-    }
     try{if(server?.listening){server.closeAllConnections();await new Promise((ok,bad)=>server.close(error=>error?bad(error):ok()));}}catch(error){report.errors.push(`HTTP cleanup: ${error}`);}
     if(report.ruleCleanupRegistered){
       await cleanupWindowsFirewallRules(report,report.ruleCleanupRegistered,{observe:readRules,remove:name=>ps(`Import-Module NetSecurity -ErrorAction Stop; $name=ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd()); try { Remove-NetFirewallRule -Name $name -PolicyStore PersistentStore -ErrorAction Stop; [pscustomobject]@{name=$name;removed=$true} | ConvertTo-Json -Compress } catch { [pscustomobject]@{name=$name;removed=$false;errorId=$_.FullyQualifiedErrorId;category=$_.CategoryInfo.Category.ToString();detail=($_ | Out-String)} | ConvertTo-Json -Compress }`,name)});
       try{report.finalFirewallProfiles=ps(`Import-Module NetSecurity -ErrorAction Stop; @(${profileQuery}) | ConvertTo-Json -Depth 4 -Compress`);assert.deepEqual(report.finalFirewallProfiles,report.initialFirewall.profiles,'Global firewall profile policy must remain unchanged');}catch(error){report.errors.push(`Global profile observation: ${error}`);}
-    }
-    if(ownedEdge&&report.ownedEdgeImage){
-      const image=report.ownedEdgeImage;
-      for(const [key,path] of [['sourceAfterRun',image.sourceDirectory],['copyAfterRun',image.copyDirectory]])try{image[key]=await tree(path,['']);}catch(error){report.errors.push(`${key} inventory: ${error}`);}
-      for(const [key,path] of [['sourceMetadataAfterRun',image.sourceImage.executable],['copyMetadataAfterRun',report.expectedBrowserExecutable]])try{image[key]=await edgeImageAt(path);}catch(error){report.errors.push(`${key} identity: ${error}`);}
-      if(image.copyAfterRun){image.afterRunDifference=ownedEdgeImageDifference(image.original,image.copyAfterRun);image.wholeApplicationDirUnchanged=image.original.sha256===image.copyAfterRun.sha256&&Object.values(image.afterRunDifference).every(entries=>entries.length===0);}
-      try{const integrity=requireOwnedEdgeAfterRun(image);image.consumedInstallerMetrics=integrity.consumedInstallerMetrics;assert.deepEqual(image.sourceMetadataAfterRun,image.sourceImage,'Installed Edge source metadata changed');requireOwnedEdgeIdentity(image.sourceImage,image.copyMetadataAfterRun);assert.deepEqual(image.copyMetadataAfterRun,image.copyMetadataBeforeRun,'Owned Edge image metadata changed');image.immutableRuntimeVerified=true;}catch(error){report.errors.push(`Final Edge integrity: ${error}`);}
     }
     if(report.errors.length){report.status='failed';process.exitCode=1;}await persist();console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
   }

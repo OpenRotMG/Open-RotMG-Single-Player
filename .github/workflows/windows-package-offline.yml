@@ -1,0 +1,52 @@
+name: Windows program-scoped packaged application offline journey
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  packaged-offline:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      OPENROTMG_TEST_BROWSER_MODE: ci-owned-edge
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - name: Build exact paired native server and prepare verified client
+        run: node scripts/ci-inputs.mjs
+      - name: Package native runtime with unchanged unit gates
+        run: npm test && npm run package
+      - name: Run the complete packaged journey under owned executable-scoped OS rules
+        run: node scripts/package-test.mjs --windows-offline
+      - name: Retain actual game, network, image, ownership and cleanup receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase1-windows-program-offline
+          include-hidden-files: true
+          path: |
+            .qa/package-tests/run-*/*.json
+            .qa/package-tests/run-*/*.png
+            .qa/package-tests/run-*/*.xml
+            .qa/package-tests/run-*/*.log
+            .qa/package-tests/run-*/*.jsonl
+            .qa/package-tests/run-*/launcher-profile/*.json
+            .qa/package-tests/run-*/launcher-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/initialization-profile/*.json
+            .qa/package-tests/run-*/initialization-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/timeout-profile/*.json
+            .qa/package-tests/run-*/timeout-profile/diagnostics/*.jsonl
+            .qa/package-tests/run-*/startup-exit-close/*.json
+            .qa/package-tests/run-*/startup-exit-close/diagnostics/*.jsonl
+            .qa/package-tests/run-*/delayed-marker/*.json
+            .qa/package-tests/run-*/delayed-marker/diagnostics/*.jsonl
+            .qa/package-tests/run-*/unwritable-marker/*.json
+            .qa/package-tests/run-*/unwritable-marker/diagnostics/*.jsonl
+            .qa/ci-inputs/server-artifact.json
+            runtime/build-identity.json
+          if-no-files-found: error

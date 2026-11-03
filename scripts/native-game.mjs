@@ -6,12 +6,12 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
-import {openNativeEdge} from './native-edge.mjs';
+import {openNativeEdge,openNativeOwnedEdge} from './native-edge.mjs';
 
 const credentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
-export async function nativeGame({out,origin,env,check,report}) {
+export async function nativeGame({out,origin,env,check,report,ownedEdge}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
-  assert(['vps-managed','ci-playwright','ci-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright or ci-edge explicitly');
+  assert(['vps-managed','ci-playwright','ci-edge','ci-owned-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright, ci-edge or ci-owned-edge explicitly');assert((mode==='ci-owned-edge')===!!ownedEdge,'ci-owned-edge requires only the prepared owned policy image');
   if(mode!=='vps-managed')assert(process.env.GITHUB_ACTIONS==='true','CI browser modes are restricted to GitHub Actions owned runners');
   else {
     assert(process.env.PI_BROWSER_TOOLS, 'PI_BROWSER_TOOLS must select the managed browser helper directory');
@@ -43,8 +43,8 @@ export async function nativeGame({out,origin,env,check,report}) {
       (report.browsers??=[]).push(receipt);
       browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
       context=browser.contexts()[0];page=context.pages()[0];assert(page,'Managed browser must create its initial owned page');
-    } else if(mode==='ci-edge') {
-      ({browser,context,page,close:edgeClose}=await openNativeEdge({owner,profile,env,report}));
+    } else if(mode==='ci-edge'||mode==='ci-owned-edge') {
+      const options={owner,profile,env,report};({browser,context,page,close:edgeClose}=mode==='ci-owned-edge'?await openNativeOwnedEdge(options,ownedEdge):await openNativeEdge(options));
       check(`${name}: actual CI Edge argv has no sandbox bypass`,!/--no-sandbox|--disable-setuid-sandbox/.test(report.browsers.at(-1).argv));
     } else {
       const args=['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1280,960',...(process.platform==='linux'?['--ozone-platform=x11']:[]),...JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS ?? '[]')];
@@ -59,7 +59,7 @@ export async function nativeGame({out,origin,env,check,report}) {
       (report.browsers??=[]).push({owner,pid,profile,argv});
     }
     report.gameBrowserVersion=browser.version();
-    await page.route('**/*',route=>{
+    if(mode!=='ci-owned-edge')await page.route('**/*',route=>{
       const url=new URL(route.request().url());
       if(url.origin===origin)return route.continue();
       (report.blockedBrowserRequests??=[]).push(url.origin);return route.abort('blockedbyclient');
@@ -73,7 +73,7 @@ export async function nativeGame({out,origin,env,check,report}) {
         const cdp=await browser.newBrowserCDPSession();await cdp.send('Browser.close');await browser.close();
         const deadline=Date.now()+10000;while(chrome.exitCode===null&&Date.now()<deadline)await delay(100);
         assert(chrome.exitCode===0,`Browser cleanup did not exit cleanly: ${chrome.exitCode}`);
-      }else if(mode==='ci-edge')await edgeClose();
+      }else if(mode==='ci-edge'||mode==='ci-owned-edge')await edgeClose();
       else await context.close({timeout:10000});}catch(error){failures.push(error);}
       try{await writeFile(join(out,`${name}-browser.log`),errors+'\n'+JSON.stringify(consoleLog,null,2));}catch(error){failures.push(error);}
       if(failures.length)throw new AggregateError(failures,failures.map(error=>String(error.stack??error)).join('\n'));

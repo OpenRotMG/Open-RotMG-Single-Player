@@ -82,11 +82,11 @@ test(`package-test focused branch protects installation before first focused lau
   for(const call of ['await start();','await rejectStateContender(','await stop();','shutdown persistence complete','await launcher.close();'])assert(focused.includes(call),call);
   assert(!/nativeGame|backup-fixture|\.mutate\(|\.verify\(/.test(focused));
   assert.match(code,/else \{\r?\n    const view = await start\(\);[\s\S]*const game = await nativeGame/);
-  assert.match(code,/await failureCloseTests\(\{out,native,env:consumerEnv,check,report\}\)/);
+  assert.match(code,/await failureCloseTests\(\{out,native,env:consumerEnv,check,report,observeLauncher,onReady:observeServer\}\)/);
   assert.match(code,/chromiumSandbox: true, env:consumerEnv/);
   assert.match(code,/packagedChildReady[\s\S]*'packaged child readiness', 650000/);
   assert.match(code,/health\.process === serverPid/);
-  assert.match(code,/if\(failureTestsOnly&&process.platform==='win32'\) \{[\s\S]*assertWindowsPackagedBuild\(binding\)/);
+  assert.match(code,/const bindWindowsBuild=async\(\)=>\{[\s\S]*assertWindowsPackagedBuild\(binding\)/);assert.match(shared,/if\(failureTestsOnly&&process.platform==='win32'\) \{\s*report\.windowsFocusedBinding=await bindWindowsBuild\(\)/);
   assert(code.indexOf('assertWindowsPackagedBuild(binding)')<code.indexOf('    page=await launch();'));
   assert.match(code,/windowsProcessIdentity\(serverPid\)[\s\S]*assertWindowsPackagedProcess\(identity,\{pid:serverPid,binary,requestedAt,observedAt,health,launcherHead:report.launcherSource.head\}\)/);
   assert.match(focused,/assert\.deepEqual\(identity,readyIdentity/);

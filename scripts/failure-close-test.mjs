@@ -6,16 +6,18 @@ import {setTimeout as delay} from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import {packagedChildReady} from './package-readiness.mjs';
 
-export async function failureCloseTests({out,native,env,check,report}) {
+export async function failureCloseTests({out,native,env,check,report,observeLauncher,onReady}) {
   const args=profile=>[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])];
   const launch=async profile=>{
-    const app=await electron.launch({executablePath:native,args:args(profile),chromiumSandbox:true,env,timeout:30000});
+    const requestedAt=Date.now();const app=await electron.launch({executablePath:native,args:args(profile),chromiumSandbox:true,env,timeout:30000});
+    try{
     const page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);
     await app.evaluate(({dialog})=>{
       globalThis.qaDialogs=[];
       dialog.showErrorBox=(title,body)=>globalThis.qaDialogs.push({title,body});
     });
-    return {app,page,child:app.process(),pid:await app.evaluate(()=>process.pid)};
+    const pid=await app.evaluate(()=>process.pid);if(observeLauncher)await observeLauncher({pid,requestedAt,app});return {app,page,child:app.process(),pid};
+    }catch(error){try{await app.close();}catch(cleanup){throw new AggregateError([error,cleanup],`${error}; Failed launch cleanup: ${cleanup}`);}throw error;}
   };
   for(const kind of ['startup-exit-close','delayed-marker','unwritable-marker']) {
     const profile=join(out,kind);let current,server;
@@ -54,9 +56,9 @@ export async function failureCloseTests({out,native,env,check,report}) {
           return write(path,...args);
         };
       });
-      await page.getByRole('button',{name:'Start Server',exact:true}).click();
+      const requestedAt=Date.now();await page.getByRole('button',{name:'Start Server',exact:true}).click();
       await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'failure-case child readiness',650000);
-      server=(await page.evaluate(()=>window.launcher.status())).pid;
+      const ready=await page.evaluate(()=>window.launcher.status());server=ready.pid;if(onReady)await onReady({pid:server,requestedAt,health:await (await fetch(ready.origin+'/health')).json()});
       if(kind==='unwritable-marker')await mkdir(join(profile,'shutdown-failed.json'));
       process.kill(server,'SIGKILL');
       await wait(async()=>{const view=await page.evaluate(()=>window.launcher.status());return view.status==='failed'&&!view.pid;},'failed child exits',10000);

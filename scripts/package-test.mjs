@@ -17,6 +17,7 @@ import {consumerEnvironment,protectInstallation,assertInstallationProtected,susp
 import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.mjs';
 import {packagedChildReady} from './package-readiness.mjs';
 import {assertWindowsPackagedBuild,assertWindowsPackagedProcess} from './windows-path-validation.mjs';
+import {createWindowsOwnedOffline,windowsPackagedOfflineMode,assertOwnedWindowsProcess} from './windows-owned-offline.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const child = spawn('dbus-run-session', [process.execPath, ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, OPENROTMG_PRIVATE_TEST: '1' } });
@@ -24,13 +25,15 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
 } else {
   await mkdir('.qa/package-tests', { recursive: true });
   const out = await mkdtemp(resolve('.qa/package-tests/run-'));
-  const failureTestsOnly=process.argv.includes('--failure-tests-only');
-  const report = { status: 'running', purpose: failureTestsOnly ? 'focused packaged startup/health/stop/failure ownership; NOT game, graphics, offline or all-platform acceptance' : 'full packaged game journey (native platform only)', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
+  const failureTestsOnly=process.argv.includes('--failure-tests-only'),windowsOffline=process.argv.includes('--windows-offline');
+  const report = { status: 'running', purpose: windowsOffline ? 'PROGRAM-SCOPED whole APPLICATION runtime offline packaged journey; NOT whole VM, DNS, OS-default browser, fully tool-uninstalled or all-platform acceptance' : failureTestsOnly ? 'focused packaged startup/health/stop/failure ownership; NOT game, graphics, offline or all-platform acceptance' : 'full packaged game journey (native platform only)', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
   const check = (name, value) => { assert(value, name); report.assertions.push(name); console.log(`PASS ${name}`); };
-  let display, launcher, launcherPid, browserCleanup, serverPid, lease, restoreInstallation;
+  let display, launcher, launcherPid, browserCleanup, serverPid, lease, restoreInstallation, offlinePolicy;
   const env = { ...process.env, XDG_CONFIG_HOME: join(out, 'config'), XDG_CACHE_HOME: join(out, 'cache') };
   delete env.WAYLAND_DISPLAY;
+  const persist=async()=>{try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}catch(error){report.status='failed';report.errors.push(`Receipt persistence: ${error.stack??error}`);process.exitCode=1;console.error(`Package evidence NOT PERSISTED:\n${JSON.stringify(report,null,2)}`);throw error;}};
   try {
+    windowsPackagedOfflineMode(process.argv.slice(2),process.env.OPENROTMG_TEST_BROWSER_MODE,process.platform,process.arch,process.env.GITHUB_ACTIONS,JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]'));
     const tmpRoot=process.env.OPENROTMG_TEST_TMP_ROOT;
     assert(!tmpRoot||isAbsolute(tmpRoot),'OPENROTMG_TEST_TMP_ROOT must be an absolute owned on-disk directory');
     if(tmpRoot)await mkdir(tmpRoot,{recursive:true});
@@ -61,10 +64,12 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     const consumerEnv=await consumerEnvironment(env,out);
     report.consumerPath=consumerEnv.PATH;
     let profile = join(out,'launcher-profile');
+    const observeLauncher=windowsOffline?async({pid,requestedAt,app})=>{const identity=windowsProcessIdentity(pid);assertOwnedWindowsProcess(identity,{program:native,pid,requestedAt,observedAt:Date.now()});assert(!identity.argv.includes('--no-sandbox'),'Every owned Electron launch must retain sandbox');assert.equal(await app.evaluate(()=>process.env.PATH),consumerEnv.PATH);assert(!(await app.evaluate(()=>process.env.NODE_OPTIONS)));assert.equal(await app.evaluate(()=>process.resourcesPath),resources);(report.windowsOffline.launchers??=[]).push(identity);}:undefined;
+    const observeServer=windowsOffline?async({pid,health,requestedAt})=>{const identity=windowsProcessIdentity(pid),observedAt=Date.now();assertWindowsPackagedProcess(identity,{pid,binary,requestedAt,observedAt,health,launcherHead:report.launcherSource.head});(report.windowsOffline.servers??=[]).push({...identity,requestedAt,observedAt,health});}:undefined;
     const launch = async () => {
-      launcher = await electron.launch({ executablePath: native, args: [`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])], chromiumSandbox: true, env:consumerEnv, timeout: 30000 });
+      const requestedAt=Date.now();launcher = await electron.launch({ executablePath: native, args: [`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])], chromiumSandbox: true, env:consumerEnv, timeout: 30000 });
       const page = await launcher.firstWindow(); await page.waitForFunction(() => !!window.launcher);
-      launcherPid=await launcher.evaluate(()=>process.pid);
+      launcherPid=await launcher.evaluate(()=>process.pid);if(observeLauncher)await observeLauncher({pid:launcherPid,requestedAt,app:launcher});
       const argvText = await processArgv(launcherPid);
       (report.launches??=[]).push({pid:launcherPid,controllerPid:launcher.process().pid,argv:argvText,versions:await launcher.evaluate(()=>process.versions)});
       check('actual packaged Electron argv has no --no-sandbox', !argvText.includes('--no-sandbox'));
@@ -78,6 +83,13 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     const binary = join(resources, 'runtime', process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg');
     if(process.platform==='win32')report.qaPowerShell=windowsPowerShellExecutable();
     report.serverLinkage=runtimeLinkage(binary);
+    const bindWindowsBuild=async()=>{
+      assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Explicit native build inputs required for Windows binding');const input=JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8'));assert(isAbsolute(input.serverBuildReceipt),'Absolute verified native receipt required');const receiptBytes=await readFile(input.serverBuildReceipt),binding={pins:JSON.parse(await readFile('source-pins.json','utf8')),build:report.build,generatedBuild:JSON.parse(await readFile('runtime/build-identity.json','utf8')),input,receiptBytes,binarySha256:sha256(await readFile(binary))};assertWindowsPackagedBuild(binding);return {binary,binarySha256:binding.binarySha256,buildReceiptSha256:sha256(receiptBytes),buildReceipt:JSON.parse(receiptBytes)};
+    };
+    if(windowsOffline){
+      assert.equal(report.launcherSource.dirty,false,'Offline journey requires exact clean reviewed launcher source');report.windowsOfflineBinding=await bindWindowsBuild();report.windowsOffline={};offlinePolicy=createWindowsOwnedOffline({report:report.windowsOffline,out,tmp,installed:{directory:packageDir,launcher:native,server:binary},env:consumerEnv});await offlinePolicy.prepare();assert.equal(report.windowsOffline.programs.find(program=>program.program===native).sha256,report.sha256);assert.equal(report.windowsOffline.programs.find(program=>program.program===binary).sha256,report.windowsOfflineBinding.binarySha256);
+      check('program-scoped offline rules, owned browser policy canaries and exact native build binding precede EVERY consumer launch',true);
+    }
     let page,userData;
     if(!failureTestsOnly) {
     page = await launch();
@@ -107,13 +119,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     restoreInstallation=await protectInstallation(packageDir);
     await assertInstallationProtected(packageDir,join(resources,'runtime'));
     if(failureTestsOnly&&process.platform==='win32') {
-      assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Explicit native build inputs required for Windows-focused binding');
-      const input=JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8'));
-      assert(isAbsolute(input.serverBuildReceipt),'Absolute verified native receipt required');
-      const receiptBytes=await readFile(input.serverBuildReceipt);
-      const binding={pins:JSON.parse(await readFile('source-pins.json','utf8')),build:report.build,generatedBuild:JSON.parse(await readFile('runtime/build-identity.json','utf8')),input,receiptBytes,binarySha256:sha256(await readFile(binary))};
-      assertWindowsPackagedBuild(binding);
-      report.windowsFocusedBinding={binary,binarySha256:binding.binarySha256,buildReceiptSha256:sha256(receiptBytes),buildReceipt:JSON.parse(receiptBytes)};
+      report.windowsFocusedBinding=await bindWindowsBuild();
       check('Windows-focused protected installed binary and package generation match verified native source/build receipt',true);
     }
     if(launcher){await launcher.close();launcher=undefined;}
@@ -148,6 +154,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
         report.windowsFocusedBinding.process={...identity,requestedAt,observedAt};
         check('Windows-focused actual health child image and process generation belong to protected installed binary',true);
       }
+      if(observeServer)await observeServer({pid:serverPid,health,requestedAt});
       check('consumer bots/LLM disabled', health.bots === 0 && !health.bot_dialogue.enabled);
       const childArgv=await processArgv(serverPid);
       check('compiled child has explicit desktop/config and no consumer test privilege',childArgv.includes('--desktop')&&childArgv.includes('--config')&&!/--dev-control|--test-state/.test(childArgv));
@@ -184,11 +191,11 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     } else {
     const view = await start();
     await rejectStateContender({binary,userData,out,env:consumerEnv,check,report});
-    const second=spawn(native,[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])],{env,stdio:'ignore'});
+    const second=spawn(native,[`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])],{env:windowsOffline?consumerEnv:env,stdio:'ignore'});
     await wait(()=>second.exitCode!==null||second.signalCode!==null,'second launcher refuses same userData owner',10000);
     check('single-instance lock rejects a second packaged launcher without stopping child',second.exitCode===0&&alive(serverPid));
     const shot = join(out, 'launcher-ready.png'); await page.screenshot({path:shot}); report.screenshots.push(shot);
-    const game = await nativeGame({ out, origin:view.origin, env, check, report });
+    const game = await nativeGame({ out, origin:view.origin, env:windowsOffline?consumerEnv:env, check, report,...(windowsOffline?{ownedEdge:offlinePolicy.edgeImage}:{}) });
     browserCleanup = game.close;
     await game.mutate();
     await stop();
@@ -219,7 +226,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     check('actual server crash gates consumer restart without a false save-success claim',await page.getByRole('button',{name:'Start Server',exact:true}).isDisabled());
     const crashShot=join(out,'server-crash-gated.png');await page.screenshot({path:crashShot});report.screenshots.push(crashShot);
     await game.close();browserCleanup=undefined;
-    await crashReleasedRestart({binary,userData,out,env:consumerEnv,origin:view.origin,game,check,report});
+    await crashReleasedRestart({binary,userData,out,env:consumerEnv,origin:view.origin,game,check,report,onReady:observeServer});
     await launcher.evaluate(({dialog})=>{dialog.showErrorBox=()=>{};});
     const failedPid=launcherPid;await launcher.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());
     await wait(()=>!alive(failedPid),'failed launcher closes after durable gate',10000);launcher=undefined;
@@ -245,19 +252,19 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       process.kill(launcherPid,'SIGKILL');await wait(()=>!alive(launcherPid),'failed launcher test teardown',10000);launcher=undefined;
     }
     }
-    await failureCloseTests({out,native,env:consumerEnv,check,report});
+    await failureCloseTests({out,native,env:consumerEnv,check,report,observeLauncher,onReady:observeServer});
     }
     report.status = 'passed';
   } catch (error) {
     report.status = 'failed'; report.errors.push(String(error.stack ?? error)); process.exitCode = 1;
     report.cleanupPending=true;console.error(report.errors.at(-1));
-    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+    await persist();
     const page=launcher?.windows()[0];
     if(page&&!page.isClosed())try{
       report.failureView=await page.evaluate(()=>window.launcher.status());
       const path=join(out,'integration-failure.png');await page.screenshot({path});report.screenshots.push(path);
     }catch(cause){report.failureEvidenceError=String(cause);}
-    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+    await persist();
   }
   finally {
     if (browserCleanup) try { await browserCleanup(); } catch(error) { report.errors.push(`browser cleanup: ${error}`); process.exitCode = 1; }
@@ -267,11 +274,12 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       display.kill('SIGTERM');
       try{await wait(()=>display.exitCode!==null||display.signalCode!==null,'private Xvfb cleanup',5000);}catch(error){report.errors.push(String(error));process.exitCode=1;}
     }
+    if(offlinePolicy)try{await offlinePolicy.finish();for(const error of report.windowsOffline.errors)report.errors.push(`Windows offline: ${error}`);}catch(error){report.errors.push(`Offline finalization: ${error.stack??error}`);report.windowsOffline.cleanupPending=true;process.exitCode=1;}
     if(restoreInstallation)try{await restoreInstallation();}catch(error){report.errors.push(`Install ACL cleanup: ${error}`);process.exitCode=1;}
     if(lease)try{await lease.release();}catch(error){report.errors.push(String(error));process.exitCode=1;}
-    if(report.errors.length)report.status='failed';
-    report.cleanupPending=false;
-    await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
+    if(report.errors.length){report.status='failed';process.exitCode=1;}
+    report.cleanupPending=report.windowsOffline?.cleanupPending===true;
+    await persist();
     console.log(`${report.status}: ${join(out,'result.json')}`);
     if (report.errors.length) console.error(report.errors.join('\n'));
   }

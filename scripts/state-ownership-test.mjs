@@ -19,22 +19,22 @@ export async function rejectStateContender({binary,userData,out,env,check,report
   check('rejected state owner leaves exact DB/WAL bytes unchanged',true);
   report.stateContention={...result,before,after};
 }
-export async function crashReleasedRestart({binary,userData,out,env,origin,game,check,report}) {
+export async function crashReleasedRestart({binary,userData,out,env,origin,game,check,report,onReady}) {
   const lock=join(userData,'state/state.lock'),before=await stat(lock);
   const logPath=join(out,'server-crash-restart.jsonl'),log=await open(logPath,'wx');
-  const child=spawn(binary,['--desktop','--config',join(userData,'desktop-config.json')],{env,stdio:['pipe',log.fd,log.fd]});
+  const requestedAt=Date.now();const child=spawn(binary,['--desktop','--config',join(userData,'desktop-config.json')],{env,stdio:['pipe',log.fd,log.fd]});
   let spawnError;child.once('error',error=>spawnError=error);
   const exited=new Promise(ok=>child.once('close',(code,signal)=>ok({code,signal})));
   try {
-    const deadline=Date.now()+650000;let ready=false;
+    const deadline=Date.now()+650000;let ready=false,readyHealth;
     while(!ready&&Date.now()<deadline){
       if(spawnError)throw spawnError;
       assert(child.exitCode===null&&child.signalCode===null,'Restarted owner exited before readiness');
-      try{const health=await (await fetch(origin+'/health',{signal:AbortSignal.timeout(1500)})).json();ready=health.process===child.pid;}
+      try{const health=await (await fetch(origin+'/health',{signal:AbortSignal.timeout(1500)})).json();ready=health.process===child.pid;if(ready)readyHealth=health;}
       catch(error){if(!['TypeError','TimeoutError'].includes(error.name))throw error;}
       if(!ready)await delay(200);
     }
-    assert(ready,'Crashed server OS lock must release for independent restart');
+    assert(ready,'Crashed server OS lock must release for independent restart');if(onReady)await onReady({pid:child.pid,health:readyHealth,requestedAt});
     const after=await stat(lock);
     check('actual server crash releases OS ownership without deleting or replacing state.lock',before.ino===after.ino&&before.dev===after.dev);
     await game.verify();
