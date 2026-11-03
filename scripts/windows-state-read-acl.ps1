@@ -28,7 +28,7 @@ try {
     $acl.AddAccessRule($rule);Set-Acl -LiteralPath $request.root -AclObject $acl
   } elseif($request.action -eq 'restore') {
     foreach($entry in $request.before) {
-      try {$item=OwnedItem $entry.path;$acl=Get-Acl -LiteralPath $entry.path;$acl.SetSecurityDescriptorSddlForm($entry.sddl);Set-Acl -LiteralPath $entry.path -AclObject $acl}
+      try {$item=OwnedItem $entry.path;$acl=Get-Acl -LiteralPath $entry.path;$acl.SetSecurityDescriptorSddlForm($entry.sddl,[Security.AccessControl.AccessControlSections]::Access);Set-Acl -LiteralPath $entry.path -AclObject $acl}
       catch {$result.errors+=@{stage='restore';path=$entry.path;message=$_.Exception.Message;hresult=$_.Exception.HResult}}
     }
   } else {throw 'Unknown state ACL action'}
