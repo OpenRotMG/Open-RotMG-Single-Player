@@ -1,5 +1,6 @@
 $ErrorActionPreference='Stop'
 Import-Module Microsoft.PowerShell.Security -ErrorAction Stop
+. (Join-Path $PSScriptRoot 'windows-state-read-generation.ps1')
 $request=ConvertFrom-Json -InputObject ([Console]::In.ReadToEnd())
 $result=@{engine=$PSVersionTable.PSVersion.ToString();securityModule=(Get-Module Microsoft.PowerShell.Security).Version.ToString();errors=@();entries=@()}
 function OwnedItem($path) {
@@ -15,8 +16,11 @@ function Snapshot($path) {
 try {
   if($request.action -eq 'capture') {
     $result.sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $consumer=Get-CimInstance Win32_Process -Filter "ProcessId=$($request.consumer.pid)"
-    if(!$consumer -or $consumer.CreationDate.ToUniversalTime().ToString('o') -cne $request.consumer.started) {throw 'Consumer PID generation changed before ACL capture'}
+    $result.generationProof=@{match=$false;requested=@{pid=$request.consumer.pid;birth=(New-StateReadBirthProof $request.consumer.started)};observed=@{queryAttempted=$false}}
+    $pidValue=Get-StateReadPid $request.consumer.pid $result.generationProof.requested
+    $result.generationProof.observed.queryAttempted=$true
+    $consumer=Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue"
+    Assert-StateReadGeneration $request.consumer $consumer $result.generationProof
     $owner=Invoke-CimMethod -InputObject $consumer -MethodName GetOwnerSid
     if($owner.ReturnValue -ne 0 -or $owner.Sid -ne $result.sid) {throw 'ACL caller and actual consumer must have the same SID'}
     $result.consumerSid=$owner.Sid

@@ -20,14 +20,20 @@ test('windows-state-read-denied validates only exact mask1 and complete inherita
 });
 test('windows-state-read-denied native ACL controller registers capture before mutation and preserves failed apply/restore envelopes',async()=>{
   const calls=[],record={},consumer={pid:42,started:'2026-11-03T06:00:00.0000000Z'};
-  const run=(file,args,options)=>{const request=JSON.parse(options.input);calls.push(request.action);assert.equal(request.root,root);assert.deepEqual(request.paths,paths);return JSON.stringify(request.action==='capture'?{sid,consumerSid:sid,entries:before,errors:[]}:request.action==='deny'?{entries:denied,errors:[{stage:'readback',path:paths[1],message:'actual inspection error'}]}:{entries:before,errors:[]});};
+  const run=(file,args,options)=>{const request=JSON.parse(options.input);calls.push(request.action);assert.equal(request.root,root);assert.deepEqual(request.paths,paths);return JSON.stringify(request.action==='capture'?{sid,consumerSid:sid,generationProof:{match:true},entries:before,errors:[]}:request.action==='deny'?{entries:denied,errors:[{stage:'readback',path:paths[1],message:'actual inspection error'}]}:{entries:before,errors:[]});};
   const acl=await stateReadAcl(root,paths,consumer,record,run,'/native/pwsh.exe');assert.deepEqual(calls,['capture']);assert.throws(()=>acl.apply(),/actual inspection error/);assert.equal(record.aclApplied,true);assert.equal(record.deny.errors[0].path,paths[1]);acl.restore();assert.equal(record.aclRestored,true);assert.deepEqual(calls,['capture','deny','restore']);
-  const failed={},badRestore=await stateReadAcl(root,paths,consumer,failed,(file,args,options)=>{const action=JSON.parse(options.input).action;return JSON.stringify(action==='capture'?{sid,consumerSid:sid,entries:before,errors:[]}:action==='deny'?{entries:denied,errors:[]}:{entries:before,errors:[{stage:'restore',path:paths[1],message:'actual ACL IO failure'}]});},'/native/pwsh.exe');
+  const failed={},badRestore=await stateReadAcl(root,paths,consumer,failed,(file,args,options)=>{const action=JSON.parse(options.input).action;return JSON.stringify(action==='capture'?{sid,consumerSid:sid,generationProof:{match:true},entries:before,errors:[]}:action==='deny'?{entries:denied,errors:[]}:{entries:before,errors:[{stage:'restore',path:paths[1],message:'actual ACL IO failure'}]});},'/native/pwsh.exe');
   badRestore.apply();assert.throws(()=>badRestore.restore(),/actual ACL IO failure/);assert.equal(failed.aclApplied,true);assert.notEqual(failed.aclRestored,true);assert.equal(failed.restore.errors[0].path,paths[1]);
+});
+test('windows-state-read-denied capture generation faults retain partial proof and cannot reach mutation',async()=>{
+  for(const envelope of [{errors:[{stage:'capture',message:'actual generation mismatch'}],generationProof:{match:false,requested:{pid:42},observed:{pid:43}}},{errors:[],generationProof:{match:false}},{errors:[]}]){
+    const record={},calls=[];await assert.rejects(stateReadAcl(root,paths,{pid:42},record,(file,args,options)=>{calls.push(JSON.parse(options.input).action);assert(args.includes('-File'));return JSON.stringify({sid,consumerSid:sid,entries:before,...envelope});},'/native/pwsh.exe'));
+    assert.deepEqual(calls,['capture']);assert.deepEqual(record.capture.generationProof,envelope.generationProof);assert.notEqual(record.aclApplied,true);
+  }
 });
 test('windows-state-read-denied native transport failure retains partial output/null status and still permits owned restore',async()=>{
   const record={},error=Object.assign(Error('native denied transport'),{code:'EPERM',status:null,signal:'SIGTERM',stdout:'partial ACL evidence',stderr:'native diagnostic'});
-  const acl=await stateReadAcl(root,paths,{pid:42},record,(file,args,options)=>{const action=JSON.parse(options.input).action;if(action==='deny')throw error;return JSON.stringify(action==='capture'?{sid,consumerSid:sid,entries:before,errors:[]}:{entries:before,errors:[]});},'/native/pwsh.exe');
+  const acl=await stateReadAcl(root,paths,{pid:42},record,(file,args,options)=>{const action=JSON.parse(options.input).action;if(action==='deny')throw error;return JSON.stringify(action==='capture'?{sid,consumerSid:sid,generationProof:{match:true},entries:before,errors:[]}:{entries:before,errors:[]});},'/native/pwsh.exe');
   assert.throws(()=>acl.apply(),cause=>cause===error);assert.equal(record.nativeFailures[0].stdout,'partial ACL evidence');assert.equal(record.nativeFailures[0].status,null);assert.equal(record.nativeFailures[0].signal,'SIGTERM');acl.restore();assert.equal(record.aclRestored,true);
 });
 test('windows-state-read-denied cleanup attempts drain, ACL, probes, snapshot, Close and both image checks despite primary/liveness/restore/IO errors',async()=>{

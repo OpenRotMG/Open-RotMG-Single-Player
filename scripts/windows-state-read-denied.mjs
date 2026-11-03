@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFile,writeFile,readdir,lstat,realpath,open} from 'node:fs/promises';
 import {join,resolve,win32} from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-boundaries.mjs';
 import {assertOwnedWindowsProcess} from './windows-owned-offline.mjs';
 import {sha256} from './assets.mjs';
@@ -38,14 +39,14 @@ async function stateSnapshot(root) {
   return {files,dbWal:{database:files['game.db'],wal:files['game.db-wal']??{exists:false}},lock:{ino:files['state.lock'].ino,dev:files['state.lock'].dev}};
 }
 export async function stateReadAcl(root,paths,consumer,record,run=execFileSync,engine=windowsPowerShellExecutable()) {
-  const script=await readFile(new URL('./windows-state-read-acl.ps1',import.meta.url),'utf8');
+  const script=fileURLToPath(new URL('./windows-state-read-acl.ps1',import.meta.url));
   const request=(action,fields={})=>{
     let output,result;
-    try{output=run(engine,['-NoProfile','-NonInteractive','-Command',script],{input:JSON.stringify({action,root,paths,...fields}),encoding:'utf8',timeout:30000});result=JSON.parse(output);}
+    try{output=run(engine,['-NoProfile','-NonInteractive','-File',script],{input:JSON.stringify({action,root,paths,...fields}),encoding:'utf8',timeout:30000});result=JSON.parse(output);}
     catch(error){(record.nativeFailures??=[]).push({action,code:error.code??null,status:error.status??null,signal:error.signal??null,stdout:String(output??error.stdout??''),stderr:String(error.stderr??''),message:error.message});throw error;}
     record[action]=result;assert(result&&Array.isArray(result.errors)&&Array.isArray(result.entries),'Complete native ACL envelope required');assert.equal(result.errors.length,0,`Native ACL ${action}: ${JSON.stringify(result.errors)}`);return result;
   };
-  const before=request('capture',{consumer});assert.match(before.sid,/^S-\d+(?:-\d+)+$/);assert.equal(before.consumerSid,before.sid);assert.deepEqual(before.entries.map(entry=>entry.path),paths);
+  const before=request('capture',{consumer});assert.equal(before.generationProof?.match,true,'Exact native consumer generation proof required before ACL mutation');assert.match(before.sid,/^S-\d+(?:-\d+)+$/);assert.equal(before.consumerSid,before.sid);assert.deepEqual(before.entries.map(entry=>entry.path),paths);
   for(const entry of before.entries)assert(!entry.aces.some(ace=>ace.type==='Deny'&&ace.sid===before.sid),'Fresh state must not already have a deny for this SID');
   return {
     apply(){record.aclApplied=true;const result=request('deny',{sid:before.sid});requireReadDeny(before.entries,result.entries,before.sid);},
