@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {spawnSync,execFile} from 'node:child_process';
-import {mkdir,mkdtemp,copyFile,cp,readFile,writeFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,copyFile,cp,readFile,writeFile,lstat} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {connect} from 'node:net';
 import {join,dirname,basename} from 'node:path';
@@ -11,7 +11,8 @@ import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-bound
 import {tree} from './assets.mjs';
 import {installedEdgeImage,edgeImageAt} from './windows-edge-image.mjs';
 import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
-import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity,ownedEdgeImageDifference,requireOwnedEdgeAfterRun} from './windows-owned-edge.mjs';
+import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity,ownedEdgeImageDifference,requireOwnedEdgeAfterRun,classifyOwnedEdgeInstallerMetrics} from './windows-owned-edge.mjs';
+import {captureEdgeMetrics} from './windows-metrics-format.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
@@ -42,8 +43,11 @@ if(process.argv.includes('--node-policy-check')) {
     else report.chromiumImage={sourceDirectory,copyDirectory:chromeDirectory,source:await tree(sourceDirectory,[''])};
     await copyFile(process.execPath,node);await cp(sourceDirectory,chromeDirectory,{recursive:true,verbatimSymlinks:true});
     if(ownedEdge){
-      const image=report.ownedEdgeImage;image.sourceAfterCopy=await tree(sourceDirectory,['']);image.copyBeforeRun=await tree(chromeDirectory,['']);requireOwnedEdgeInventory(image.original,image.sourceAfterCopy,image.copyBeforeRun);
-      image.sourceMetadataBeforeRun=await edgeImageAt(sourceExecutable);assert.deepEqual(image.sourceMetadataBeforeRun,sourceEdge,'Installed Edge metadata changed during copy');image.copyMetadataBeforeRun=await edgeImageAt(chrome);requireOwnedEdgeIdentity(sourceEdge,image.copyMetadataBeforeRun);requireOwnedEdgeRulePrograms(plans.map(plan=>plan.program),node,sourceEdge,image.copyMetadataBeforeRun);image.verifiedBeforeRun=true;
+      const image=report.ownedEdgeImage;image.sourceMetadataBeforeRun=await edgeImageAt(sourceExecutable);assert.deepEqual(image.sourceMetadataBeforeRun,sourceEdge,'Installed Edge metadata changed during copy');image.copyMetadataBeforeRun=await edgeImageAt(chrome);requireOwnedEdgeIdentity(sourceEdge,image.copyMetadataBeforeRun);
+      image.metricsBeforeRun=[];await captureEdgeMetrics(sourceDirectory,image.metricsBeforeRun);image.metricsCopySizesBeforeRun={};
+      for(const file of image.metricsBeforeRun){const info=await lstat(join(chromeDirectory,file.relativePath));assert(info.isFile()&&!info.isSymbolicLink(),`Copied installer metrics must be regular: ${file.relativePath}`);image.metricsCopySizesBeforeRun[file.relativePath]=info.size;}
+      image.sourceAfterCopy=await tree(sourceDirectory,['']);image.copyBeforeRun=await tree(chromeDirectory,['']);requireOwnedEdgeInventory(image.original,image.sourceAfterCopy,image.copyBeforeRun);image.prevalidatedInstallerMetrics=classifyOwnedEdgeInstallerMetrics(image);
+      requireOwnedEdgeRulePrograms(plans.map(plan=>plan.program),node,sourceEdge,image.copyMetadataBeforeRun);image.verifiedBeforeRun=true;
     }else{report.chromiumImage.copy=await tree(chromeDirectory,['']);assert.deepEqual(report.chromiumImage.copy,report.chromiumImage.source,'Complete copied Chromium relative-path/hash inventory must match');report.chromiumImage.verified=true;}
     report.programs=[];for(const [source,copy] of [[process.execPath,node],[sourceExecutable,chrome]]){const sourceHash=hash(await readFile(source)),copyHash=hash(await readFile(copy));assert.equal(copyHash,sourceHash);report.programs.push({source,copy,sha256:copyHash});}
     report.initialFirewall=ps(`Import-Module NetSecurity -ErrorAction Stop; [pscustomobject]@{engine=$PSVersionTable.PSVersion.ToString();module=(Get-Module NetSecurity).Path;administrator=([System.Security.Principal.WindowsPrincipal]::new([System.Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator);service=(Get-Service MpsSvc).Status.ToString();profiles=@(${profileQuery});connections=@(Get-NetConnectionProfile | Select-Object Name,NetworkCategory,InterfaceIndex)} | ConvertTo-Json -Depth 6 -Compress`);
@@ -98,7 +102,7 @@ if(process.argv.includes('--node-policy-check')) {
       for(const [key,path] of [['sourceAfterRun',image.sourceDirectory],['copyAfterRun',image.copyDirectory]])try{image[key]=await tree(path,['']);}catch(error){report.errors.push(`${key} inventory: ${error}`);}
       for(const [key,path] of [['sourceMetadataAfterRun',image.sourceImage.executable],['copyMetadataAfterRun',report.expectedBrowserExecutable]])try{image[key]=await edgeImageAt(path);}catch(error){report.errors.push(`${key} identity: ${error}`);}
       if(image.copyAfterRun){image.afterRunDifference=ownedEdgeImageDifference(image.original,image.copyAfterRun);image.wholeApplicationDirUnchanged=image.original.sha256===image.copyAfterRun.sha256&&Object.values(image.afterRunDifference).every(entries=>entries.length===0);}
-      try{const integrity=requireOwnedEdgeAfterRun(image.original,image.sourceAfterRun,image.copyAfterRun);image.consumedInstallerMetrics=integrity.consumedInstallerMetrics;assert.deepEqual(image.sourceMetadataAfterRun,image.sourceImage,'Installed Edge source metadata changed');requireOwnedEdgeIdentity(image.sourceImage,image.copyMetadataAfterRun);assert.deepEqual(image.copyMetadataAfterRun,image.copyMetadataBeforeRun,'Owned Edge image metadata changed');image.immutableRuntimeVerified=true;}catch(error){report.errors.push(`Final Edge integrity: ${error}`);}
+      try{const integrity=requireOwnedEdgeAfterRun(image);image.consumedInstallerMetrics=integrity.consumedInstallerMetrics;assert.deepEqual(image.sourceMetadataAfterRun,image.sourceImage,'Installed Edge source metadata changed');requireOwnedEdgeIdentity(image.sourceImage,image.copyMetadataAfterRun);assert.deepEqual(image.copyMetadataAfterRun,image.copyMetadataBeforeRun,'Owned Edge image metadata changed');image.immutableRuntimeVerified=true;}catch(error){report.errors.push(`Final Edge integrity: ${error}`);}
     }
     if(report.errors.length){report.status='failed';process.exitCode=1;}await persist();console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
   }
