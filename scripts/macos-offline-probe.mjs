@@ -7,17 +7,21 @@ import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {processArgv} from './process-argv.mjs';
-import {macOfflinePolicy as policy} from './macos-offline-policy.mjs';
+import {macOfflinePolicy} from './macos-offline-policy.mjs';
+import {networkInterfaces} from 'node:os';
+import {macOffMachinePolicy,offMachineMode,macOwnIPv4Routes,requireMacLoopbackRoutes} from './macos-off-machine.mjs';
 import {closePrePidOfflineContext,persistMacOfflineEvidence,macOfflinePayloadCommands,macOfflineCanaryResult,verifyMacOfflineCanary} from './macos-offline-evidence.mjs';
 
 assert(process.platform==='darwin'&&process.arch==='arm64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native macOS ARM64 CI VM');
-const out=resolve('.qa/mac-offline-probe'),policyPath=join(out,'offline.sb');
-const report={purpose:'OS-confined Node/normal Chromium payload diagnostics, NOT full game/default-browser/whole-VM acceptance',observerOutsidePolicy:true,errors:[],policy,policyPath,policySha256:createHash('sha256').update(policy).digest('hex'),os:process.platform,arch:process.arch};
+const offMachine=offMachineMode(process.argv.slice(2)),policy=offMachine?macOffMachinePolicy:macOfflinePolicy;
+const out=resolve(offMachine?'.qa/mac-off-machine-probe':'.qa/mac-offline-probe'),policyPath=join(out,'offline.sb');
+const report={purpose:'OS-confined Node/normal Chromium payload diagnostics, NOT full game/default-browser/whole-VM acceptance',boundary:offMachine?'Off-machine TCP egress; host-local TCP exception includes assigned self addresses, NOT strict numeric127-only or LAN support':'Existing policy diagnostic',unmeasured:offMachine?['IPv6','DNS','whole VM','game','OS-default browser']:[],observerOutsidePolicy:true,errors:[],policy,policyPath,policySha256:createHash('sha256').update(policy).digest('hex'),os:process.platform,arch:process.arch};
 const server=createServer((_request,response)=>{response.setHeader('Content-Type','text/html');response.end('<title>Mac offline capability diagnostic</title><h1>Offline WebGL2 diagnostic - not game acceptance</h1><pre id="result"></pre><canvas width="256" height="256"></canvas>');});
 let context,protocol,pid,identity;
 try {
   await mkdir(out,{recursive:true});await writeFile(policyPath,policy);
   report.head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();report.system=execFileSync('sw_vers',[],{encoding:'utf8'});report.observer={pid:process.pid,argv:await processArgv(process.pid),version:process.version};
+  if(offMachine){report.ownIPv4Routes=macOwnIPv4Routes(networkInterfaces());requireMacLoopbackRoutes(report.ownIPv4Routes);}
   const tmp=await mkdtemp(join(process.env.RUNNER_TEMP,'mac-offline-'));Object.assign(process.env,{TMPDIR:tmp,TEMP:tmp,TMP:tmp});
   const profile=join(tmp,'browser'),commands=macOfflinePayloadCommands(policyPath,process.execPath,resolve('scripts/macos-offline-canary.mjs'),chromium.executablePath(),profile);
   const nodeCommand=commands.node;report.nodeCommand=nodeCommand;
