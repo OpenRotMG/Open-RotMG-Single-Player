@@ -18,6 +18,7 @@ import {rejectStateContender,crashReleasedRestart} from './state-ownership-test.
 import {packagedChildReady} from './package-readiness.mjs';
 import {assertWindowsPackagedBuild,assertWindowsPackagedProcess} from './windows-path-validation.mjs';
 import {createWindowsOwnedOffline,windowsPackagedOfflineMode,assertOwnedWindowsProcess} from './windows-owned-offline.mjs';
+import {windowsStateReadDeniedMode,windowsStateReadDenied} from './windows-state-read-denied.mjs';
 
 if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
   const child = spawn('dbus-run-session', [process.execPath, ...process.argv.slice(1)], { stdio: 'inherit', env: { ...process.env, OPENROTMG_PRIVATE_TEST: '1' } });
@@ -25,14 +26,15 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
 } else {
   await mkdir('.qa/package-tests', { recursive: true });
   const out = await mkdtemp(resolve('.qa/package-tests/run-'));
-  const failureTestsOnly=process.argv.includes('--failure-tests-only'),windowsOffline=process.argv.includes('--windows-offline');
-  const report = { status: 'running', purpose: windowsOffline ? 'PROGRAM-SCOPED whole APPLICATION runtime offline packaged journey; NOT whole VM, DNS, OS-default browser, fully tool-uninstalled or all-platform acceptance' : failureTestsOnly ? 'focused packaged startup/health/stop/failure ownership; NOT game, graphics, offline or all-platform acceptance' : 'full packaged game journey (native platform only)', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
+  const stateReadDenied=process.argv.includes('--windows-state-read-denied'),failureTestsOnly=process.argv.includes('--failure-tests-only')||stateReadDenied,windowsOffline=process.argv.includes('--windows-offline');
+  const report = { status: 'running', purpose: stateReadDenied ? 'Focused native Windows read-permission-denied synthetic state; NOT game, offline, default-browser or all-platform acceptance' : windowsOffline ? 'PROGRAM-SCOPED whole APPLICATION runtime offline packaged journey; NOT whole VM, DNS, OS-default browser, fully tool-uninstalled or all-platform acceptance' : failureTestsOnly ? 'focused packaged startup/health/stop/failure ownership; NOT game, graphics, offline or all-platform acceptance' : 'full packaged game journey (native platform only)', out, host: {type:type(),release:release()}, os: process.platform, arch: process.arch, versions: process.versions, assertions: [], screenshots: [], errors: [] };
   const check = (name, value) => { assert(value, name); report.assertions.push(name); console.log(`PASS ${name}`); };
   let display, launcher, launcherPid, browserCleanup, serverPid, lease, restoreInstallation, offlinePolicy;
   const env = { ...process.env, XDG_CONFIG_HOME: join(out, 'config'), XDG_CACHE_HOME: join(out, 'cache') };
   delete env.WAYLAND_DISPLAY;
   const persist=async()=>{try{await writeFile(join(out,'result.json'),JSON.stringify(report,null,2));}catch(error){report.status='failed';report.errors.push(`Receipt persistence: ${error.stack??error}`);process.exitCode=1;console.error(`Package evidence NOT PERSISTED:\n${JSON.stringify(report,null,2)}`);throw error;}};
   try {
+    windowsStateReadDeniedMode(process.argv.slice(2),process.platform,process.arch,process.env.GITHUB_ACTIONS,process.env.OPENROTMG_TEST_BROWSER_MODE,JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]'));
     windowsPackagedOfflineMode(process.argv.slice(2),process.env.OPENROTMG_TEST_BROWSER_MODE,process.platform,process.arch,process.env.GITHUB_ACTIONS,JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]'));
     const tmpRoot=process.env.OPENROTMG_TEST_TMP_ROOT;
     assert(!tmpRoot||isAbsolute(tmpRoot),'OPENROTMG_TEST_TMP_ROOT must be an absolute owned on-disk directory');
@@ -123,11 +125,17 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
       check('Windows-focused protected installed binary and package generation match verified native source/build receipt',true);
     }
     if(launcher){await launcher.close();launcher=undefined;}
+    const permissionLaunchAt=stateReadDenied?Date.now():undefined;
     page=await launch();
     userData = await launcher.evaluate(({app}) => app.getPath('userData'));
     check('test userData is owned outside install', userData.startsWith(out) && !userData.startsWith(packageDir));
     report.userData = userData;
     check('native package launches from OS-enforced non-writable installation with spaces',packageDir.includes(' '));
+    if(stateReadDenied){
+      assert.equal(report.launcherSource.dirty,false,'Permission case requires exact clean reviewed source');
+      try{await windowsStateReadDenied({app:launcher,page,native,binary,resources,userData,out,env:consumerEnv,check,report,requestedAt:permissionLaunchAt,wait});}
+      finally{if(report.windowsStateReadDenied?.launcherClosedNormally)launcher=undefined;}
+    }else{
     if(!failureTestsOnly) {
     if(process.platform!=='win32') {
       await mkdir(join(userData,'state'),{mode:0o000});
@@ -254,6 +262,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     }
     await failureCloseTests({out,native,env:consumerEnv,check,report,observeLauncher,onReady:observeServer});
     }
+    }
     report.status = 'passed';
   } catch (error) {
     report.status = 'failed'; report.errors.push(String(error.stack ?? error)); process.exitCode = 1;
@@ -278,7 +287,7 @@ if (process.platform === 'linux' && !process.env.OPENROTMG_PRIVATE_TEST) {
     if(restoreInstallation)try{await restoreInstallation();}catch(error){report.errors.push(`Install ACL cleanup: ${error}`);process.exitCode=1;}
     if(lease)try{await lease.release();}catch(error){report.errors.push(String(error));process.exitCode=1;}
     if(report.errors.length){report.status='failed';process.exitCode=1;}
-    report.cleanupPending=report.windowsOffline?.cleanupPending===true;
+    report.cleanupPending=report.windowsOffline?.cleanupPending===true||report.windowsStateReadDenied?.cleanupPending===true;
     await persist();
     console.log(`${report.status}: ${join(out,'result.json')}`);
     if (report.errors.length) console.error(report.errors.join('\n'));
