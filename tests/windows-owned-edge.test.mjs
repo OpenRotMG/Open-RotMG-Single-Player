@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,writeFile,cp,rm} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
 import {tree} from '../scripts/assets.mjs';
-import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from '../scripts/windows-owned-edge.mjs';
+import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity,ownedEdgeImageDifference,requireOwnedEdgeAfterRun} from '../scripts/windows-owned-edge.mjs';
 import {edgeImageAt} from '../scripts/windows-edge-image.mjs';
 
 test('windows-owned-edge requires explicit named mode and never falls back from missing copied image',()=>{
@@ -21,6 +21,20 @@ test('windows-owned-edge compares complete original/source/copy inventories and 
     await writeFile(join(copy,'156/resource.dll'),'altered');const alteredCopy=await tree(copy,['']);assert.throws(()=>requireOwnedEdgeInventory(original,original,alteredCopy));
     await writeFile(join(source,'msedge.exe'),'changed-source');const alteredSource=await tree(source,['']);assert.throws(()=>requireOwnedEdgeInventory(original,alteredSource,original));
   }finally{await rm(root,{recursive:true});}
+});
+test('windows-owned-edge after-run classifies only deletion of the exact observed installer histogram tuple',()=>{
+  const path='SetupMetrics/3960_13436344830356102_3960.pma',sha='c9bf34f471c0ac43e064875bd9a6f27bbf6a9fe876dce7ab84ce7643d2661def';
+  const original={files:{'msedge.exe':'code','156/resource.dll':'resource',[path]:sha,'SetupMetrics/other.pma':'unknown'},sha256:'full'},files={...original.files};delete files[path];const consumed={files,sha256:'actual-after'};
+  assert.throws(()=>requireOwnedEdgeInventory(original,original,consumed),'Before-run must remain exact');
+  const result=requireOwnedEdgeAfterRun(original,original,consumed);assert.equal(result.consumedInstallerMetrics.length,1);assert.equal(result.consumedInstallerMetrics[0].path,path);assert.equal(result.consumedInstallerMetrics[0].beforeSha256,sha);assert.equal(result.consumedInstallerMetrics[0].sourceRefs.length,3);
+  assert.deepEqual(ownedEdgeImageDifference(original,consumed),{added:[],modified:[],deleted:[{path,beforeSha256:sha}]});assert.equal(original.files[path],sha);assert.deepEqual(requireOwnedEdgeAfterRun(original,original,original).consumedInstallerMetrics,[]);
+  const changedOriginal={files:{...original.files,[path]:'different-prehash'},sha256:'changed-source'};assert.throws(()=>requireOwnedEdgeAfterRun(changedOriginal,changedOriginal,consumed));
+  for(const name of Object.keys(original.files)){
+    assert.throws(()=>requireOwnedEdgeAfterRun(original,original,{files:{...original.files,[name]:'modified'},sha256:'modified'}));
+    if(name!==path){const missing={...original.files};delete missing[name];assert.throws(()=>requireOwnedEdgeAfterRun(original,original,{files:missing,sha256:'deleted'}));}
+  }
+  assert.throws(()=>requireOwnedEdgeAfterRun(original,original,{files:{...files,'SetupMetrics/new.pma':'new'},sha256:'new'}));
+  assert.throws(()=>requireOwnedEdgeAfterRun(original,changedOriginal,consumed));
 });
 test('windows-owned-edge requires exact Microsoft publisher even when valid source and copy agree',()=>{
   const source={executable:'installed/msedge.exe',product:'Microsoft Edge',company:'Other Publisher',fileVersion:'156',signature:'Valid',signer:'CN=Other Publisher',sha256:'same'},copy={...source,executable:'owned/msedge.exe'};

@@ -11,7 +11,7 @@ import {windowsPowerShellExecutable,windowsProcessIdentity} from './native-bound
 import {tree} from './assets.mjs';
 import {installedEdgeImage,edgeImageAt} from './windows-edge-image.mjs';
 import {closeWindowsEdge} from './windows-edge-cleanup.mjs';
-import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity} from './windows-owned-edge.mjs';
+import {ownedEdgeMode,openOwnedEdgePage,requireMicrosoftEdgePublisher,requireOwnedEdgeRulePrograms,requireOwnedEdgeInventory,requireOwnedEdgeIdentity,ownedEdgeImageDifference,requireOwnedEdgeAfterRun} from './windows-owned-edge.mjs';
 import {cleanupWindowsFirewallRules,windowsOfflineCanaryResult,verifyWindowsOfflineCanary} from './windows-firewall-cleanup.mjs';
 
 assert(process.platform==='win32'&&process.arch==='x64'&&process.env.GITHUB_ACTIONS==='true','Offline diagnostics require an owned native Windows x64 CI VM');
@@ -97,7 +97,8 @@ if(process.argv.includes('--node-policy-check')) {
       const image=report.ownedEdgeImage;
       for(const [key,path] of [['sourceAfterRun',image.sourceDirectory],['copyAfterRun',image.copyDirectory]])try{image[key]=await tree(path,['']);}catch(error){report.errors.push(`${key} inventory: ${error}`);}
       for(const [key,path] of [['sourceMetadataAfterRun',image.sourceImage.executable],['copyMetadataAfterRun',report.expectedBrowserExecutable]])try{image[key]=await edgeImageAt(path);}catch(error){report.errors.push(`${key} identity: ${error}`);}
-      try{requireOwnedEdgeInventory(image.original,image.sourceAfterRun,image.copyAfterRun);assert.deepEqual(image.sourceMetadataAfterRun,image.sourceImage,'Installed Edge source metadata changed');requireOwnedEdgeIdentity(image.sourceImage,image.copyMetadataAfterRun);assert.deepEqual(image.copyMetadataAfterRun,image.copyMetadataBeforeRun,'Owned Edge image metadata changed');image.verifiedAfterRun=true;}catch(error){report.errors.push(`Final Edge integrity: ${error}`);}
+      if(image.copyAfterRun){image.afterRunDifference=ownedEdgeImageDifference(image.original,image.copyAfterRun);image.wholeApplicationDirUnchanged=image.original.sha256===image.copyAfterRun.sha256&&Object.values(image.afterRunDifference).every(entries=>entries.length===0);}
+      try{const integrity=requireOwnedEdgeAfterRun(image.original,image.sourceAfterRun,image.copyAfterRun);image.consumedInstallerMetrics=integrity.consumedInstallerMetrics;assert.deepEqual(image.sourceMetadataAfterRun,image.sourceImage,'Installed Edge source metadata changed');requireOwnedEdgeIdentity(image.sourceImage,image.copyMetadataAfterRun);assert.deepEqual(image.copyMetadataAfterRun,image.copyMetadataBeforeRun,'Owned Edge image metadata changed');image.immutableRuntimeVerified=true;}catch(error){report.errors.push(`Final Edge integrity: ${error}`);}
     }
     if(report.errors.length){report.status='failed';process.exitCode=1;}await persist();console.log(JSON.stringify({status:report.status,errors:report.errors},null,2));
   }
