@@ -23,7 +23,7 @@ async function journey(){
  await mkdir('.qa/save-tests',{recursive:true});
  const out=await mkdtemp(resolve('.qa/save-tests/run-'));
  const report={status:'running',out,checks:[],errors:[],screenshots:[],limits:['Linux x64 QA-enabled software WebGL only; not default GPU, default browser, OS offline, Windows/macOS or installers','Native chooser and restore-confirmation use declared per-run main-process dialog fixtures; real Rust authority and packaged renderer, not mocked save success','Open backup folder uses real shell.openPath and a fresh privately installed PCManFM in an isolated bus/display; not the host/default file manager']};
- let launcher,page,display,lease,game,folderManagerPid;
+ let launcher,page,display,lease,game,folderManagerPid,launcherPid;
  const persist=()=>writeFile(join(out,'result.json'),JSON.stringify(report,null,2));
  const check=(name,value)=>{assert(value,name);report.checks.push(name);console.log('PASS '+name);};
  const screenshot=async name=>{const path=join(out,name+'.png');await page.screenshot({path,fullPage:true});report.screenshots.push(path);};
@@ -31,7 +31,7 @@ async function journey(){
   const child=spawn(file,args,{cwd:out,stdio:['pipe','pipe','pipe']});let stdout='',stderr='';
   child.stdout.on('data',b=>stdout+=b);child.stderr.on('data',b=>stderr+=b);
   const closed=new Promise((ok,bad)=>{child.once('error',bad);child.once('close',(code,signal)=>ok({code,signal}));});
-  child.stdin.end(input);const result=await closed;assert.equal(result.code,0,`${file} ${args[0]} failed: ${stderr}`);assert.equal(result.signal,null);return stdout;
+  let pipeError;child.stdin.on('error',error=>{pipeError=error;});child.stdin.end(input);const result=await closed;assert.equal(result.code,0,`${file} ${args[0]} failed: ${stderr}`);assert.equal(result.signal,null);assert.equal(pipeError,undefined,'Successful helper must receive its input');return stdout;
  };
  try{
   assert.equal(process.env.OPENROTMG_TEST_BROWSER_MODE,'vps-managed');assert.deepEqual(JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]'),['--ignore-gpu-blocklist'],'Only the approved VPS QA software-WebGL flag is permitted');
@@ -70,6 +70,7 @@ async function journey(){
   let profile=join(out,'launcher-profile'),user,state;
   const launch=async()=>{
    launcher=await electron.launch({executablePath:native,args:[`--user-data-dir=${profile}`,'--ozone-platform=x11'],chromiumSandbox:true,env,timeout:30000});
+   launcherPid=await launcher.evaluate(()=>process.pid);
    page=await launcher.firstWindow();await page.waitForFunction(()=>!!window.launcher);user=await launcher.evaluate(({app})=>app.getPath('userData'));state=join(user,'state');
    assert(user.startsWith(out)&&!user.startsWith(installation));if(!(report.userDataDirectories??=[]).includes(user))report.userDataDirectories.push(user);
    const argv=await processArgv(await launcher.evaluate(()=>process.pid));assert(!argv.includes('--no-sandbox'));
@@ -89,7 +90,7 @@ async function journey(){
   const expectSuccess=async(action,pattern)=>{await page.locator(action).click();await wait(async()=>pattern.test(await page.locator('#save-result').innerText())||(await page.locator('#error').innerText())!=='','save result',60000);assert.equal(await page.locator('#error').innerText(),'');assert.match(await page.locator('#save-result').innerText(),pattern);};
   const begin=async(path=selected)=>{await choice(path);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});return page.locator('#local-login').inputValue();};
   const commit=async(secret)=>{await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');assert.equal(await page.locator('#password').inputValue(),'');};
-  const start=async()=>{await page.locator('#start').click();await wait(async()=>(await view()).status==='ready','current packaged server readiness',650000);const v=await view(),health=await(await fetch(v.origin+'/health')).json();assert.equal(health.process,v.pid);assert(!health.bots&&!health.bot_dialogue.enabled);const argv=await processArgv(v.pid);assert(argv.includes('--desktop')&&!argv.includes('--local-save'));assert.equal(await readFile(`/proc/${v.pid}/exe`).then(sha256),build.binarySha256);const names=(await readdir(join(user,'diagnostics'))).sort(),entries=(await readFile(join(user,'diagnostics',names.at(-1)),'utf8')).trim().split('\n').map(line=>JSON.parse(line));const audit=entries.filter(entry=>entry.fields?.record).map(entry=>JSON.parse(entry.fields.record)).find(entry=>entry.kind==='start'&&entry.pid===v.pid);assert(audit);assert.equal(audit.data.revision,pins.server.commit);assert.equal(audit.data.binary_sha256,build.binarySha256);(report.processes??=[]).push({pid:v.pid,argv,health,audit,binarySha256:build.binarySha256});return v;};
+  const start=async()=>{await page.locator('#start').click();await wait(async()=>(await view()).status==='ready','current packaged server readiness',650000);const v=await view(),health=await(await fetch(v.origin+'/health')).json();assert.equal(health.process,v.pid);assert(!health.bots&&!health.bot_dialogue.enabled);const argv=await processArgv(v.pid);assert(argv.includes('--desktop')&&!argv.includes('--local-save'));assert.equal(await readFile(`/proc/${v.pid}/exe`).then(sha256),build.binarySha256);const names=(await readdir(join(user,'diagnostics'))).sort(),entries=(await readFile(join(user,'diagnostics',names.at(-1)),'utf8')).split('\n').slice(0,-1).map(line=>JSON.parse(line));const audit=entries.filter(entry=>entry.fields?.record).map(entry=>JSON.parse(entry.fields.record)).find(entry=>entry.kind==='start'&&entry.pid===v.pid);assert(audit);assert.equal(audit.data.revision,pins.server.commit);assert.equal(audit.data.binary_sha256,build.binarySha256);(report.processes??=[]).push({pid:v.pid,argv,health,audit,binarySha256:build.binarySha256});return v;};
   const stop=async()=>{await page.locator('#stop').click();await wait(async()=>(await view()).status==='stopped','verified server stop',650000);assert(!(await view()).pid);const logs=(await readdir(join(user,'diagnostics'))).sort();assert((await readFile(join(user,'diagnostics',logs.at(-1)),'utf8')).includes('shutdown persistence complete'));};
   const accounts=async(login,secret)=>{const response=await fetch('http://127.0.0.1:47831/legacy-api/char/list',{method:'POST',body:new URLSearchParams({guid:login,password:secret})});return response.text();};
   const equipment=xml=>{const result=/<Char id="\d+">[\s\S]*?<Equipment>([^<]*)<\/Equipment>/.exec(xml);assert(result);return result[1].split(',').map(Number);};
@@ -186,14 +187,14 @@ async function journey(){
   for(const directory of report.userDataDirectories)await scan(directory);report.privacyScannedBytes=scannedBytes;check('Launcher renderer storage is empty and every launcher profile/save/backup/log file is plaintext-password free',true);
   for(const secret of secrets)assert(!JSON.stringify(report).includes(secret),'No plaintext password in retained report');
   report.status='passed';
- }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;console.error(report.errors.at(-1));if(page&&!page.isClosed())try{await screenshot('failure');}catch(cause){report.errors.push(String(cause));}}
+ }catch(error){report.status='failed';report.errors.push(String(error.stack??error));process.exitCode=1;console.error(report.errors.at(-1));await persist();if(page&&!page.isClosed())try{await screenshot('failure');}catch(cause){report.errors.push(String(cause));}}
  finally{
   if(folderManagerPid)try{if(alive(folderManagerPid))process.kill(folderManagerPid,'SIGTERM');await wait(()=>!alive(folderManagerPid),'owned folder-manager cleanup',10000);}catch(error){report.errors.push('file-manager cleanup: '+error);}
   if(game)try{await game.close();}catch(error){report.errors.push('browser cleanup: '+error);}
-  if(launcher)try{await launcher.close();}catch(error){report.errors.push('launcher cleanup: '+error);}
+  if(launcher)try{if(report.status==='failed')await launcher.evaluate(({dialog})=>{dialog.showErrorBox=(title,content)=>{globalThis.saveTest?.events.push({kind:'cleanup-error-dialog',title,content});};});await launcher.close();}catch(error){report.errors.push('launcher cleanup: '+error);}
   if(display){display.kill('SIGTERM');try{await wait(()=>display.exitCode!==null||display.signalCode!==null,'private Xvfb cleanup',10000);}catch(error){report.errors.push(String(error));}}
   if(lease)try{await lease.release();}catch(error){report.errors.push(String(error));}
-  if(report.errors.length){report.status='failed';process.exitCode=1;}report.cleanupComplete=!launcher?.process()?.pid||!alive(launcher.process().pid);
+  if(report.errors.length){report.status='failed';process.exitCode=1;}report.cleanupComplete=!launcherPid||!alive(launcherPid);
   await persist();console.log(`${report.status}: ${join(out,'result.json')}`);
  }
 }
