@@ -23,7 +23,11 @@ test('windows-path-validation requires actual passed Windows drive/key, linked-i
   for(const output of ['', 'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 527 filtered out;',passing.replace('12 passed','11 passed'),passing.replace('0 failed','1 failed')])assert.throws(()=>assertWindowsPrepareResults(output));
 });
 test('windows-path-validation binds copied binary and package generation to exact verified source/build receipt',async()=>{
-  const pins=JSON.parse(await readFile('source-pins.json','utf8'));
+  const pins={
+    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:serverCommit,dataSha256:'457afcb2ed6eef68c28b6d3c0020f8fa9c2ecf2b4bcbae6db12eea17b68d3bf3',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
+    client:{repository:'https://github.com/dginovker/Open-RotMG-Client',commit:'b80476c7f0fd9136c1b35f52a724ea50b4c3502b',preparedSha256:'f27939dba025464f57ab33c4029f43ac7ccf56d4f31777a9061df3beaa35e808',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
+    ruffle:{version:'0.7.1-openrotmg.16',sourceCommit:'89a7049965f3090e706265670df309a5128233ac',bundleSha256:'579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435'},
+  };
   const binarySha256=sha256('actual installed server bytes'),receiptBytes=Buffer.from(JSON.stringify({...receipt,sha256:binarySha256}));
   const build={platform:'win32',arch:'x64',pins,binarySha256,buildReceiptSha256:sha256(receiptBytes),assetsSha256:sha256('verified package assets')};
   const fixture={pins,build,generatedBuild:structuredClone(build),input:{platform:'win32',arch:'x64',serverSource:source,serverBinarySha256:binarySha256},receiptBytes,binarySha256};
@@ -51,12 +55,14 @@ test('windows-path-validation rejects wrong actual Windows image or PID generati
   assert.throws(()=>assertWindowsPackagedProcess(identity,{...expected,health:{...expected.health,revision:serverCommit}}),/launcher build generation/);
   for(const change of [{executable:'D:\\other\\openrotmg.exe'},{executable:binary+'.other.exe'},{executable:null},{pid:456},{started:'2026-11-02T14:59:59Z'},{started:'2026-11-02T15:00:03Z'},{started:'invalid'}])assert.throws(()=>assertWindowsPackagedProcess({...identity,...change},expected));
 });
-test('windows-path-validation pins explicit reviewed fork QA candidate and preserves every data/client/Ruffle pin',async()=>{
-  assert.deepEqual(JSON.parse(await readFile('source-pins.json','utf8')),{
-    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:serverCommit,dataSha256:'457afcb2ed6eef68c28b6d3c0020f8fa9c2ecf2b4bcbae6db12eea17b68d3bf3',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
-    client:{repository:'https://github.com/dginovker/Open-RotMG-Client',commit:'b80476c7f0fd9136c1b35f52a724ea50b4c3502b',preparedSha256:'f27939dba025464f57ab33c4029f43ac7ccf56d4f31777a9061df3beaa35e808',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
+test('Phase4 preview pins are exact and cannot inherit historical Windows qualification',async()=>{
+  const pins=JSON.parse(await readFile('source-pins.json','utf8'));
+  assert.deepEqual(pins,{
+    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:'181a18d9668bc396dfdf6f73c248d971b3af2c52',dataSha256:'1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
+    client:{repository:'https://github.com/OpenRotMG/Open-RotMG-Client',commit:'c8ca97152e09869af06d5f3b01e876ff6f0ce392',preparedSha256:'f27939dba025464f57ab33c4029f43ac7ccf56d4f31777a9061df3beaa35e808',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
     ruffle:{version:'0.7.1-openrotmg.16',sourceCommit:'89a7049965f3090e706265670df309a5128233ac',bundleSha256:'579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435'},
   });
+  assert.throws(()=>assertWindowsPackagedBuild({pins,receiptBytes:Buffer.from('{}')}),/Reviewed Windows source/);
   assert.match(purpose,/NOT game, graphics, offline or all-platform acceptance/);
 });
 test('windows-path-validation workflow is manual standard native Windows and never downloads or launches a game browser',async()=>{
