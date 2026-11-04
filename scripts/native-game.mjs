@@ -68,6 +68,14 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
     });
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
+    let verified=0,charLists=0;
+    const responseErrors=[];
+    page.on('response',response=>{
+      const path=new URL(response.url()).pathname;
+      if(!['/legacy-api/account/verify','/legacy-api/char/list'].includes(path))return;
+      void response.finished().then(error=>{if(error)responseErrors.push(String(error));else if(path.endsWith('/verify'))verified++;else charLists++;},error=>responseErrors.push(String(error)));
+    });
+    const settled=async(predicate,label)=>{const deadline=Date.now()+30000;while(!predicate()&&Date.now()<deadline)await delay(100);assert(predicate(),label);assert.deepEqual(responseErrors,[]);await delay(500);await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));};
     let frames=0;page.on('websocket',socket=>{if(socket.url()===origin.replace('http:','ws:')+'/game')socket.on('framereceived',()=>frames++);});
     const close=async()=>{
       const failures=[];
@@ -92,10 +100,9 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       await click(400,438);await delay(300);
       await click(400,228);await page.keyboard.type(credentials.guid);
       await click(400,315);await page.keyboard.type(credentials.password);
-      const authenticated=page.waitForResponse(response=>new URL(response.url()).pathname==='/legacy-api/account/verify');
-      await click(492,420);await authenticated;await delay(500);
-      await click(480,386);await delay(300);
-      await click(400,550);await delay(500);
+      await click(492,420);await settled(()=>verified>=2,'Normal sign-in and Current account verification must finish');
+      await click(480,386);await settled(()=>charLists>=2,'Post-login character refresh must finish before Play');
+      await click(400,550);await delay(500);await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));
       await click(160,130);
       const deadline=Date.now()+30000;while(frames<10&&Date.now()<deadline)await delay(100);
       check(`${name}: real client loaded character and received game updates`,frames>=10);
@@ -112,7 +119,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
         return {webgl2:true,lost:gl.isContextLost(),renderer:gl.getParameter(gl.RENDERER),unmaskedRenderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):null};
       });
       check(`${name}: live WebGL2 context is not lost`,graphics.webgl2&&!graphics.lost);
-      (report.nativeSessions??=[]).push({name,frames,graphics});
+      (report.nativeSessions??=[]).push({name,frames,verified,charLists,graphics});
       const shot=join(out,`${name}-native-game.png`);await page.screenshot({path:shot});report.screenshots.push(shot);
       return {page,rect,close};
     } catch(error) {
