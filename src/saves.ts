@@ -1,0 +1,244 @@
+import { spawn } from 'node:child_process';
+import { mkdir, mkdtemp, open, rm, stat, realpath } from 'node:fs/promises';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { Runtime } from './runtime';
+
+export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
+export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
+export type SaveResult = { message: string; path?: string; login?: string; disclosure?: string };
+export type SaveDialogs = {
+  choose(kind: 'account' | 'snapshot', directory: string): Promise<string | undefined>;
+  confirmRestore(preview: SnapshotPreview, path: string, modified: string): Promise<boolean>;
+  openFolder(path: string): Promise<string>;
+};
+const MAX_ACCOUNT_BYTES = 32 * 1024 * 1024, MAX_OUTPUT_BYTES = 64 * 1024;
+const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
+const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
+export function importPreview(value: unknown): ImportPreview {
+  const p = value as ImportPreview;
+  if (!p || Object.keys(p).length !== 8 || !positive(p.account) || typeof p.login !== 'string' || p.login !== `player-${p.account}@local.invalid` || typeof p.replaced !== 'boolean' || typeof p.disclosure !== 'string' || (!positive(p.exported_at) || p.exported_at > 8_640_000_000_000) || typeof p.name !== 'string' || !count(p.character_count) || typeof p.expected !== 'string' || !/^[a-f0-9]{64}$/.test(p.expected)) throw new Error('Invalid authority import preview; expected account/login/date/name/count/precondition metadata');
+  return p;
+}
+export function snapshotPreview(value: unknown): SnapshotPreview {
+  const p = value as SnapshotPreview;
+  if (!p || Object.keys(p).length !== 5 || p.verified !== true || ![21, 22].includes(p.schema) || p.scope !== 'all-local-accounts' || !count(p.account_count) || !count(p.character_count)) throw new Error('Invalid authority snapshot metadata; expected verified schema/scope/account/character counts');
+  return p;
+}
+export function checkedPassword(value: unknown, confirmation: unknown): string {
+  if (typeof value !== 'string' || typeof confirmation !== 'string' || value !== confirmation || Buffer.from(value, 'utf8').toString('utf8') !== value || Buffer.byteLength(value) < 5 || Buffer.byteLength(value) > 128 || /\p{Cc}/u.test(value)) throw new Error('New passwords must match and contain 5–128 UTF-8 bytes without control characters');
+  return value;
+}
+
+/** Only server-owned named save commands are reachable here; paths never come from IPC. */
+export async function saveAuthority(runtime: Runtime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore', paths: string[], password?: string): Promise<unknown> {
+  const { binary } = runtime.runtimePaths();
+  let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
+  const child = spawn(binary, ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const collect = (current: Buffer, bytes: Buffer) => {
+    if (current.length + bytes.length > MAX_OUTPUT_BYTES) overflow = true;
+    return Buffer.concat([current, bytes.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - current.length))]);
+  };
+  child.stdout.on('data', bytes => { output = collect(output, bytes); });
+  child.stderr.on('data', bytes => { stderrBytes += bytes.length; if (stderrBytes > MAX_OUTPUT_BYTES) overflow = true; });
+  child.once('error', error => { spawnError = error; });
+  child.stdin.on('error', error => { pipeError = error; });
+  const closed = new Promise<{code: number | null; signal: string | null}>(resolve => child.once('close', (code, signal) => resolve({code, signal})));
+  const secret = password === undefined ? undefined : Buffer.from(password, 'utf8');
+  child.stdin.end(secret, () => secret?.fill(0));
+  password = undefined;
+  const { code, signal } = await closed;
+  const unverified = (detail: string) => {
+    const error = new Error(`Save authority ${command} completion is unverified at ${binary}: ${detail}. No success or unchanged destination is claimed; retain state and backups before recovery. Replay is blocked.`);
+    runtime.blockAmbiguousSave(error);
+    return error;
+  };
+  if (spawnError) throw unverified(`could not start: ${spawnError.message}`);
+  if (signal || overflow || (pipeError && (code === 0 || (pipeError as NodeJS.ErrnoException).code !== 'EPIPE'))) throw unverified(`exit=${code}, signal=${signal}, outputLimit=${overflow}, stdin=${pipeError?.message ?? 'closed'}`);
+  if (code === null) throw unverified('child closed without an exit status');
+  let result: unknown;
+  try { result = JSON.parse(new TextDecoder('utf-8', {fatal: true}).decode(output)); }
+  catch { throw unverified(`exit=${code}; invalid outcome JSON`); }
+  if (code !== 0) {
+    const failure = result as {protocol: number; operation: string; outcome: string; error: string};
+    if (!failure || Object.keys(failure).length !== 4 || failure.protocol !== 1 || failure.operation !== command || !['unchanged', 'unknown'].includes(failure.outcome) || typeof failure.error !== 'string' || !failure.error.trim() || Buffer.byteLength(failure.error) > MAX_OUTPUT_BYTES) throw unverified(`exit=${code}; invalid failure envelope (protocol/operation/outcome/error)`);
+    if (failure.outcome === 'unknown') throw unverified(`exit=${code}; ${failure.error}`);
+    throw new Error(`Save authority ${command} failed (exit ${code}) at ${binary}: ${failure.error}. Destination game save unchanged; output/backup files may exist. No output success is claimed.`);
+  }
+  try {
+    if (command === 'preview') importPreview(result);
+    else if (command === 'verify-snapshot') snapshotPreview(result);
+    else if (command === 'snapshot') {
+      const value = result as {snapshot: string; verified: boolean};
+      if (!value || Object.keys(value).length !== 2 || value.snapshot !== paths[2] || value.verified !== true) throw new Error('invalid snapshot acknowledgement');
+    } else if (command === 'restore') {
+      const value = result as {restored: boolean; backup: string};
+      if (!value || Object.keys(value).length !== 2 || value.restored !== true || value.backup !== paths[3]) throw new Error('invalid restore acknowledgement');
+    } else {
+      const value = result as ImportPreview;
+      if (!value || Object.keys(value).length !== 4 || !positive(value.account) || value.login !== `player-${value.account}@local.invalid` || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
+    }
+  } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
+  return result;
+}
+function authorityEnvironment() {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
+  return env;
+}
+
+async function retainCleanup<T>(action: () => Promise<T>, cleanup: () => Promise<void>, label: string): Promise<T> {
+  let primary: unknown, failed = false;
+  try { return await action(); }
+  catch (error) { failed = true; primary = error; throw error; }
+  finally {
+    try { await cleanup(); }
+    catch (error) { throw new Error(`${failed ? `Primary error: ${String(primary)}. ` : ''}${label} failed: ${String(error)}`); }
+  }
+}
+
+type Confirmation = { expected: string; password: string; replace: boolean };
+type PendingImport = { preview: ImportPreview; accept(value: Confirmation | undefined): void; outcome: Promise<SaveResult | undefined> };
+export class SaveControls {
+  readonly backups: string;
+  private pending?: PendingImport;
+  constructor(private runtime: Runtime, private dialogs: SaveDialogs) { this.backups = join(runtime.userData, 'backups'); }
+  private backupPath(reason: string) { return join(this.backups, `${new Date().toISOString().replaceAll(':', '-')}-${reason}-${randomUUID()}.sqlite`); }
+  private async backupDirectory() { await mkdir(this.backups, { recursive: true, mode: 0o700 }); }
+  private async snapshotWithoutWal(source: string) {
+    // A live SQLite checkpoint can validate while silently omitting committed progress still in its WAL.
+    try { if ((await stat(source + '-wal')).size > 0) throw new Error(`Selected file has an active WAL: ${source}. Choose a verified full backup made by Make backup, not a live database file.`); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  }
+  private async staged<T>(source: string, kind: 'account' | 'snapshot', action: (path: string, modified: string) => Promise<T>): Promise<T> {
+    const limit = kind === 'account' ? MAX_ACCOUNT_BYTES : undefined;
+    const parent = join(this.runtime.userData, 'save-staging');
+    await mkdir(parent, {recursive: true, mode: 0o700});
+    const directory = await mkdtemp(join(parent, 'selected-'));
+    let primary: unknown, completed = false;
+    let outcome: T | undefined;
+    try {
+      const selected = await realpath(source);
+      if (kind === 'snapshot') await this.snapshotWithoutWal(selected);
+      const input = await open(selected, 'r');
+      const modified = await retainCleanup(async () => {
+        const info = await input.stat();
+        if (!info.isFile()) throw new Error(`Selected save is not a regular file: ${source}`);
+        if (limit !== undefined && info.size > limit) throw new Error(`Selected account file exceeds ${limit} bytes: ${source}`);
+        const output = await open(join(directory, 'input'), 'wx', 0o600);
+        await retainCleanup(async () => {
+          let total = 0;
+          const buffer = Buffer.alloc(64 * 1024);
+          while (total < info.size) {
+            const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, info.size - total), null);
+            if (!bytesRead) throw new Error('Selected save changed while being staged; choose it again');
+            total += bytesRead;
+            let offset = 0;
+            while (offset < bytesRead) {
+              const { bytesWritten } = await output.write(buffer, offset, bytesRead - offset);
+              if (!bytesWritten) throw new Error('Save staging write made no progress');
+              offset += bytesWritten;
+            }
+          }
+          const extra = await input.read(Buffer.alloc(1), 0, 1, null), after = await input.stat();
+          if (extra.bytesRead || after.size !== info.size || after.mtimeMs !== info.mtimeMs) throw new Error('Selected save changed while being staged; choose it again');
+          await output.sync();
+        }, () => output.close(), 'Close private staging file');
+        return info.mtime.toISOString();
+      }, () => input.close(), 'Close selected input file');
+      if (kind === 'snapshot') await this.snapshotWithoutWal(selected);
+      outcome = await action(join(directory, 'input'), modified);
+      completed = true;
+      return outcome;
+    } catch (error) { primary = new Error(`Selected save ${source}: ${String(error)}`); throw primary; }
+    finally {
+      try { await rm(directory, {recursive: true}); }
+      catch (cleanup) { throw new Error(`${completed ? `Operation completed: ${JSON.stringify(outcome)}. ` : `Primary error: ${String(primary)}. `}Save staging cleanup failed at ${directory}: ${String(cleanup)}. Do not repeat a possibly completed operation without inspecting its outcome.`); }
+    }
+  }
+  beginImport(): Promise<ImportPreview | undefined> {
+    let deliver!: (preview: ImportPreview | undefined) => void, reject!: (error: unknown) => void;
+    const preview = new Promise<ImportPreview | undefined>((ok, bad) => { deliver = ok; reject = bad; });
+    const outcome = this.runtime.stoppedOperation('Import player', async () => {
+      const source = await this.dialogs.choose('account', this.backups);
+      if (!source) return undefined;
+      return this.staged(source, 'account', async path => {
+        const { state, data } = this.runtime.runtimePaths();
+        const metadata = importPreview(await saveAuthority(this.runtime, 'preview', [state, data, path]));
+        if (this.runtime.view().closing) return undefined;
+        const confirmation = new Promise<Confirmation | undefined>(accept => { this.pending = {preview: metadata, accept, outcome}; });
+        deliver(metadata);
+        const chosen = await confirmation;
+        this.pending = undefined;
+        if (!chosen) return undefined;
+        try {
+          await this.backupDirectory();
+          const backup = this.backupPath(metadata.replaced ? 'pre-replace' : 'pre-import');
+          const value = await saveAuthority(this.runtime, chosen.replace ? 'replace' : 'import', [state, data, path, backup, chosen.expected], chosen.password);
+          const result = value as ImportPreview;
+          if (!result || result.account !== metadata.account || result.login !== metadata.login || result.replaced !== metadata.replaced || typeof result.disclosure !== 'string') {
+            const error = new Error('Import outcome differs from confirmed preview; completion is unverified. Retain state and backups; do not retry.');
+            this.runtime.blockAmbiguousSave(error); throw error;
+          }
+          return {message: `Player imported. Sign in locally with ${result.login} and your new password.`, path: state, login: result.login, disclosure: result.disclosure};
+        } finally { chosen.password = ''; }
+      });
+    });
+    void outcome.then(() => deliver(undefined), reject);
+    return preview;
+  }
+  finishImport(expected: unknown, password: unknown, confirmation: unknown, replace: unknown): Promise<SaveResult | undefined> {
+    const pending = this.pending;
+    if (!pending || expected !== pending.preview.expected || typeof replace !== 'boolean' || replace !== pending.preview.replaced) return Promise.reject(new Error('Import confirmation does not match the pending preview; cancel and preview again'));
+    let checked: string;
+    try { checked = checkedPassword(password, confirmation); } catch (error) { return Promise.reject(error); }
+    this.pending = undefined;
+    pending.accept({expected: pending.preview.expected, password: checked, replace});
+    return pending.outcome;
+  }
+  async cancelImport(): Promise<boolean> {
+    const pending = this.pending;
+    if (!pending) return false;
+    this.pending = undefined;
+    pending.accept(undefined);
+    await pending.outcome;
+    return true;
+  }
+  makeBackup(): Promise<SaveResult> {
+    return this.runtime.stoppedOperation('Make backup', async () => {
+      await this.backupDirectory();
+      const {state, data} = this.runtime.runtimePaths(), path = this.backupPath('manual');
+      const result = await saveAuthority(this.runtime, 'snapshot', [state, data, path]) as {snapshot: string; verified: boolean};
+      if (result?.snapshot !== path || result.verified !== true) throw new Error(`Unverified snapshot outcome at ${path}; no backup success claimed`);
+      const preview = snapshotPreview(await saveAuthority(this.runtime, 'verify-snapshot', [path, data]));
+      return {message: `Verified full local backup · ${new Date().toISOString()} · ${preview.account_count} accounts, ${preview.character_count} characters · includes original local credentials (schema ${preview.schema}).`, path};
+    });
+  }
+  restoreBackup(): Promise<SaveResult | undefined> {
+    return this.runtime.stoppedOperation('Restore backup', async () => {
+      const source = await this.dialogs.choose('snapshot', this.backups);
+      if (!source) return undefined;
+      return this.staged(source, 'snapshot', async (path, modified) => {
+        const {state, data} = this.runtime.runtimePaths();
+        const preview = snapshotPreview(await saveAuthority(this.runtime, 'verify-snapshot', [path, data]));
+        if (!await this.dialogs.confirmRestore(preview, source, modified)) return undefined;
+        await this.backupDirectory();
+        const backup = this.backupPath('pre-restore');
+        const result = await saveAuthority(this.runtime, 'restore', [state, data, path, backup]) as {restored: boolean; backup: string};
+        if (result?.restored !== true || result.backup !== backup) {
+          const error = new Error(`Restore outcome is unverified; retain state and ${backup}; do not retry.`);
+          this.runtime.blockAmbiguousSave(error); throw error;
+        }
+        return {message: 'Full local save restored, including all original local logins and passwords. The state just replaced is in the pre-restore backup.', path: backup};
+      });
+    });
+  }
+  openBackupFolder(): Promise<SaveResult> {
+    return this.runtime.stoppedOperation('Open backup folder', async () => {
+      await this.backupDirectory();
+      const error = await this.dialogs.openFolder(this.backups);
+      if (error) throw new Error(`Could not open backup folder ${this.backups}: ${error}`);
+      return {message: 'Opened full local backup folder. Backups are never automatically deleted.', path: this.backups};
+    });
+  }
+}

@@ -9,7 +9,7 @@ import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export type View = { status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string };
+export type View = { status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
 
@@ -33,6 +33,9 @@ export class Runtime extends EventEmitter {
   // Failure can precede Close; retain its IO outcome without an unhandled rejection or a second truncating write.
   private failureGate?: Promise<Error | undefined>;
   private failurePersistenceError?: Error;
+  private operation?: Promise<unknown>;
+  private operationName?: string;
+  private closing = false;
   readonly origin = `http://127.0.0.1:${PORT}`;
   readonly diagnostics: string;
   constructor(readonly resources: string, readonly userData: string) {
@@ -40,7 +43,7 @@ export class Runtime extends EventEmitter {
     this.diagnostics = join(userData, 'diagnostics');
   }
   view(): View {
-    return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics };
+    return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics, operation: this.operationName, closing: this.closing };
   }
   private update(status: Status, message: string) { this.status = status; this.message = message; this.emit('change', this.view()); }
   private line(text: string) {
@@ -70,7 +73,7 @@ export class Runtime extends EventEmitter {
     if (error) throw error;
   }
   start(): Promise<void> {
-    if (this.status !== 'stopped' || this.boot || this.stopping) return Promise.reject(new Error('Start requires a verified stopped server and settled prior startup/shutdown'));
+    if (this.closing || this.operation || this.status !== 'stopped' || this.boot || this.stopping) return Promise.reject(new Error('Start requires a verified stopped server and settled prior startup/shutdown'));
     this.update('starting', 'Checking bundled runtime and save ownership…');
     this.boot = this.startOwned().catch(error => {
       if (this.child || this.unsafe) this.fail(error);
@@ -82,7 +85,7 @@ export class Runtime extends EventEmitter {
   private async startOwned() {
     await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
     if (await this.exists(join(this.userData, 'shutdown-failed.json'))) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
-    const binary = join(this.resources, process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg');
+    const { binary, data, client: clientPath, state } = this.runtimePaths();
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
     const inventory = JSON.parse(await readFile(join(this.resources, 'inventory.json'), 'utf8')) as { files: string[] };
     for (const file of inventory.files) {
@@ -96,7 +99,7 @@ export class Runtime extends EventEmitter {
     });
     const config = join(this.userData, 'desktop-config.json');
     await writeFile(config, JSON.stringify({ bind: `127.0.0.1:${PORT}`, origin: this.origin,
-      data: join(this.resources, 'data'), client: join(this.resources, 'client'), state: join(this.userData, 'state'),
+      data, client: clientPath, state,
       behind_proxy: false, shore_bots: false, bot_llm: false, max_players: 85, realm_seed: 42 }, null, 2), { mode: 0o600 });
     const name = new Date().toISOString().replaceAll(':', '-');
     // Direct inherited file descriptors retain EOF-drain diagnostics even if Electron crashes.
@@ -196,10 +199,43 @@ export class Runtime extends EventEmitter {
       if (result.code !== 0 || this.diskError || this.unsafe) throw new Error(`Shutdown failed: exit=${result.code}, signal=${result.signal}, diagnostic error=${this.diskError?.message ?? 'none'}`);
     } finally { timer.abort(); }
   }
+  /** Holds lifecycle ownership through dialogs, authority children and cleanup, not just the database write. */
+  stoppedOperation<T>(name: string, action: () => Promise<T>): Promise<T> {
+    if (this.closing || this.operation || this.boot || this.stopping) return Promise.reject(new Error('Another lifecycle operation is in progress'));
+    this.operationName = name;
+    const operation = Promise.resolve().then(async () => {
+      await this.stopOwned();
+      await this.verifyFailureGate();
+      if (this.unsafe || await this.exists(join(this.userData, 'shutdown-failed.json'))) throw new Error('Previous shutdown was not verified; save operations are blocked');
+      return action();
+    }).finally(() => {
+      this.operation = undefined; this.operationName = undefined; this.emit('change', this.view());
+    });
+    this.operation = operation;
+    this.emit('change', this.view());
+    return operation;
+  }
+  async close(): Promise<void> {
+    this.closing = true;
+    this.emit('change', this.view());
+    try {
+      if (this.operation) await this.operation;
+      await this.stopOwned();
+      await this.verifyFailureGate();
+    } catch (error) { this.closing = false; this.emit('change', this.view()); throw error; }
+  }
+  runtimePaths() {
+    return { binary: join(this.resources, process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg'), data: join(this.resources, 'data'), client: join(this.resources, 'client'), state: join(this.userData, 'state') };
+  }
+  blockAmbiguousSave(error: Error) { this.fail(error); }
   stop(): Promise<void> {
+    if (this.operation || this.closing) return Promise.reject(new Error('Another lifecycle operation is in progress'));
+    return this.stopOwned();
+  }
+  private stopOwned(): Promise<void> {
     if (this.stopping) return this.stopping;
     if (this.status === 'stopped') return Promise.resolve();
-    if (this.status === 'failed' && !this.child) return Promise.reject(new Error('Previous shutdown failed; recovery is required'));
+    if (this.status === 'failed' && !this.child) return Promise.reject(new Error(`Previous operation failed; recovery is required. ${this.message}`));
     this.update('stopping', 'Saving active characters and stopping server…');
     this.stopping = (async () => {
       // Start may still be validating files; do not release ownership until its promise settles.

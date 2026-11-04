@@ -14,13 +14,13 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     const origin=new runtimeExports.Runtime('/owned/resources','/owned/user').origin;assert.equal(origin,'http://127.0.0.1:47831');
     const handlers=new Map(),calls=[],elements=new Map();let ready,changed,status='stopped',pending,openedWindow;
     const view=()=>({status,origin,diagnostics:'owned',logs:[],message:'fixture'});
-    const runtime={view,on:()=>{},origin:view().origin};
+    const runtime={view,on:()=>{},origin:view().origin,userData:'/owned/user'};
     class BrowserWindow {
       constructor(){openedWindow=this;this.webContents={mainFrame:{url:pathToFileURL('/owned/dist/index.html').href},setWindowOpenHandler(){},on(){},session:{setPermissionRequestHandler(){},webRequest:{onBeforeRequest(){}}}};}
       on(){} loadURL(){} isDestroyed(){return false;}
     }
     const electron={app:{setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>({then:callback=>{ready=Promise.resolve().then(callback);return ready;}}),getPath:()=>'/owned/user',on(){}},BrowserWindow,ipcMain:{handle:(channel,handler)=>handlers.set(channel,handler)},shell:{openExternal:async url=>{calls.push(url);await pending;}},dialog:{showErrorBox:message=>assert.fail(message)}};
-    runInNewContext(await source('src/main.ts'),{exports:{},__dirname:'/owned/dist',process:{resourcesPath:'/owned/resources'},require:id=>id==='electron'?electron:id==='./runtime'?{Runtime:class{constructor(){return runtime;}}}:require(id)});
+    runInNewContext(await source('src/main.ts'),{exports:{},__dirname:'/owned/dist',process:{resourcesPath:'/owned/resources'},require:id=>id==='electron'?electron:id==='./runtime'?{Runtime:class{constructor(){return runtime;}}}:id==='./saves'?require('../dist/saves.js'):require(id)});
     await ready;
     const trusted=()=>({sender:openedWindow.webContents,senderFrame:openedWindow.webContents.mainFrame});
     const action=handlers.get('runtime:client');assert.equal(typeof action,'function');
@@ -36,7 +36,7 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     runInNewContext(await source('src/preload.ts'),{exports:{},require:id=>{assert.equal(id,'electron');return {ipcRenderer,contextBridge:{exposeInMainWorld:(key,value)=>{assert.equal(key,'launcher');launcher=value;}}};}});
     assert(Object.isFrozen(launcher));
     const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false});return elements.get(id);}};
-    runInNewContext(await source('src/renderer.ts'),{exports:{},window:{launcher},document});
+    runInNewContext(await source('src/renderer.ts'),{exports:{},window:{launcher,addEventListener(){}},document});
     await new Promise(ok=>setImmediate(ok));
     for(status of ['stopped','starting','stopping','failed','ready']){changed(view());assert.equal(elements.get('client').disabled,status!=='ready');}
     elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.match(elements.get('error').textContent,/actual shell rejection/);

@@ -2,7 +2,7 @@
   "name": "openrotmg-single-player",
   "productName": "Open RotMG Single Player",
   "version": "0.1.0",
-  "description": "Offline Open RotMG desktop launcher — Phase 1 preview",
+  "description": "Offline Open RotMG desktop launcher — source preview",
   "private": true,
   "license": "AGPL-3.0-only",
   "author": "OpenRotMG contributors",
@@ -11,7 +11,8 @@
     "build": "tsc && tsc -p tsconfig.renderer.json && node scripts/build.mjs",
     "test": "tsc && node --test tests/*.test.mjs",
     "package": "npm run build && electron-forge package",
-    "package:test": "npm test && npm run package && node scripts/package-test.mjs"
+    "package:test": "npm test && npm run package && node scripts/package-test.mjs",
+    "test:e2e": "node scripts/save-controls-test.mjs"
   },
   "devDependencies": {
     "@electron-forge/cli": "8.0.1",

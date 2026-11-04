@@ -8,8 +8,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import {openNativeEdge,openNativeOwnedEdge} from './native-edge.mjs';
 
-const credentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
-export async function nativeGame({out,origin,env,check,report,ownedEdge}) {
+const fixtureCredentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
+export async function nativeGame({out,origin,env,check,report,ownedEdge,credentials = fixtureCredentials}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
   assert(['vps-managed','ci-playwright','ci-edge','ci-owned-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright, ci-edge or ci-owned-edge explicitly');assert((mode==='ci-owned-edge')===!!ownedEdge,'ci-owned-edge requires only the prepared owned policy image');
   if(mode!=='vps-managed')assert(process.env.GITHUB_ACTIONS==='true','CI browser modes are restricted to GitHub Actions owned runners');
@@ -40,7 +40,9 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge}) {
       const deadline=Date.now()+30000;while(!output.includes('\n')&&Date.now()<deadline)await delay(100);
       assert(output.includes('\n'),`Managed browser receipt missing: ${errors}`);
       const receipt=JSON.parse(output.split('\n')[0]);assert(receipt.owner===owner&&receipt.pid===chrome.pid&&receipt.target,'Managed browser identity mismatch');
-      (report.browsers??=[]).push(receipt);
+      const argv = await processArgv(receipt.pid);
+      check(`${name}: managed browser argv has no sandbox or unsafe software-renderer bypass`, !/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--disable-gpu-driver-bug-workarounds/.test(argv));
+      (report.browsers??=[]).push({...receipt,argv});
       browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
       context=browser.contexts()[0];page=context.pages()[0];assert(page,'Managed browser must create its initial owned page');
     } else if(mode==='ci-edge'||mode==='ci-owned-edge') {
@@ -102,6 +104,15 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge}) {
       await writeFile(join(out,`${name}-console.json`),JSON.stringify(consoleLog,null,2));
       check(`${name}: actual WebGL renderer (not Canvas)`,!!renderer&&!/Canvas/i.test(renderer.text));
       check(`${name}: no browser page exceptions`,!consoleLog.some(entry=>entry.type==='pageerror'));
+      const graphics=await page.evaluate(()=>{
+        const canvas=document.querySelector('ruffle-player')?.shadowRoot?.querySelector('canvas');
+        if(!canvas)throw Error('Native game canvas missing');
+        const gl=canvas.getContext('webgl2');if(!gl)throw Error('Native WebGL2 context missing');
+        const extension=gl.getExtension('WEBGL_debug_renderer_info');
+        return {webgl2:true,lost:gl.isContextLost(),renderer:gl.getParameter(gl.RENDERER),unmaskedRenderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):null};
+      });
+      check(`${name}: live WebGL2 context is not lost`,graphics.webgl2&&!graphics.lost);
+      (report.nativeSessions??=[]).push({name,frames,graphics});
       const shot=join(out,`${name}-native-game.png`);await page.screenshot({path:shot});report.screenshots.push(shot);
       return {page,rect,close};
     } catch(error) {

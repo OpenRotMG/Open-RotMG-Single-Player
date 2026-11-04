@@ -1,13 +1,13 @@
 {
   "server": {
     "repository": "https://github.com/dginovker/Open-RotMG-Server",
-    "commit": "850968f05358edbc89fa1af535e1a08bfd5b1f58",
-    "dataSha256": "457afcb2ed6eef68c28b6d3c0020f8fa9c2ecf2b4bcbae6db12eea17b68d3bf3",
+    "commit": "181a18d9668bc396dfdf6f73c248d971b3af2c52",
+    "dataSha256": "1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4",
     "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
   },
   "client": {
-    "repository": "https://github.com/dginovker/Open-RotMG-Client",
-    "commit": "b80476c7f0fd9136c1b35f52a724ea50b4c3502b",
+    "repository": "https://github.com/OpenRotMG/Open-RotMG-Client",
+    "commit": "c8ca97152e09869af06d5f3b01e876ff6f0ce392",
     "preparedSha256": "f27939dba025464f57ab33c4029f43ac7ccf56d4f31777a9061df3beaa35e808",
     "upstream": "https://github.com/OpenRotMG/Open-RotMG-Client"
   },
