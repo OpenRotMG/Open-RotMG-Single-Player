@@ -201,7 +201,7 @@ export class Runtime extends EventEmitter {
   }
   /** Holds lifecycle ownership through dialogs, authority children and cleanup, not just the database write. */
   stoppedOperation<T>(name: string, action: () => Promise<T>): Promise<T> {
-    if (this.closing || this.operation || this.boot || this.stopping) return Promise.reject(new Error('Another lifecycle operation is in progress'));
+    if (this.closing || this.operation || this.boot || this.stopping || this.status === 'starting' || this.status === 'stopping') return Promise.reject(new Error('Another lifecycle operation is in progress'));
     this.operationName = name;
     const operation = Promise.resolve().then(async () => {
       await this.stopOwned();

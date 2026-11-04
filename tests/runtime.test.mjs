@@ -173,3 +173,8 @@ test('runtime exit7 while bootstrap is pending cannot become verified exit0 thro
     await assert.rejects(new Runtime(runtime.resources,user).start(),/Previous server shutdown/);
   }finally{unblock();if(runtime.view().pid)await runtime.stop();}
 });
+test('runtime lifecycle status reserves startup before synchronous change listeners can request a save',async()=>{
+ const {runtime}=await fixture();let requested,entered=false;
+ runtime.once('change',()=>{requested=runtime.stoppedOperation('reentrant save',async()=>{entered=true;});void requested.catch(()=>{});});
+ await assert.rejects(runtime.start(),/ENOENT/);await assert.rejects(requested,/Another lifecycle operation/);assert.equal(entered,false);assert.equal(runtime.view().operation,undefined);
+});
