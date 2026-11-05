@@ -1,10 +1,9 @@
 import {randomUUID} from 'node:crypto';
-import {mkdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {AuthorityCompletion} from './runtime';
 import {backup,Backup,backupPath,NativeStartupAck,nativeAck,Pending,pending,uuid} from './update-journal';
 import {boundedFile,demand,digest,exact,hex,integer,UpdateProblem} from './update-format';
-import {durableBytes,durableRecord,exists,record,RuntimeStore,Selection,selection} from './update-store';
+import {exists,record,RuntimeStore,Selection,selection} from './update-store';
 
 export type ReadyProof={pid:number;binary:string;resources:string;healthProcess:number;listenerSeen:true};
 // The first restore has no authorization receipt yet; only its failure-bound ACTIVE recovery intent may have no root.
@@ -19,8 +18,8 @@ export class RecoveredRuntimeFence{
   private historyPath(sha:string){demand(hex(sha),'Invalid recovery evidence digest');return join(this.history,sha+'.json');}
   async remember(value:unknown):Promise<string>{return this.rememberBytes(bytes(value));}
   async rememberBytes(data:Buffer):Promise<string>{
-    const sha=digest(data);await mkdir(this.history,{recursive:true,mode:0o700});const path=this.historyPath(sha);
-    if(await exists(path))demand((await boundedFile(path)).equals(data),'Immutable recovery evidence changed');else await durableBytes(path,data,true);return sha;
+    const sha=digest(data);await this.store.container(this.history);const path=this.historyPath(sha);
+    if(await exists(path))demand((await boundedFile(path)).equals(data),'Immutable recovery evidence changed');else await this.store.writeBytes(path,data,true);return sha;
   }
   async evidence(sha:string):Promise<unknown>{const data=await boundedFile(this.historyPath(sha));demand(digest(data)===sha,'Recovery predecessor/evidence digest mismatch');return JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(data));}
   async markerSha256(){return digest(await boundedFile(this.store.path('shutdown-failed.json')));}
@@ -114,20 +113,20 @@ export class RecoveredRuntimeFence{
   async active(kind:'server'|'authority',selected:Selection,pendingId:string|null,authorized?:Authorization,id=randomUUID()):Promise<Activity|undefined>{
     const auth=authorized??await this.requireClean(selected);if(!auth)return undefined;
     demand(uuid(id),'Invalid recovered activity generation');const value:Activity={format:1,id,receiptSha256:auth.sha256,kind,state:'active',from:auth.receipt.to,selected,pendingId,proof:null};
-    await durableRecord(this.store.path('runtime-activity.json'),value);return value;
+    await this.store.writeRecord(this.store.path('runtime-activity.json'),value);return value;
   }
   async clean(activity:Activity,proof:unknown){
     const current=await this.activity();demand(current&&current.id===activity.id&&current.state==='active'&&current.receiptSha256===activity.receiptSha256,'Recovered activity changed before clean acknowledgement');
-    await durableRecord(this.store.path('runtime-activity.json'),{...current,state:'clean',proof});
+    await this.store.writeRecord(this.store.path('runtime-activity.json'),{...current,state:'clean',proof});
   }
   async retire(markerSha256:string){
-    const pointer=await this.pointer();if(pointer)await durableRecord(this.store.path('runtime-recovery.json'),{...pointer,state:'retired',markerSha256});
+    const pointer=await this.pointer();if(pointer)await this.store.writeRecord(this.store.path('runtime-recovery.json'),{...pointer,state:'retired',markerSha256});
   }
   async publish(receipt:Receipt,state:'active'|'clean',activity?:Activity):Promise<string>{
     const sha=await this.remember(receipt);await this.lineage(sha);
-    if(activity){demand(activity.id===receipt.fenceId,'Recovery transition changed server generation');await durableRecord(this.store.path('runtime-activity.json'),{...activity,receiptSha256:sha,state});}
-    else await durableRecord(this.store.path('runtime-activity.json'),{format:1,id:receipt.fenceId,receiptSha256:sha,kind:'recovery',state,from:receipt.to,selected:receipt.to,pendingId:null,proof:{receipt:sha}} satisfies Activity);
-    await durableRecord(this.store.path('runtime-recovery.json'),{format:1,state:'authorized',sha256:sha,markerSha256:receipt.markerSha256});return sha;
+    if(activity){demand(activity.id===receipt.fenceId,'Recovery transition changed server generation');await this.store.writeRecord(this.store.path('runtime-activity.json'),{...activity,receiptSha256:sha,state});}
+    else await this.store.writeRecord(this.store.path('runtime-activity.json'),{format:1,id:receipt.fenceId,receiptSha256:sha,kind:'recovery',state,from:receipt.to,selected:receipt.to,pendingId:null,proof:{receipt:sha}} satisfies Activity);
+    await this.store.writeRecord(this.store.path('runtime-recovery.json'),{format:1,state:'authorized',sha256:sha,markerSha256:receipt.markerSha256});return sha;
   }
   async authorityFinished(activity:Activity,completion:AuthorityCompletion){
     try{await this.clean(activity,{...completion,closed:true});}

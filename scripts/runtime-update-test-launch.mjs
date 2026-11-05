@@ -46,7 +46,7 @@ export async function launchUpdateTest({executablePath,profile,env,policy,setupM
     const fs=require('node:fs');if(fs.realpathSync(process.execPath)!==fs.realpathSync(${JSON.stringify(resolve(executablePath))}))throw Error('Refusing a foreign Electron executable');
     const policyPath=require.resolve(process.resourcesPath+'/app.asar/dist/update-policy.js'),mainPath=require.resolve(process.resourcesPath+'/app.asar/dist/main.js'),beforeMain=!require.cache[policyPath]&&(!require.cache[mainPath]||!require.cache[mainPath].loaded);
     if(!beforeMain)throw Error('Packaged update policy was already loaded before fixture attachment');
-    const fixture=${JSON.stringify(policy)},module=require(policyPath);module.createUpdatePolicy=(_resources,launcher)=>({...fixture,launcher,request:fetch});
+    const fixture=${JSON.stringify(policy)},module=require(policyPath),productionPolicy=module.createUpdatePolicy;module.createUpdatePolicy=(resources,launcher)=>({...fixture,launcher,metadataBundle:productionPolicy(resources,launcher).metadataBundle,request:fetch});
     globalThis.runtimeUpdateTest={beforeMain:true,pid:process.pid,allowedFiles:[],choices:[],confirms:[],external:[],dialogs:[]};
     const electron=require('electron'),originalOpen=electron.dialog.showOpenDialog,originalMessage=electron.dialog.showMessageBox;
     electron.dialog.showOpenDialog=async(window,options)=>{

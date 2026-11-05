@@ -24,9 +24,10 @@ if(input.runtimeRelease!==undefined){
  baseline={format:1,mode:'release',identitySha256:value.payload.identitySha256,startupBackup:1,clientNamespace:1,manifest:manifest.toString('base64'),signature:signature.toString('base64')};
 }else{
  const pins=JSON.parse(await readFile('source-pins.json','utf8')),capabilities=JSON.parse(await readFile('runtime-capabilities.json','utf8'));
- exact(capabilities,'format,server,clientNamespace,save','explicit source runtime capabilities');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
+ exact(capabilities,Object.hasOwn(capabilities,'desktopMetadata')?'format,server,clientNamespace,save,desktopMetadata':'format,server,clientNamespace,save','explicit source runtime capabilities');
+ if(Object.hasOwn(capabilities,'desktopMetadata'))assert([0,1].includes(capabilities.desktopMetadata),'Invalid bundled metadata declaration');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
  assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&JSON.stringify(capabilities.save.read)==='[21,22]'&&capabilities.save.write===22&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
- const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace});
+ const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace,desktopMetadata:capabilities.desktopMetadata});
  baseline={format:1,mode:'source',identitySha256:prepared.identitySha256,startupBackup:prepared.startupBackup,clientNamespace:prepared.clientNamespace};
 }
 await writeFile('dist/runtime-baseline.json',JSON.stringify(baseline,null,2)+'\n');

@@ -6,8 +6,9 @@ import {create} from 'tar';
 import {tree,clientFiles,sha256} from './assets.mjs';
 import {hashFile,MAX_EXPANDED,MAX_PAYLOAD,runtimeFiles,targetName,verifyCapabilities,verifyRuntime} from '../dist/update-format.js';
 
-export async function assembleRuntime(input,pins,destination,{startupBackup,clientNamespace,noticesRoot=resolve('.')}={}){
+export async function assembleRuntime(input,pins,destination,{startupBackup,clientNamespace,desktopMetadata,noticesRoot=resolve('.')}={}){
  assert([0,1].includes(startupBackup)&&[0,1].includes(clientNamespace),'Explicit tested startup-backup/client-namespace capabilities required');
+ assert(desktopMetadata===undefined||[0,1].includes(desktopMetadata),'Invalid explicit bundled metadata capability');
  for(const key of ['serverSource','serverBinary','clientSource','preparedClient','serverBuildReceipt'])assert(isAbsolute(input[key]),`Absolute ${key} required`);
  assert(isAbsolute(destination)&&isAbsolute(noticesRoot),'Absolute producer output/notices roots required');
  for(const[path,expected]of[[input.serverSource,pins.server.commit],[input.clientSource,pins.client.commit]]){
@@ -27,10 +28,10 @@ export async function assembleRuntime(input,pins,destination,{startupBackup,clie
  for(const name of Object.keys(client.files).filter(n=>/license|notice|copying/i.test(n)))await cp(join(input.preparedClient,name),join(destination,'notices',name.replaceAll('/','-')));
  for(const file of ['NOTICES.md','LICENSE'])await cp(join(noticesRoot,file),join(destination,'notices',file));
  await writeFile(join(destination,'notices/source-pins.json'),JSON.stringify(pins,null,2)+'\n');
- await writeFile(join(destination,'notices/runtime-capabilities.json'),JSON.stringify({format:1,server:pins.server.commit,clientNamespace,save:{cli:1,read:[21,22],write:22,startupBackup}},null,2)+'\n');
+ await writeFile(join(destination,'notices/runtime-capabilities.json'),JSON.stringify({format:1,server:pins.server.commit,clientNamespace,...(desktopMetadata===undefined?{}:{desktopMetadata}),save:{cli:1,read:[21,22],write:22,startupBackup}},null,2)+'\n');
  const packaged=await tree(destination,['data','client','notices',binary,'REVISION']);await writeFile(join(destination,'inventory.json'),JSON.stringify({files:Object.keys(packaged.files),sha256:packaged.files},null,2));
  await writeFile(join(destination,'build-identity.json'),JSON.stringify({pins,platform:process.platform,arch:process.arch,binarySha256:input.serverBinarySha256,buildReceiptSha256:sha256(await readFile(input.serverBuildReceipt)),assetsSha256:packaged.sha256},null,2));
- const identity=await verifyRuntime(destination,targetName());await verifyCapabilities(destination,identity.pins,startupBackup,clientNamespace);return{identity,identitySha256:sha256(await readFile(join(destination,'build-identity.json'))),startupBackup,clientNamespace};
+ const identity=await verifyRuntime(destination,targetName());await verifyCapabilities(destination,identity.pins,startupBackup,clientNamespace,desktopMetadata);return{identity,identitySha256:sha256(await readFile(join(destination,'build-identity.json'))),startupBackup,clientNamespace};
 }
 export async function archiveRuntime(root,output,{startupBackup,clientNamespace}){
  assert([0,1].includes(startupBackup)&&[0,1].includes(clientNamespace),'Explicit actual runtime capabilities required');

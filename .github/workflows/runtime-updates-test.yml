@@ -26,6 +26,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y xvfb xauth dbus-x11
       - name: Unit tests and fresh sequential native A/C producer plus mandatory Rust publication regressions
         run: npm test && node scripts/ci-runtime-inputs.mjs
+      - name: Actual Windows metadata namespace publication and failure ordering
+        if: runner.os == 'Windows'
+        run: node scripts/windows-metadata-test.mjs
       - name: Package and exercise real native paired updates
         shell: bash
         run: |
@@ -46,6 +49,7 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           path: |
+            .qa/windows-metadata/run-*/*.json
             .qa/runtime-inputs/producer.json
             .qa/runtime-inputs/C/*.json
             .qa/runtime-inputs/C/*.log

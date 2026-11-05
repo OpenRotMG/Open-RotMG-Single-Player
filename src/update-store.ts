@@ -1,8 +1,9 @@
 import {randomUUID} from 'node:crypto';
 import {chmod,cp,link,lstat,mkdir,mkdtemp,open,readdir,rename,rm,stat,unlink} from 'node:fs/promises';
 import {basename,dirname,join} from 'node:path';
+import {WindowsMetadataPublication} from './update-publication';
 import {authenticateManifest,boundedFile,BuildIdentity,decodeJson,demand,digest,exact,hex,integer,label,Manifest,MAX_METADATA,portablePath,Target,validatePins,verifyCapabilities,verifyManifest,verifyRuntime} from './update-format';
-import {UpdatePolicy} from './update-policy';
+import {Baseline,UpdatePolicy} from './update-policy';
 
 export type Generation={format:1;id:string;kind:'source'|'release';target:Target;sequence:number;version:string;startupBackup:0|1;clientNamespace:0|1;identitySha256:string;manifestSha256:string|null;pins:BuildIdentity['pins'];assetsSha256:string;binarySha256:string};
 export type Selection={format:1;id:string;descriptorSha256:string};
@@ -11,11 +12,11 @@ export async function exists(path:string){try{await stat(path);return true;}catc
 export {boundedFile} from './update-format';
 export async function record(path:string):Promise<unknown>{return decodeJson(await boundedFile(path),4*1024*1024);}
 export async function syncDirectory(path:string){
-  // Windows exposes file FlushFileBuffers, but not POSIX directory fsync; match the Rust snapshot publication contract.
-  if(process.platform==='win32')return;
+  demand(process.platform!=='win32','Windows namespace durability requires the bundled native metadata publisher');
   const directory=await open(path,'r');try{await directory.sync();}finally{await directory.close();}
 }
 export async function durableBytes(path:string,bytes:Uint8Array,distinct=false):Promise<void>{
+  demand(process.platform!=='win32','Windows control records require the bundled native metadata publisher');
   const temporary=`${path}.partial-${randomUUID()}`;let created=false,published=false,primary:unknown;
   try{
     const file=await open(temporary,'wx',0o600);created=true;
@@ -37,7 +38,27 @@ export function generation(identity:BuildIdentity,identitySha256:string,target:T
 export const select=(g:Generation):Selection=>({format:1,id:g.id,descriptorSha256:digest(JSON.stringify(g))});
 export class RuntimeStore{
   readonly generations:string;readonly staging:string;
-  constructor(readonly userData:string,readonly policy:UpdatePolicy){this.generations=join(userData,'runtimes');this.staging=join(userData,'runtime-staging');}
+  private metadata?:WindowsMetadataPublication;private metadataBinary?:Promise<string>;
+  constructor(readonly userData:string,readonly policy:UpdatePolicy,onMetadataFailure?:(error:Error)=>void){
+    this.generations=join(userData,'runtimes');this.staging=join(userData,'runtime-staging');
+    if(process.platform==='win32')this.metadata=new WindowsMetadataPublication(userData,()=>this.bundledMetadataBinary(),error=>onMetadataFailure?.(error));
+  }
+  private bundledMetadataBinary():Promise<string>{
+    return this.metadataBinary??= (async()=>{const bundle=this.policy.metadataBundle;demand(bundle,'Verified bundled metadata identity is missing');const bundled=await this.verifyBaseline(bundle.baseline,bundle.publicKey,bundle.assetOrigin);await verifyCapabilities(bundle.baseline.root,bundled.pins,bundled.startupBackup,bundled.clientNamespace,1);return join(bundle.baseline.root,'openrotmg.exe');})();
+  }
+  async container(path:string){if(this.metadata)await this.metadata.container(path);else await mkdir(path,{recursive:true,mode:0o700});}
+  writeBytes(path:string,bytes:Uint8Array,distinct=false){return this.metadata?this.metadata.bytes(path,bytes,distinct):durableBytes(path,bytes,distinct);}
+  writeRecord(path:string,value:unknown,distinct=false){return this.writeBytes(path,Buffer.from(JSON.stringify(value,null,2)+'\n'),distinct);}
+  async moveDistinct(source:string,destination:string,kind:'file'|'directory'){
+    if(this.metadata)await this.metadata.move(source,destination,kind);
+    else{demand(!await exists(destination),'Distinct metadata destination already exists');await rename(source,destination);await syncDirectory(dirname(source));if(dirname(source)!==dirname(destination))await syncDirectory(dirname(destination));}
+  }
+  async movedBytes(path:string,expected:Buffer){try{demand((await boundedFile(path)).equals(expected),'Retired control record bytes changed');}catch(error){if(this.metadata)this.metadata.reject(error);throw error;}}
+  async retireControl(path:string,role:'refusal'|'activity'){
+    demand(path===this.path(role==='refusal'?'runtime-check-refusal.json':'runtime-activity.json'),'Invalid control retirement role');
+    if(!this.metadata){await unlink(path);await syncDirectory(this.userData);return;}
+    const data=await boundedFile(path),directory=this.path('runtime-recovery-history');await this.container(directory);const retired=join(directory,`${digest(data)}.${role}.json`);await this.moveDistinct(path,retired,'file');await this.movedBytes(retired,data);
+  }
   path(name:string){portablePath(name);demand(!name.includes('/'),'Runtime control name must not be a path');return join(this.userData,name);}
   root(id:string){selection({format:1,id,descriptorSha256:'0'.repeat(64)});return join(this.generations,id,'runtime');}
   async profile():Promise<Profile>{
@@ -47,12 +68,12 @@ export class RuntimeStore{
     demand(new Set(p.failed).size===p.failed.length&&p.failed.every(id=>typeof id==='string'&&ids.has(id)),'Invalid failed-runtime history');return p as unknown as Profile;
   }
   async initialize():Promise<{profile:Profile;selected:Generation}>{
-    await mkdir(this.userData,{recursive:true,mode:0o700});
+    if(this.metadata)await this.metadata.prepare();else await mkdir(this.userData,{recursive:true,mode:0o700});
     let p:Profile;
     if(!await exists(this.path('runtime-profile.json'))){
       for(const name of ['runtime-selection.json','runtime-pending.json','runtime-recovery.json','runtime-activity.json','runtime-check-refusal.json','runtimes','runtime-staging','runtime-manifests','runtime-recovery-history'])demand(!await exists(this.path(name)),'Managed runtime state exists but bootstrap anchor is missing; recovery required');
       const baseline=await this.bundled();p={format:1,baseline:select(baseline),initialized:false,attempts:[],failed:[]};
-      await durableRecord(this.path('runtime-profile.json'),p,true);
+      await this.writeRecord(this.path('runtime-profile.json'),p,true);
     }else p=await this.profile();
     if(!p.initialized){
       let baseline:Generation;
@@ -61,33 +82,34 @@ export class RuntimeStore{
         baseline=await this.bundled();demand(JSON.stringify(select(baseline))===JSON.stringify(p.baseline),'Interrupted bootstrap belongs to a different installer; no baseline substitution is allowed');
         const stage=await this.stage();
         try{await cp(this.policy.baseline.root,join(stage,'runtime'),{recursive:true,errorOnExist:true,force:false});
-          if(this.policy.baseline.mode==='release'){demand(this.policy.baseline.manifest&&this.policy.baseline.signature,'Release baseline signature missing');await durableBytes(join(stage,'manifest.json'),this.policy.baseline.manifest);await durableBytes(join(stage,'manifest.sig'),this.policy.baseline.signature);}
+          if(this.policy.baseline.mode==='release'){demand(this.policy.baseline.manifest&&this.policy.baseline.signature,'Release baseline signature missing');await this.writeBytes(join(stage,'manifest.json'),this.policy.baseline.manifest);await this.writeBytes(join(stage,'manifest.sig'),this.policy.baseline.signature);}
           await this.publish(stage,baseline);
         }catch(error){await this.cleanup(stage,error);throw error;}
       }
       if(await exists(this.path('runtime-selection.json')))demand(JSON.stringify(selection(await record(this.path('runtime-selection.json'))))===JSON.stringify(p.baseline),'Interrupted bootstrap selection mismatch');
       else await this.choose(baseline);
-      p={...p,initialized:true};await durableRecord(this.path('runtime-profile.json'),p);
+      p={...p,initialized:true};await this.writeRecord(this.path('runtime-profile.json'),p);
     }
     const selected=await this.load(selection(await record(this.path('runtime-selection.json'))));return{profile:p,selected};
   }
-  async bundled():Promise<Generation>{
-    const baseline=this.policy.baseline,identityBytes=await boundedFile(join(baseline.root,'build-identity.json'),MAX_METADATA);
+  bundled(){return this.verifyBaseline(this.policy.baseline,this.policy.publicKey,this.policy.assetOrigin);}
+  private async verifyBaseline(baseline:Baseline,publicKey:string,assetOrigin:string):Promise<Generation>{
+    const identityBytes=await boundedFile(join(baseline.root,'build-identity.json'),MAX_METADATA);
     demand(digest(identityBytes)===baseline.identitySha256,'Installed baseline identity differs from its explicit launcher declaration');
     let manifest:Manifest|undefined;
-    if(baseline.mode==='release'){demand(baseline.manifest&&baseline.signature,'Release baseline metadata/signature missing');manifest=verifyManifest(baseline.manifest,baseline.signature,this.policy.publicKey,undefined,undefined,this.policy.target,this.policy.launcher,this.policy.assetOrigin);}
+    if(baseline.mode==='release'){demand(baseline.manifest&&baseline.signature,'Release baseline metadata/signature missing');manifest=verifyManifest(baseline.manifest,baseline.signature,publicKey,undefined,undefined,this.policy.target,this.policy.launcher,assetOrigin);}
     else demand(baseline.mode==='source'&&!baseline.manifest&&!baseline.signature,'Invalid explicit source-build baseline');
     const identity=await verifyRuntime(baseline.root,this.policy.target,manifest);await verifyCapabilities(baseline.root,identity.pins,baseline.startupBackup,baseline.clientNamespace);
     return generation(identity,baseline.identitySha256,this.policy.target,baseline.startupBackup,baseline.clientNamespace,manifest,baseline.manifest?digest(baseline.manifest):undefined);
   }
-  async stage(){await mkdir(this.staging,{recursive:true,mode:0o700});return mkdtemp(join(this.staging,'generation-'));}
+  async stage(){await this.container(this.staging);return mkdtemp(join(this.staging,'generation-'));}
   async remember(bytes:Uint8Array,signature:Uint8Array,manifest:Pick<Manifest,'sequence'>){
-    const directory=join(this.userData,'runtime-manifests');await mkdir(directory,{recursive:true,mode:0o700});
+    const directory=join(this.userData,'runtime-manifests');await this.container(directory);
     const prefix=`${manifest.sequence}-`,sha=digest(bytes);
     for(const name of await readdir(directory))if(name.startsWith(prefix)&&name.endsWith('.json'))demand(name===`${prefix}${sha}.json`,'Same authenticated sequence has a different manifest identity; refusing replacement');
     const path=join(directory,`${prefix}${sha}.json`);
-    if(await exists(path))demand(digest(await boundedFile(path,MAX_METADATA))===sha,'Remembered manifest is corrupt');else await durableBytes(path,bytes,true);
-    const sig=join(directory,`${prefix}${sha}.sig`);if(await exists(sig))demand((await boundedFile(sig,64)).equals(Buffer.from(signature)),'Remembered signature is corrupt');else await durableBytes(sig,signature,true);
+    if(await exists(path))demand(digest(await boundedFile(path,MAX_METADATA))===sha,'Remembered manifest is corrupt');else await this.writeBytes(path,bytes,true);
+    const sig=join(directory,`${prefix}${sha}.sig`);if(await exists(sig))demand((await boundedFile(sig,64)).equals(Buffer.from(signature)),'Remembered signature is corrupt');else await this.writeBytes(sig,signature,true);
   }
   async authenticatedFloor():Promise<number>{
     const directory=join(this.userData,'runtime-manifests');if(!await exists(directory))return 0;
@@ -121,14 +143,15 @@ export class RuntimeStore{
   async publish(stage:string,g:Generation){
     await verifyRuntime(join(stage,'runtime'),this.policy.target,g.kind==='release'?verifyManifest(await boundedFile(join(stage,'manifest.json'),MAX_METADATA),await boundedFile(join(stage,'manifest.sig'),64),this.policy.publicKey,undefined,undefined,this.policy.target,this.policy.launcher,this.policy.assetOrigin):undefined);
     demand(digest(await boundedFile(join(stage,'runtime','build-identity.json'),MAX_METADATA))===g.identitySha256,'Staged generation identity mismatch');
-    await durableRecord(join(stage,'generation.json'),g,true);await mkdir(this.generations,{recursive:true,mode:0o700});
+    await this.writeRecord(join(stage,'generation.json'),g,true);await this.container(this.generations);
     const freeze=async(path:string)=>{const info=await stat(path);if(info.isDirectory()){for(const name of await readdir(path))await freeze(join(path,name));if(path!==stage)await chmod(path,0o500);}else{await chmod(path,0o600);const handle=await open(path,'r+');try{await handle.sync();}finally{await handle.close();}await chmod(path,path===join(stage,'runtime',this.policy.target==='win32-x64'?'openrotmg.exe':'openrotmg')?0o500:0o400);}};
     // A cross-parent directory rename must update ".." before its root becomes read-only.
-    await freeze(stage);await syncDirectory(stage);const published=join(this.generations,g.id);await rename(stage,published);await chmod(published,0o500);await syncDirectory(published);await syncDirectory(this.generations);
+    await freeze(stage);if(!this.metadata)await syncDirectory(stage);const published=join(this.generations,g.id);await this.moveDistinct(stage,published,'directory');await chmod(published,0o500);if(!this.metadata)await syncDirectory(published);
   }
-  choose(g:Generation){return durableRecord(this.path('runtime-selection.json'),select(g));}
+  choose(g:Generation){return this.writeRecord(this.path('runtime-selection.json'),select(g));}
   async cleanup(stage:string,primary?:unknown){
     demand(dirname(stage)===this.staging&&/^generation-[A-Za-z0-9]+$/.test(basename(stage)),'Refusing cleanup outside an owned staging generation');
+    demand(!this.metadata?.unknown,`${String(primary)}; native metadata publication is UNKNOWN; staging/destination evidence retained, no cleanup attempted`);
     const writable=async(path:string)=>{const info=await lstat(path);if(info.isDirectory()){await chmod(path,0o700);for(const name of await readdir(path))await writable(join(path,name));}else if(info.isFile())await chmod(path,0o600);};
     try{if(await exists(stage)){await writable(stage);await rm(stage,{recursive:true});}}
     catch(error){throw new Error(`${primary===undefined?'':`Primary update failure: ${String(primary)}. `}Owned runtime staging cleanup failed: ${String(error)}`);}

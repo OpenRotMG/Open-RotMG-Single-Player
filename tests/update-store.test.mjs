@@ -1,8 +1,9 @@
+import {RuntimeStore} from './update-publication-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs,{mkdir,readFile,writeFile,unlink,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
-import {RuntimeStore,record,selection} from '../dist/update-store.js';
+import {record,selection} from '../dist/update-store.js';
 import {digest} from '../dist/update-format.js';
 import {directory,unitRuntime,keyPair,publicPEM,signed,manifestFor} from './update-fixture.mjs';
 

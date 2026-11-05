@@ -1,10 +1,11 @@
+import {RuntimeUpdates} from './update-publication-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {Runtime} from '../dist/runtime.js';
-import {RuntimeUpdates} from '../dist/updates.js';
+
 import {select} from '../dist/update-store.js';
 import {digest} from '../dist/update-format.js';
 import {capableRecovered} from './update-recovery-fixture.mjs';

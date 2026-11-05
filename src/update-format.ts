@@ -126,10 +126,11 @@ export async function verifyBinary(path: string, target: Target) {
     else { const pe = buffer.readUInt32LE(60); demand(buffer.toString('ascii',0,2) === 'MZ' && pe + 26 <= bytesRead && buffer.toString('ascii',pe,pe+4) === 'PE\0\0' && buffer.readUInt16LE(pe+4) === 0x8664 && buffer.readUInt16LE(pe+24) === 0x20b,'Server is not native Windows x64 PE32+'); }
   } finally { await handle.close(); }
 }
-export async function verifyCapabilities(root:string,pins:Pins,startupBackup:0|1,clientNamespace:0|1):Promise<void>{
+export async function verifyCapabilities(root:string,pins:Pins,startupBackup:0|1,clientNamespace:0|1,desktopMetadata?:0|1):Promise<void>{
   const path=join(root,'notices','runtime-capabilities.json');
-  try{await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'&&startupBackup===0&&clientNamespace===0)return;throw error;}
-  const value=decodeJson(await boundedFile(path,MAX_METADATA));exact(value,'format,server,clientNamespace,save','runtime capability notice');exact(value.save,'cli,read,write,startupBackup','runtime capability save protocol');
+  try{await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'&&startupBackup===0&&clientNamespace===0&&desktopMetadata!==1)return;throw error;}
+  const value=decodeJson(await boundedFile(path,MAX_METADATA));exact(value,value&&typeof value==='object'&&'desktopMetadata' in value?'format,server,clientNamespace,save,desktopMetadata':'format,server,clientNamespace,save','runtime capability notice');
+  if('desktopMetadata' in value)demand(value.desktopMetadata===0||value.desktopMetadata===1,'Invalid bundled metadata capability');if(desktopMetadata!==undefined)demand(value.desktopMetadata===desktopMetadata,'Bundled runtime lacks required desktopMetadata capability');exact(value.save,'cli,read,write,startupBackup','runtime capability save protocol');
   demand(value.format===1&&value.server===pins.server.commit&&value.clientNamespace===clientNamespace&&value.save.cli===1&&JSON.stringify(value.save.read)==='[21,22]'&&value.save.write===22&&value.save.startupBackup===startupBackup,'Declared runtime capabilities differ from authenticated/explicit baseline contract');
 }
 export async function verifyRuntime(root: string, target: Target, expected?: Manifest): Promise<BuildIdentity> {

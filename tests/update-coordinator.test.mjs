@@ -1,10 +1,11 @@
+import {RuntimeUpdates} from './update-publication-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Runtime} from '../dist/runtime.js';
-import {RuntimeUpdates} from '../dist/updates.js';
+
 import {digest} from '../dist/update-format.js';
 import {runtimeFixture} from '../scripts/runtime-update-fixture.mjs';
 import {directory,unitRuntime,manifestFor} from './update-fixture.mjs';

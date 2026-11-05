@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join } from 'node:path';
+import {realpath} from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Runtime } from './runtime';
 import { SaveControls } from './saves';
@@ -17,9 +18,10 @@ else {
   let updates: RuntimeUpdates;
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
-    runtime = new Runtime(policy.baseline.root, app.getPath('userData'));
+    const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
+    runtime = new Runtime(policy.baseline.root, userData);
     window = new BrowserWindow({ width: 900, height: 700, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));

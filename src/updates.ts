@@ -1,6 +1,6 @@
 import {EventEmitter} from 'node:events';
 import {randomUUID} from 'node:crypto';
-import {copyFile,lstat,mkdir,rename,stat,unlink} from 'node:fs/promises';
+import {copyFile,lstat,mkdir,stat,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {constants} from 'node:fs';
 import type {AuthorityCompletion,Runtime} from './runtime';
@@ -9,7 +9,7 @@ import {boundedFile,demand,digest,exact,hashFile,integer,UpdateProblem,verifyRun
 import {extractRuntime} from './update-archive';
 import {discover,downloadPayload} from './update-network';
 import {UpdatePolicy} from './update-policy';
-import {durableBytes,durableRecord,exists,generation,Generation,record,RuntimeStore,select,Selection,selection,syncDirectory} from './update-store';
+import {exists,generation,Generation,record,RuntimeStore,select,Selection,selection} from './update-store';
 import {Backup,backup,backupName,backupPath,NativeStartupAck,Pending,pending,readNativeAck,readPending} from './update-journal';
 import {Activity,Authorization,ReadyProof,Receipt,RecoveredRuntimeFence} from './update-recovery';
 
@@ -28,13 +28,14 @@ export class RuntimeUpdates extends EventEmitter{
   private refusedCheck?:{format:1;kind:'service'|'rejected'|'launcher';message:string;selected:Selection};
   private failureSerial=0;private failure?:UpdateProblem;private phase:UpdateView['phase']='initializing';private message='Preparing explicit installed runtime…';
   constructor(private runtime:Runtime,readonly policy:UpdatePolicy,private confirm:(value:UpdateConfirmation)=>Promise<boolean>){
-    super();this.store=new RuntimeStore(runtime.userData,policy);this.fence=new RecoveredRuntimeFence(this.store);runtime.attachUpdates(this);
+    super();this.store=new RuntimeStore(runtime.userData,policy,error=>runtime.blockAmbiguousSave(error));this.fence=new RecoveredRuntimeFence(this.store);runtime.attachUpdates(this);
     runtime.on('change',()=>{
       if(runtime.view().status==='failed'&&this.phase!=='recovery')this.problem(new UpdateProblem('recovery',runtime.view().message));
       if(this.staged&&!this.quarantined&&!this.task&&runtime.isIdle())void this.applyDeferred();
       this.emit('change',this.view());
     });
   }
+  prepareDiagnostics(){return this.store.container(this.runtime.diagnostics);}
   view():UpdateView{
     return{phase:this.phase,message:this.message,installed:this.committed?summary(this.committed):undefined,available:this.available,canPlayInstalled:!!this.current&&this.runtime.isIdle()&&!this.transaction&&!!this.failure&&this.failure.kind!=='recovery',canRecover:this.phase==='recovery',canRetry:!!this.staged&&!this.transaction&&this.phase==='rejected'};
   }
@@ -63,8 +64,8 @@ export class RuntimeUpdates extends EventEmitter{
   }
   private async recordRefusal(error?:UpdateProblem){
     const path=this.store.path('runtime-check-refusal.json');
-    if(error){demand(this.current&&['service','rejected','launcher'].includes(error.kind),'Invalid runtime refusal context');const value={format:1 as const,kind:error.kind as 'service'|'rejected'|'launcher',message:error.message.slice(0,4000),selected:select(this.current)};await durableRecord(path,value);this.refusedCheck=value;}
-    else{if(await exists(path)){await unlink(path);await syncDirectory(this.runtime.userData);}this.refusedCheck=undefined;}
+    if(error){demand(this.current&&['service','rejected','launcher'].includes(error.kind),'Invalid runtime refusal context');const value={format:1 as const,kind:error.kind as 'service'|'rejected'|'launcher',message:error.message.slice(0,4000),selected:select(this.current)};await this.store.writeRecord(path,value);this.refusedCheck=value;}
+    else{if(await exists(path)){await this.store.retireControl(path,'refusal');}this.refusedCheck=undefined;}
   }
   private async initialized(){if(this.initialization)await this.initialization;else await this.initializeOwned();}
   check():Promise<UpdateView>{
@@ -89,7 +90,7 @@ export class RuntimeUpdates extends EventEmitter{
         if(await exists(join(this.store.generations,id)))this.staged=await this.loadId(id);
         else{
           this.update('downloading',`Downloading and verifying paired runtime ${m.version}…`);stage=await this.store.stage();
-          await durableBytes(join(stage,'manifest.json'),discovered.bytes);await durableBytes(join(stage,'manifest.sig'),discovered.signature);
+          await this.store.writeBytes(join(stage,'manifest.json'),discovered.bytes);await this.store.writeBytes(join(stage,'manifest.sig'),discovered.signature);
           const archive=join(stage,'payload.tar.gz');await downloadPayload(m,archive,this.policy,controller.signal);
           await extractRuntime(archive,join(stage,'runtime'),this.policy.target,m.payload.expandedBytes);
           const identity=await verifyRuntime(join(stage,'runtime'),this.policy.target,m),g=generation(identity,digest(await boundedFile(join(stage,'runtime','build-identity.json'))),this.policy.target,1,1,m,digest(discovered.bytes));
@@ -143,11 +144,11 @@ export class RuntimeUpdates extends EventEmitter{
     if(this.explicitRecovery)this.recoveryCompletion={command:'snapshot',ack};
     try{return{backup:await this.verifiedBackup(g,name),ack};}catch(error){throw new UpdateProblem('recovery',`Snapshot actual close0/strict acknowledgement=${JSON.stringify(ack)}; follow-up verification failed: ${String(error)}`);}
   }
-  private async writePending(p:Pending){pending(p);await durableRecord(this.store.path('runtime-pending.json'),p);this.transaction=p;}
+  private async writePending(p:Pending){pending(p);await this.store.writeRecord(this.store.path('runtime-pending.json'),p);this.transaction=p;}
   private async archivePending(p:Pending){
-    const directory=join(this.runtime.userData,'runtime-recovery-history');await mkdir(directory,{recursive:true,mode:0o700});
+    const directory=join(this.runtime.userData,'runtime-recovery-history');await this.store.container(directory);
     const data=await boundedFile(this.store.path('runtime-pending.json'));demand(equal(pending(JSON.parse(data.toString('utf8'))),p),'Pending runtime record changed before settlement');
-    const path=join(directory,`${digest(data)}.pending.json`);demand(!await exists(path),'Pending settlement evidence already exists');await rename(this.store.path('runtime-pending.json'),path);await syncDirectory(directory);await syncDirectory(this.runtime.userData);this.transaction=undefined;
+    const path=join(directory,`${digest(data)}.pending.json`);demand(!await exists(path),'Pending settlement evidence already exists');await this.store.moveDistinct(this.store.path('runtime-pending.json'),path,'file');await this.store.movedBytes(path,data);this.transaction=undefined;
   }
   private async activateOwned(candidate:Generation,retry=false){
     demand(!this.runtime.view().pid&&!this.transaction,'Activation requires stopped, unambiguous lifecycle ownership');
@@ -169,7 +170,7 @@ export class RuntimeUpdates extends EventEmitter{
       }
       throw error;
     }
-    if(!profile.attempts.some(a=>a.id===to.id)){profile.attempts.push({id:to.id,sequence:to.sequence});await durableRecord(this.store.path('runtime-profile.json'),profile);}
+    if(!profile.attempts.some(a=>a.id===to.id)){profile.attempts.push({id:to.id,sequence:to.sequence});await this.store.writeRecord(this.store.path('runtime-profile.json'),profile);}
     await this.store.choose(to);p.phase='selected';await this.writePending(p);this.current=to;this.staged=undefined;this.runtime.selectResources(this.store.root(to.id));
     this.update('staged',`Paired runtime ${to.version} selected. Start will take a fresh under-lock backup; actual readiness is still pending.`);
   }
@@ -209,7 +210,7 @@ export class RuntimeUpdates extends EventEmitter{
   async spawned(pid:number){
     demand(integer(pid,1),'Spawn returned no owned native PID; no startup proof is claimed');
     if(this.transaction){const p={...this.transaction,pid};await this.writePending(p);this.startingPending=p;}
-    if(this.serverActivity){this.serverActivity={...this.serverActivity,proof:{pid,closed:false}};await durableRecord(this.store.path('runtime-activity.json'),this.serverActivity);}
+    if(this.serverActivity){this.serverActivity={...this.serverActivity,proof:{pid,closed:false}};await this.store.writeRecord(this.store.path('runtime-activity.json'),this.serverActivity);}
   }
   private async captureNative(p:Pending):Promise<{pending:Pending;backup:Backup|null}>{
     const ack=await readNativeAck(this.store,p);let snapshot:Backup|null=null;
@@ -284,10 +285,10 @@ export class RuntimeUpdates extends EventEmitter{
     await this.fence.retire(sha);
     const path=this.store.path('shutdown-failed.json');
     if(await exists(path)){
-      const old=await boundedFile(path),directory=join(this.runtime.diagnostics,'failure-history');await mkdir(directory,{recursive:true,mode:0o700});const archived=join(directory,digest(old)+'.json');
-      if(await exists(archived))demand((await boundedFile(archived)).equals(old),'Archived failure bytes changed');else await durableBytes(archived,old,true);
+      const old=await boundedFile(path),directory=join(this.runtime.diagnostics,'failure-history');await this.store.container(directory);const archived=join(directory,digest(old)+'.json');
+      if(await exists(archived))demand((await boundedFile(archived)).equals(old),'Archived failure bytes changed');else await this.store.writeBytes(archived,old,true);
     }
-    await durableBytes(path,data);
+    await this.store.writeBytes(path,data);
   }
   async retry():Promise<UpdateView>{
     return this.runtime.idleOperation('Explicitly retry quarantined runtime',async()=>{
@@ -313,7 +314,7 @@ export class RuntimeUpdates extends EventEmitter{
     demand(this.failureSerial===failureSerial,'A new failure superseded recovery finalization');
     await this.bookkeep(async()=>{
       await this.store.choose(selected);await this.fence.publish(receipt,'active');
-      if(failedCandidate){const profile=await this.store.profile();if(!profile.failed.includes(failedCandidate.id)){profile.failed.push(failedCandidate.id);await durableRecord(this.store.path('runtime-profile.json'),profile);}}
+      if(failedCandidate){const profile=await this.store.profile();if(!profile.failed.includes(failedCandidate.id)){profile.failed.push(failedCandidate.id);await this.store.writeRecord(this.store.path('runtime-profile.json'),profile);}}
       const completed={...p,phase:'recovered' as const,recovery:{kind:receipt.kind,receiptSha256:sha}};await this.writePending(completed);const activity=await this.fence.activity();demand(activity&&activity.id===receipt.fenceId&&activity.receiptSha256===sha,'Recovery settlement token changed');await this.fence.clean(activity,{receipt:sha});await this.archivePending(completed);
       this.current=selected;this.committed=selected;this.runtime.selectResources(this.store.root(selected.id));
     });
@@ -343,7 +344,7 @@ export class RuntimeUpdates extends EventEmitter{
     const failureSerial=this.failureSerial,activityId=randomUUID(),preName=fileName('pre-restore'),prePath=backupPath(this.store,preName);
     const intent={format:1,id:randomUUID(),pendingSha256:await this.fence.rememberBytes(originalBytes),oldActivitySha256:oldBytes?await this.fence.rememberBytes(oldBytes):null,markerSha256:p.failureSha256,previousSha256:previous?.sha256??null,selected:p.to,prior:p.from,candidate:p.to,backupName:p.migrationName,backupSha256:ack.sha256,activityId,target:this.policy.target},intentSha=await this.fence.remember(intent);
     p={...p,nativeAck:ack};await this.writePending({...p,phase:'recovering',recovery:{kind:'restore',intentSha256:intentSha,preRestoreName:preName,inputSha256:ack.sha256}});
-    const token:Activity={format:1,id:activityId,receiptSha256:previous?.sha256??null,kind:'recovery',state:'active',from:p.to,selected:p.to,pendingId:p.id,proof:{intent:intentSha}};await durableRecord(this.store.path('runtime-activity.json'),token);this.recoveryEpoch=failureSerial;
+    const token:Activity={format:1,id:activityId,receiptSha256:previous?.sha256??null,kind:'recovery',state:'active',from:p.to,selected:p.to,pendingId:p.id,proof:{intent:intentSha}};await this.store.writeRecord(this.store.path('runtime-activity.json'),token);this.recoveryEpoch=failureSerial;
     const stillOwned=async()=>{
       await this.runtime.verifyFailureGate();demand(equal(await this.fence.evidence(intentSha),intent)&&equal(await this.fence.evidence(intent.pendingSha256),pending(JSON.parse(originalBytes.toString('utf8')))),'Restore immutable intent/pending evidence changed');if(intent.oldActivitySha256)demand(equal(await this.fence.evidence(intent.oldActivitySha256),old),'Restore original activity evidence changed');await this.store.load(p.from);await this.store.load(p.to);if(previous)await this.fence.lineage(previous.sha256);const live=await readPending(this.store),activity=await this.fence.activity();
       demand(this.failureSerial===failureSerial&&await this.fence.markerSha256()===p.failureSha256&&equal(selection(await record(this.store.path('runtime-selection.json'))),p.to)&&equal(await this.fence.pointer(),previous)&&live.phase==='recovering'&&equal({...live,phase:p.phase,recovery:p.recovery},p)&&live.recovery?.intentSha256===intentSha&&equal(activity,token),'Restore recovery intent/activity/selection/marker was superseded');await this.runtime.verifyFailureGate();demand(this.failureSerial===failureSerial,'A new failure invalidated restore recovery authority');
@@ -351,8 +352,8 @@ export class RuntimeUpdates extends EventEmitter{
     const unchangedAttempt=async(reason:string)=>{
       await stillOwned();demand(this.recoveryStarted===this.recoveryCompletions.length&&this.recoveryCompletions.every(c=>c.outcome==='unchanged'&&c.code>0),'Recovery authority outcome is not strictly unchanged');
       await this.fence.remember({format:1,kind:'restore-attempt-settled',intentSha256:intentSha,reason,authorities:this.recoveryCompletions.map(c=>({...c,closed:true,signal:null}))});
-      if(oldBytes)await durableBytes(this.store.path('runtime-activity.json'),oldBytes);else{await unlink(this.store.path('runtime-activity.json'));await syncDirectory(this.runtime.userData);}
-      await durableBytes(this.store.path('runtime-pending.json'),originalBytes);this.transaction=pending(JSON.parse(originalBytes.toString('utf8')));
+      if(oldBytes)await this.store.writeBytes(this.store.path('runtime-activity.json'),oldBytes);else{await this.store.retireControl(this.store.path('runtime-activity.json'),'activity');}
+      await this.store.writeBytes(this.store.path('runtime-pending.json'),originalBytes);this.transaction=pending(JSON.parse(originalBytes.toString('utf8')));
     };
     let staged:{stage:string;path:string}|undefined,receipt:Receipt|undefined,receiptSha:string|undefined,actualRestore:unknown,primary:unknown,writeBoundary=false;
     try{
@@ -423,8 +424,8 @@ export class RuntimeUpdates extends EventEmitter{
       const completion=this.recoveryAuthority;
       if(error instanceof AuthorityUnchangedError&&completion?.command==='snapshot'&&completion.outcome==='unchanged'&&completion.code!==0&&await this.fence.markerSha256()===markerSha&&this.failureSerial===failureSerial){
         await this.fence.remember({kind:'current-validation-refused',intent,completion:{...completion,signal:null,closed:true}});
-        if(interruptedBytes){await durableBytes(this.store.path('runtime-pending.json'),interruptedBytes);this.transaction=interrupted;await durableBytes(this.store.path('runtime-activity.json'),oldBytes);}
-        else{await durableBytes(this.store.path('runtime-activity.json'),oldBytes);await this.archivePending(await readPending(this.store));}
+        if(interruptedBytes){await this.store.writeBytes(this.store.path('runtime-pending.json'),interruptedBytes);this.transaction=interrupted;await this.store.writeBytes(this.store.path('runtime-activity.json'),oldBytes);}
+        else{await this.store.writeBytes(this.store.path('runtime-activity.json'),oldBytes);await this.archivePending(await readPending(this.store));}
       }
       throw error;
     }

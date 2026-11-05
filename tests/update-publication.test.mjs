@@ -1,0 +1,70 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
+import fs,{readFile,mkdir,rename,link,unlink,readdir} from 'node:fs/promises';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
+import {join,resolve,dirname} from 'node:path';
+import {metadataAcknowledgement,publishMetadata,WindowsMetadataPublication} from '../dist/update-publication.js';
+import {Runtime} from '../dist/runtime.js';
+import {RuntimeUpdates} from '../dist/updates.js';
+import {RuntimeStore,select} from '../dist/update-store.js';
+import {digest,verifyCapabilities} from '../dist/update-format.js';
+import {capableRecovered} from './update-recovery-fixture.mjs';
+import {directory,unitRuntime} from './update-fixture.mjs';
+
+const request={operation:'publish-distinct',root:resolve('unit root ü'),source:'runtime-profile.json.partial-00000000-0000-4000-8000-000000000001',destination:'runtime-profile.json',kind:'file'};
+const acknowledgement=(r,pid=123)=>({protocol:1,operation:r.operation,process:pid,root:r.root,source:r.source,destination:r.destination,kind:r.kind,published:true});
+for(const field of ['protocol','operation','process','root','source','destination','kind','published','extra'])test(`update-publication rejects wrong ${field} acknowledgement`,()=>{const a=acknowledgement(request);a[field]=field==='extra'?true:'foreign';assert.throws(()=>metadataAcknowledgement(Buffer.from(JSON.stringify(a)+'\n'),request,123));});
+for(const data of [Buffer.from('{}'),Buffer.from([255,10]),Buffer.alloc(16385),Buffer.from('{}\n{}\n')])test('update-publication rejects invalid/bounded framing',()=>assert.throws(()=>metadataAcknowledgement(data,request,123)));
+
+// This transport simulates namespace effects only. It is NOT Win32 durability qualification.
+function transport(t,{fault,hold}={}){
+ const calls=[];let release,exitObserved;const mock=t.mock.method(childProcess,'spawn',(_binary,args)=>{
+  const child=new EventEmitter();child.pid=123;child.stdout=new PassThrough();child.stderr=new PassThrough();const [,operation,root,...paths]=args,r={operation,root,source:paths.length===2?paths[0]:null,destination:paths.at(-1),kind:operation==='create-container'||operation==='move-distinct'&&paths[0]?.startsWith('runtime-staging/generation-')?'directory':'file'};calls.push(r);
+  queueMicrotask(async()=>{try{
+   if(fault?.(r))throw Error('synthetic native publication fault');
+   const src=r.source===null?null:join(root,r.source),dst=join(root,r.destination);
+   if(operation==='move-distinct'){try{await fs.lstat(dst);throw Error('existing distinct destination');}catch(error){if(error.code!=='ENOENT')throw error;}}
+   if(operation==='create-container')await mkdir(dst);else if(operation==='publish-distinct'){await link(src,dst);await unlink(src);}else await rename(src,dst);
+   const complete=()=>{child.stdout.end(JSON.stringify(acknowledgement(r))+'\n');child.emit('exit',0,null);exitObserved=true;child.emit('close',0,null);};
+   if(hold?.(r))release=complete;else complete();
+  }catch{child.stdout.end(JSON.stringify({protocol:1,operation,outcome:'unknown',error:'fixture failure'})+'\n');child.emit('close',1,null);}});return child;
+ });return{calls,release:()=>{assert(release,'No publication held');release();},held:()=>!!release,exited:()=>exitObserved,mock};
+}
+const wait=async predicate=>{for(let i=0;i<300&&!predicate();i++)await new Promise(ok=>setTimeout(ok,5));assert(predicate(),'Fixture did not reach held publication');};
+test('update-publication requires actual close, not exit or valid bytes alone',async t=>{
+ let child;const mock=t.mock.method(childProcess,'spawn',()=>{child=new EventEmitter();child.pid=123;child.stdout=new PassThrough();child.stderr=new PassThrough();return child;});let settled=false;const task=publishMetadata(resolve('fixture.exe'),request).then(()=>{settled=true;});child.stdout.write(JSON.stringify(acknowledgement(request))+'\n');child.emit('exit',0,null);await Promise.resolve();assert.equal(settled,false);child.emit('close',0,null);await task;mock.mock.restore();
+});
+for(const mode of ['signal','nonzero','overflow','wrong-ack','stderr','spawn-error','stdout-error','stderr-error'])test(`update-publication ${mode} remains unknown`,async t=>{
+ t.mock.method(childProcess,'spawn',()=>{const c=new EventEmitter();c.pid=123;c.stdout=new PassThrough();c.stderr=new PassThrough();queueMicrotask(()=>{if(mode==='spawn-error')c.emit('error',Error('fixture spawn'));if(mode==='stdout-error')c.stdout.emit('error',Error('fixture pipe'));if(mode==='stderr-error')c.stderr.emit('error',Error('fixture pipe'));c.stdout.end(mode==='overflow'?Buffer.alloc(16385):JSON.stringify(acknowledgement(request,mode==='wrong-ack'?456:123))+'\n');if(mode==='stderr')c.stderr.write('unexpected');c.emit('close',mode==='nonzero'?1:0,mode==='signal'?'SIGTERM':null);});return c;});await assert.rejects(publishMetadata(resolve('fixture.exe'),request));
+});
+test('update-publication prepares closed/fsynced bytes and never retries unknown consumed staging',async t=>{
+ const root=await directory('metadata-consumed'),faults=[],io=transport(t);const publisher=new WindowsMetadataPublication(root,async()=>resolve('fixture.exe'),e=>faults.push(e));const path=join(root,'runtime-profile.json');await publisher.bytes(path,Buffer.from('first'),true);assert.equal(await readFile(path,'utf8'),'first');
+ io.mock.mock.restore();t.mock.method(childProcess,'spawn',(_binary,args)=>{const c=new EventEmitter();c.pid=123;c.stdout=new PassThrough();c.stderr=new PassThrough();queueMicrotask(async()=>{await rename(join(root,args[3]),join(root,args[4]));c.stdout.end('{}\n');c.emit('close',0,null);});return c;});await assert.rejects(publisher.bytes(path,Buffer.from('published but ACK unknown'),false),/UNKNOWN/);assert.equal(await readFile(path,'utf8'),'published but ACK unknown');await assert.rejects(publisher.bytes(path,Buffer.from('must not replay'),false),/no replay/);assert.equal(faults.length,1);const store=new RuntimeStore(root,{});store.metadata=publisher;const stage=join(root,'runtime-staging','generation-evidence');await mkdir(stage,{recursive:true});await fs.writeFile(join(stage,'retained.txt'),'failure evidence');await assert.rejects(store.cleanup(stage),/no cleanup attempted/);assert.equal(await readFile(join(stage,'retained.txt'),'utf8'),'failure evidence');
+});
+test('update-publication file staging flush failure prevents native invocation',async t=>{
+ const root=await directory('metadata-flush'),original=fs.open,io=transport(t),faults=[];t.mock.method(fs,'open',async(...args)=>{const handle=await original(...args);handle.sync=async()=>{throw Error('fixture flush failure');};return handle;});const publisher=new WindowsMetadataPublication(root,async()=>resolve('fixture.exe'),e=>faults.push(e));await assert.rejects(publisher.bytes(join(root,'runtime-profile.json'),Buffer.from('x'),true),/[Ss]taging failed/);assert.equal(io.calls.length,0);assert.equal(faults.length,1);
+});
+test('update-publication container and generation/history moves are native operations, existing container is not published',async t=>{
+ const root=await directory('metadata-moves'),io=transport(t),publisher=new WindowsMetadataPublication(root,async()=>resolve('fixture.exe'),()=>{});await publisher.container(join(root,'diagnostics','failure-history'));assert.deepEqual(io.calls.map(c=>c.destination),['diagnostics','diagnostics/failure-history']);await publisher.container(join(root,'diagnostics'));assert.equal(io.calls.length,2);
+ await mkdir(join(root,'runtime-staging','generation-unit'),{recursive:true});await mkdir(join(root,'runtimes'));await publisher.move(join(root,'runtime-staging','generation-unit'),join(root,'runtimes','source-'+'a'.repeat(64)),'directory');assert.equal(io.calls.at(-1).kind,'directory');
+});
+for(const boundary of ['activity','pending'])for(const mode of ['hold','failure'])test(`update-publication ${boundary} ${mode} prevents the following authority/spawn`,async t=>{
+ const f=await capableRecovered(),runtime=new Runtime(f.store.root(f.b.id),f.user),updates=new RuntimeUpdates(runtime,f.policy,async()=>true);updates.current=f.b;updates.committed=f.b;updates.initialization=Promise.resolve();const match=r=>r.destination===`runtime-${boundary}.json`,io=transport(t,{hold:mode==='hold'?match:undefined,fault:mode==='failure'?match:undefined});updates.store.metadata=new WindowsMetadataPublication(f.user,async()=>resolve('fixture.exe'),error=>runtime.blockAmbiguousSave(error));let invoked=0;
+ if(boundary==='pending')updates.transaction={...structuredClone(f.p),kind:'start',phase:'selected',from:select(f.b),to:select(f.b),pid:null,nativeAck:null,readiness:null,failureSha256:null,recovery:null};
+ const task=runtime.idleOperation('metadata ordering fixture',async()=>{if(boundary==='activity')await updates.authorityStarting('snapshot',join(updates.store.root(f.b.id),'openrotmg'));else await updates.beforeSpawn(join(updates.store.root(f.b.id),'openrotmg'));invoked++;});
+ if(mode==='hold'){await wait(io.held);assert.equal(invoked,0);io.release();await task;assert.equal(invoked,1);}else{await assert.rejects(task,/UNKNOWN/);assert.equal(invoked,0);await runtime.verifyFailureGate().catch(()=>{});assert.equal(runtime.view().status,'failed');}
+});
+
+test('update-publication absent root or unsupported bundle prevents any mutation/native invocation',async t=>{
+ const root=await directory('metadata-root'),io=transport(t),faults=[],absent=join(root,'absent'),p=new WindowsMetadataPublication(absent,async()=>resolve('fixture.exe'),e=>faults.push(e));await assert.rejects(p.prepare(),/UNKNOWN/);assert.equal(io.calls.length,0);await assert.rejects(fs.stat(absent),{code:'ENOENT'});
+ const missing=new WindowsMetadataPublication(root,async()=>{throw Error('Bundled desktopMetadata capability missing');},e=>faults.push(e));await assert.rejects(missing.bytes(join(root,'runtime-profile.json'),Buffer.from('x'),true),/capability missing/);assert.equal(io.calls.length,0);assert.deepEqual(await readdir(root),[]);assert.equal(faults.length,2);
+});
+test('update-publication helper capability belongs to verified bundled identity, not selected historical A',async()=>{
+ const root=await directory('metadata-bundle'),bundle=join(root,'bundle'),identity=await unitRuntime(bundle,{desktopMetadata:1}),user=join(root,'user');await mkdir(user);const policy={target:'linux-x64',baseline:{root:bundle,mode:'source',startupBackup:1,clientNamespace:1,identitySha256:digest(await readFile(join(bundle,'build-identity.json')))}};policy.metadataBundle={baseline:policy.baseline,publicKey:'fixture-unused-source-key',assetOrigin:'https://github.com'};const store=new RuntimeStore(user,policy);await fs.writeFile(join(user,'runtime-selection.json'),'historical A selection remains untouched');assert.equal(await store.bundledMetadataBinary(),join(bundle,'openrotmg.exe'));assert.equal(await readFile(join(user,'runtime-selection.json'),'utf8'),'historical A selection remains untouched');await verifyCapabilities(bundle,identity.pins,1,1,1);
+ const old=join(root,'old');const oldIdentity=await unitRuntime(old);await assert.rejects(verifyCapabilities(old,oldIdentity.pins,1,1,1),/desktopMetadata/);await verifyCapabilities(old,oldIdentity.pins,1,1);
+});
+for(const role of ['activity','refusal'])test(`update-publication ${role} retirement binds bytes/hash and never overwrites history`,async t=>{
+ const root=await directory('metadata-retirement'),io=transport(t),store=new RuntimeStore(root,{});store.metadata=new WindowsMetadataPublication(root,async()=>resolve('fixture.exe'),()=>{});const path=store.path(role==='activity'?'runtime-activity.json':'runtime-check-refusal.json'),bytes=Buffer.from('synthetic '+role);await store.writeBytes(path,bytes);await store.retireControl(path,role);const retired=join(root,'runtime-recovery-history',digest(bytes)+'.'+role+'.json');assert.deepEqual(await readFile(retired),bytes);await assert.rejects(fs.stat(path),{code:'ENOENT'});await store.writeBytes(path,bytes);await assert.rejects(store.retireControl(path,role),/UNKNOWN/);assert.deepEqual(await readFile(retired),bytes);assert.deepEqual(await readFile(path),bytes);assert.equal(io.calls.at(-1).operation,'move-distinct');
+});

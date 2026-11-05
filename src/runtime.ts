@@ -76,7 +76,7 @@ export class Runtime extends EventEmitter {
     this.unsafe = true;
     this.line(String(error));
     if (!this.failureGate) {
-      this.failureGate = mkdir(this.userData, { recursive: true, mode: 0o700 })
+      this.failureGate = (this.updates&&process.platform==='win32'?Promise.resolve():mkdir(this.userData, { recursive: true, mode: 0o700 }))
         .then(() => this.updates ? this.updates.persistFailure(error) : writeFile(join(this.userData, 'shutdown-failed.json'), JSON.stringify({ at: new Date().toISOString(), error: String(error) }), { mode: 0o600, flush: true }))
         .then(() => undefined, cause => {
           const failure = new Error(`Could not persist shutdown failure: ${cause}. Failure gate is NOT recorded; launcher ownership must be retained.`);
@@ -108,7 +108,7 @@ export class Runtime extends EventEmitter {
     return this.boot;
   }
   private async startOwned(installedOnly: boolean) {
-    await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
+    if(this.updates)await this.updates.prepareDiagnostics();else await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
     await this.updates?.beforeStart(installedOnly);
     if (this.closing && this.updates) throw this.updates.canceledBeforeSpawn();
     if (await this.exists(join(this.userData, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized()) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');

@@ -1,10 +1,11 @@
+import {RuntimeStore,RuntimeUpdates} from './update-publication-fixture.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,writeFile,unlink} from 'node:fs/promises';
 import {join} from 'node:path';
 import {Runtime} from '../dist/runtime.js';
-import {RuntimeUpdates} from '../dist/updates.js';
-import {RuntimeStore} from '../dist/update-store.js';
+
+
 import {authenticateManifest,digest,verifyManifest} from '../dist/update-format.js';
 import {directory,unitRuntime,keyPair,publicPEM,manifestFor,signed} from './update-fixture.mjs';
 
