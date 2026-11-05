@@ -4,6 +4,7 @@ import {createRequire} from 'node:module';
 import {readFile,mkdir,mkdtemp,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
+import ts from 'typescript';
 import {installerBindings,validateInstallerPromotion} from '../scripts/installer-inputs.mjs';
 import {installedPaths} from '../scripts/installer-install.mjs';
 import {REPOSITORY} from '../dist/update-format.js';
@@ -44,6 +45,14 @@ test('installer maker precheck refuses a source preview or unsigned release meta
  for(const baseline of [{mode:'source'},{mode:'release',manifest:Buffer.from('{}').toString('base64'),signature:Buffer.alloc(64).toString('base64')}]){
   await writeFile(join(root,'dist/runtime-baseline.json'),JSON.stringify(baseline));const result=spawnSync(process.execPath,[resolve('scripts/installer-inputs.mjs'),'check'],{cwd:root,encoding:'utf8'});assert.notEqual(result.status,0);assert.match(result.stderr,baseline.mode==='source'?/never a source preview/:/signature/i);
  }
+});
+test('verify-installer explicitly selects nativeGame normal cache without browser request interception',async()=>{
+ const source=await readFile('scripts/verify-installer.mjs','utf8'),file=ts.createSourceFile('verify-installer.mjs',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.JS),calls=[];
+ const visit=node=>{if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='nativeGame')calls.push(node);ts.forEachChild(node,visit);};visit(file);
+ assert.equal(calls.length,1);const options=calls[0].arguments[0];assert(ts.isObjectLiteralExpression(options));
+ const normalCache=options.properties.filter(p=>ts.isPropertyAssignment(p)&&p.name.getText(file)==='normalCache');assert.equal(normalCache.length,1);assert.equal(normalCache[0].initializer.kind,ts.SyntaxKind.TrueKeyword);
+ assert(!/\.\s*(?:route|routeFromHAR|setRequestInterception)\s*\(|Network\.(?:setCacheDisabled|setRequestInterception|setBlockedURLs)|Fetch\.enable/.test(source));
+ assert(source.includes('Normal-cache browser requests are uncontrolled; only update availability is controlled (HTTP 503)'));
 });
 test('offline installer workflow is manual, native-only, read-only and never signs/publishes or rebuilds runtime',async()=>{
  const workflow=await readFile('.github/workflows/offline-installers.yml','utf8'),producer=await readFile('scripts/installer-inputs.mjs','utf8'),verifier=await readFile('scripts/verify-installer.mjs','utf8');
