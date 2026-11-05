@@ -92,5 +92,6 @@ jobs:
             .qa/installer-delivery/*
             .qa/installer-tests/run-*/installer-result.json
             .qa/installer-tests/run-*/msi-*.json
+            .qa/installer-tests/run-*/windows-write-probe-*.json
             .qa/installer-tests/run-*/*.png
             .qa/installer-tests/run-*/*.log

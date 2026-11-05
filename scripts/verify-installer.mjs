@@ -16,6 +16,7 @@ import {processArgv} from './process-argv.mjs';
 import {acquireQaPortLease} from './qa-port.mjs';
 import {packagedChildReady} from './package-readiness.mjs';
 import {installedPaths,installArtifact,writableOwnedInstallation} from './installer-install.mjs';
+import {assertWindowsInstallerWriteDenied} from './installer-write-probe.mjs';
 
 assert.equal(process.argv.length,3,'npm run verify:release -- ARTIFACT (with adjacent installer-receipt.json)');
 if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
@@ -43,7 +44,11 @@ async function journey(){
   const manifest=verifyManifest(Buffer.from(config.manifest,'base64'),Buffer.from(config.signature,'base64'),MANIFEST_PUBLIC_KEY,receipt.releaseId,receipt.tag,targetName(),launcherVersion,'https://github.com');
   assert(manifest.sequence>0);assert.equal(manifest.sequence,receipt.sequence);assert.equal(manifest.payload.sha256,receipt.runtimeArchive.sha256);assert.deepEqual(manifest.pins,receipt.pins);assert.equal(config.identitySha256,manifest.payload.identitySha256);
   report.baseline=manifest;report.runtime=await verifyRuntime(runtime,targetName(),manifest);report.linkage=runtimeLinkage(binary);report.installed={installation,executable,resources,executableSha256:await hashFile(executable),asarSha256:await hashFile(join(resources,'app.asar'))};
-  restoreProtection=await protectInstallation(installation);await assertInstallationProtected(installation,runtime);
+  const assertProtected=async phase=>{
+   if(process.platform!=='win32')return assertInstallationProtected(installation,runtime);
+   const proof=await assertWindowsInstallerWriteDenied(installation,runtime,out,phase);(report.windowsWriteProbes??=[]).push(proof);
+  };
+  restoreProtection=await protectInstallation(installation);await assertProtected('install');
   check('Actual installed/extracted signed positive runtime baseline matches exact delivery archive, pins and protected non-ASCII path',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
@@ -82,10 +87,10 @@ async function journey(){
   check('Full backup/restore, cold reopen and active-game Close preserve progress without orphan processes',true);
   const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;await writableOwnedInstallation(installation);
   report.installations.push(await installArtifact(artifact,installation,out,true));assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
-  restoreProtection=await protectInstallation(installation);await assertInstallationProtected(installation,runtime);await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
+  restoreProtection=await protectInstallation(installation);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
   check('Same-version native reinstall/repair preserves identical userData database and real playable saved progress',true);
   report.status='passed';
- }catch(error){if(error.installerInvocation)report.installerInvocation=error.installerInvocation;report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
+ }catch(error){if(error.installerInvocation)report.installerInvocation=error.installerInvocation;if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
   for(const [name,cleanup] of [['browser',()=>game?.close()],['launcher',()=>app?.close()],['install protection',()=>restoreProtection?.()],['display',()=>display?.close()],['port lease',()=>lease?.release()]])try{await cleanup();}catch(error){report.errors.push(`${name}: ${error.stack??error}`);}
   if(serverPid&&alive(serverPid))report.errors.push(`Owned server ${serverPid} remains alive; NOT force-killed, no save success claimed`);
