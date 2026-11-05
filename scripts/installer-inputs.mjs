@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {mkdir,readFile,writeFile,copyFile,readdir,stat} from 'node:fs/promises';
+import {mkdir,readFile,writeFile,copyFile,readdir,lstat} from 'node:fs/promises';
 import {openSync,closeSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -16,48 +16,66 @@ export function installerBindings(env,head){
  assert.equal(installerSourceHead,head,'Dispatch ref must resolve to the requested installer SHA');
  return {installerSourceHead,runtimeHead,runtimeNativeRun,runtimePromotedRun,tag};
 }
-export function validateInstallerPromotion(binding,{promotion,native,validated,draft,release},target){
+export function validateInstallerPromotion(binding,{promotion,native,validated,draft},target){
  assert(/^[a-f0-9]{40}$/.test(validated.promotionHead),'Exact protected promotion-controller SHA required');
  for(const [run,id,path] of [[promotion,binding.runtimePromotedRun,'.github/workflows/promote-runtime.yml'],[native,binding.runtimeNativeRun,'.github/workflows/runtime-updates-test.yml']]){
-  assert.equal(String(run.id),id);assert.equal(run.head_sha,run===promotion?validated.promotionHead:binding.runtimeHead);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,path);assert.equal(run.conclusion,'success');assert.equal(run.head_repository.full_name,REPOSITORY);
+  assert.equal(String(run.id),id);assert.equal(run.head_sha,run===promotion?validated.promotionHead:binding.runtimeHead);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,path);assert.equal(run.status,'completed');assert.equal(run.conclusion,'success');assert.equal(run.repository.full_name,REPOSITORY);assert.equal(run.head_repository.full_name,REPOSITORY);
  }
  assert.equal(validated.head,binding.runtimeHead);assert.equal(String(validated.runId),binding.runtimeNativeRun);assert.equal(validated.tag,binding.tag);
  assert(draft&&Number.isSafeInteger(draft.id)&&draft.id>0,'Protected promotion must retain its exact draft ID');assert.equal(draft.draft,true);assert.equal(draft.tag_name,binding.tag);assert.equal(draft.target_commitish,binding.runtimeHead);
- assert.equal(release.id,draft.id);assert.equal(release.tag_name,binding.tag);assert.equal(release.target_commitish,binding.runtimeHead);
  assert(Number.isSafeInteger(validated.sequence)&&validated.sequence>0);
  assert.equal(validated.targets.filter(entry=>entry.target===target).length,1,'Exactly one promoted native target required');
- const entry=validated.targets.find(entry=>entry.target===target);
- const assets=['.json','.json.sig','.tar.gz'].map(suffix=>{
-  const name=`runtime-${target}${suffix}`,matches=release.assets.filter(asset=>asset.name===name);assert.equal(matches.length,1,'Exactly one immutable release asset required: '+name);
-  const asset=matches[0];requireReleaseAssetMetadata(release,asset,binding.tag);
-  if(suffix==='.tar.gz'){const original=draft.assets.filter(a=>a.name===name);assert.equal(original.length,1);assert.equal(asset.id,original[0].id,'Native archive asset was replaced after protected promotion');assert.equal(asset.size,original[0].size);}
-  return asset;
- });
- return {entry,assets};
+ const entry=validated.targets.find(entry=>entry.target===target),name=`runtime-${target}.tar.gz`,assets=draft.assets.filter(asset=>asset.name===name);assert.equal(assets.length,1,'Exactly one original archive asset required in protected draft snapshot');
+ const archiveAsset=assets[0];requireReleaseAssetMetadata(draft,archiveAsset,binding.tag);assert.equal(archiveAsset.size,entry.payload.bytes);assert.equal(archiveAsset.digest,'sha256:'+entry.payload.sha256);
+ return {entry,archiveAsset};
+}
+export function requireInstallerArtifact(list,run,name){
+ assert(Number.isSafeInteger(run.id)&&run.id>0,'Positive provider run ID required');
+ assert.equal(list.total_count,list.artifacts.length,'Artifact listing must be complete');
+ const matches=list.artifacts.filter(artifact=>artifact.name===name);assert.equal(matches.length,1,'Exactly one original Actions artifact required: '+name);
+ const artifact=matches[0];assert(Number.isSafeInteger(artifact.id)&&artifact.id>0,'Positive Actions artifact ID required');assert.equal(artifact.expired,false,'Actions artifact expired');assert(Date.parse(artifact.expires_at)>Date.now(),'Actions artifact expiry reached');
+ assert(Number.isSafeInteger(run.repository.id)&&run.repository.id>0&&Number.isSafeInteger(run.head_repository.id)&&run.head_repository.id>0,'Provider repository IDs required');
+ assert.equal(artifact.workflow_run.id,run.id);assert.equal(artifact.workflow_run.head_sha,run.head_sha);assert.equal(artifact.workflow_run.head_branch,'main');assert.equal(artifact.workflow_run.repository_id,run.repository.id);assert.equal(artifact.workflow_run.head_repository_id,run.head_repository.id);
+ assert.equal(artifact.url,`https://api.github.com/repos/${REPOSITORY}/actions/artifacts/${artifact.id}`);assert.equal(artifact.archive_download_url,artifact.url+'/zip');
+ return artifact;
+}
+async function downloadInstallerArtifact(api,download,run,name,destination){
+ const endpoint=`actions/runs/${run.id}/artifacts?per_page=100`,before=requireInstallerArtifact(await api(endpoint),run,name);
+ await download(String(run.id),name,destination);
+ const after=requireInstallerArtifact(await api(endpoint),run,name);assert.deepEqual(after,before,'Actions artifact identity changed during download');
+ return before;
 }
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim();
 const gh=(...args)=>execFileSync('gh',args,{maxBuffer:4*1024*1024});
 const json=async path=>JSON.parse(await readFile(path,'utf8'));
+export async function prepareInstallerInputs(binding,{root,target,launcher,pins,api,download}){
+ const promotion=await api(`actions/runs/${binding.runtimePromotedRun}`),native=await api(`actions/runs/${binding.runtimeNativeRun}`);
+ // Authenticate the historical signing checkpoint, never query a draft endpoint with the read-only installer token.
+ const promotionArtifact=await downloadInstallerArtifact(api,download,promotion,'runtime-draft-receipts',join(root,'promotion'));
+ const validated=await json(join(root,'promotion/validated/validated.json')),draft=await json(join(root,'promotion/draft.json'));
+ const {entry,archiveAsset}=validateInstallerPromotion(binding,{promotion,native,validated,draft},target);
+ const name=`runtime-${target}.json`,signed=join(root,'promotion/signed',name),rawSignature=signed+'.sig';
+ const value=verifyManifest(await boundedFile(signed,64*1024),await boundedFile(rawSignature,64),MANIFEST_PUBLIC_KEY,draft.id,binding.tag,target,launcher,'https://github.com');
+ assert.equal(value.version,binding.tag.slice(1));assert.equal(value.sequence,validated.sequence);assert.deepEqual(value.pins,pins);assert.deepEqual(value.pins,entry.pins);assert.equal(value.payload.id,archiveAsset.id);assert.equal(value.payload.bytes,archiveAsset.size);assert.equal(archiveAsset.digest,'sha256:'+value.payload.sha256);assert.equal(entry.startupBackup,1);assert.equal(entry.clientNamespace,1);
+ for(const key of ['name','sha256','bytes','expandedBytes','identitySha256','binarySha256','assetsSha256'])assert.equal(value.payload[key],entry.payload[key],'Signed archive differs from tested promoted archive: '+key);
+ const os={'linux-x64':'ubuntu-22.04','win32-x64':'windows-2022','darwin-arm64':'macos-15'}[target],artifactName=`runtime-update-${os}`,path=`runtime-inputs/C/${value.payload.name}`;
+ assert(entry.archive.endsWith('/'+artifactName+'/'+path),'Promoted native archive path differs from exact C payload path');
+ const nativeRoot=join(root,'native'),nativeArtifact=await downloadInstallerArtifact(api,download,native,artifactName,nativeRoot),archive=join(nativeRoot,...path.split('/'));
+ for(const part of [nativeRoot,join(nativeRoot,'runtime-inputs'),join(nativeRoot,'runtime-inputs/C'),archive])assert(!(await lstat(part)).isSymbolicLink(),'Native archive path must not traverse a symlink');
+ const info=await lstat(archive);assert(info.isFile(),'Native runtime archive must be a regular file');assert.equal(info.size,value.payload.bytes,'Native runtime archive byte length mismatch');assert.equal(await hashFile(archive),value.payload.sha256,'Native runtime archive digest mismatch');
+ const manifest=join(root,name),signature=manifest+'.sig';await copyFile(signed,manifest);await copyFile(rawSignature,signature);
+ const inputs=join(root,'build-inputs.json');await writeFile(inputs,JSON.stringify({runtimeRelease:{manifest,signature,archive}},null,2)+'\n',{flag:'wx'});
+ const actionsInput={artifactId:nativeArtifact.id,artifactName:nativeArtifact.name,runId:native.id,sourceHead:native.head_sha,path,sha256:value.payload.sha256,bytes:info.size};
+ const attribution={...binding,runtimePromotionHead:validated.promotionHead,promotionArtifactId:promotionArtifact.id,target,releaseId:draft.id,releaseSnapshot:'historical protected promotion artifact; no live draft lookup',sequence:value.sequence,runtimeArchive:{name:archiveAsset.name,assetId:archiveAsset.id,sha256:value.payload.sha256,bytes:value.payload.bytes,actionsInput},pins:value.pins};
+ await writeFile(join(root,'attribution.json'),JSON.stringify(attribution,null,2)+'\n',{flag:'wx'});return {inputs,attribution};
+}
 export async function prepareInstaller(){
- assert.equal(process.env.GITHUB_ACTIONS,'true','Protected draft consumption requires the owned hosted workflow');
+ assert.equal(process.env.GITHUB_ACTIONS,'true','Protected artifact consumption requires the owned hosted workflow');
  const binding=installerBindings(process.env,git('rev-parse','HEAD'));assert.equal(process.env.GITHUB_SHA,binding.installerSourceHead);
  assert.equal(git('status','--porcelain','--untracked-files=no'),'','Installer source must be clean');
  const root=resolve('.qa/installer-inputs');await mkdir('.qa',{recursive:true});await mkdir(root);
- const api=path=>JSON.parse(gh('api',`repos/${REPOSITORY}/${path}`));
- const promotion=api(`actions/runs/${binding.runtimePromotedRun}`),native=api(`actions/runs/${binding.runtimeNativeRun}`);
- gh('run','download',binding.runtimePromotedRun,'--repo',REPOSITORY,'--name','runtime-draft-receipts','--dir',join(root,'promotion'));
- const validated=await json(join(root,'promotion/validated/validated.json')),draft=await json(join(root,'promotion/draft.json')),target=targetName();
- assert(Number.isSafeInteger(draft.id)&&draft.id>0,'Protected promotion must retain its exact draft ID');
- const release=api(`releases/${draft.id}`);
- const {entry,assets}=validateInstallerPromotion(binding,{promotion,native,validated,draft,release},target);
- for(const asset of assets){const path=join(root,asset.name),fd=openSync(path,'wx');try{execFileSync('gh',['api',`repos/${REPOSITORY}/releases/assets/${asset.id}`,'-H','Accept: application/octet-stream'],{stdio:['ignore',fd,'inherit']});}finally{closeSync(fd);}assert.equal((await stat(path)).size,asset.size,'Downloaded exact asset size mismatch');}
- const [manifestAsset,signatureAsset,archiveAsset]=assets,manifest=join(root,manifestAsset.name),signature=join(root,signatureAsset.name),archive=join(root,archiveAsset.name);
- const value=verifyManifest(await boundedFile(manifest,64*1024),await boundedFile(signature,64),MANIFEST_PUBLIC_KEY,release.id,binding.tag,target,(await json('package.json')).version,'https://github.com');
- assert.equal(value.sequence,validated.sequence);assert.deepEqual(value.pins,await json('source-pins.json'));assert.deepEqual(value.pins,entry.pins);assert.equal(value.payload.id,archiveAsset.id);assert.equal(value.payload.bytes,archiveAsset.size);
- for(const key of ['sha256','bytes','expandedBytes','identitySha256','binarySha256','assetsSha256'])assert.equal(value.payload[key],entry.payload[key],'Signed archive differs from tested promoted archive: '+key);
- assert.equal(await hashFile(archive),value.payload.sha256);
- const inputs=join(root,'build-inputs.json');await writeFile(inputs,JSON.stringify({runtimeRelease:{manifest,signature,archive}},null,2)+'\n',{flag:'wx'});
- await writeFile(join(root,'attribution.json'),JSON.stringify({...binding,runtimePromotionHead:validated.promotionHead,target,releaseId:release.id,sequence:value.sequence,runtimeArchive:{name:archiveAsset.name,assetId:archiveAsset.id,sha256:value.payload.sha256,bytes:value.payload.bytes},pins:value.pins},null,2)+'\n',{flag:'wx'});
+ const api=path=>JSON.parse(gh('api',`repos/${REPOSITORY}/${path}`)),download=(run,name,destination)=>gh('run','download',run,'--repo',REPOSITORY,'--name',name,'--dir',destination);
+ const {inputs}=await prepareInstallerInputs(binding,{root,target:targetName(),launcher:(await json('package.json')).version,pins:await json('source-pins.json'),api,download});
  await writeFile(process.env.GITHUB_ENV,`OPENROTMG_BUILD_INPUTS=${inputs}\n`,{flag:'a'});
 }
 async function collectInstaller(){

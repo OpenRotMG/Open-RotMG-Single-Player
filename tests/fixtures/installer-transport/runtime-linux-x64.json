@@ -1,0 +1,49 @@
+{
+  "format": 1,
+  "releaseId": 435513734,
+  "tag": "v0.1.0",
+  "version": "0.1.0",
+  "sequence": 1,
+  "target": "linux-x64",
+  "minLauncher": "0.1.0",
+  "clientNamespace": 1,
+  "save": {
+    "cli": 1,
+    "read": [
+      21,
+      22
+    ],
+    "write": 22,
+    "startupBackup": 1
+  },
+  "pins": {
+    "server": {
+      "repository": "https://github.com/dginovker/Open-RotMG-Server",
+      "commit": "2c700135d755a4210c2204334aafee2572205ec1",
+      "dataSha256": "1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4",
+      "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
+    },
+    "client": {
+      "repository": "https://github.com/dginovker/Open-RotMG-Client",
+      "commit": "d3016983e6fa807be8bf700001e0ba2cf0fc2a7e",
+      "preparedSha256": "486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71",
+      "upstream": "https://github.com/OpenRotMG/Open-RotMG-Client"
+    },
+    "ruffle": {
+      "version": "0.7.1-openrotmg.16",
+      "sourceCommit": "89a7049965f3090e706265670df309a5128233ac",
+      "bundleSha256": "579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435"
+    }
+  },
+  "payload": {
+    "name": "runtime-linux-x64.tar.gz",
+    "bytes": 50675204,
+    "sha256": "47494f3f82d8e3173ade702e5774f047e5a2bf4d15b3304fd820231013b2c47d",
+    "expandedBytes": 111763149,
+    "assetsSha256": "1b8083d00a7bdf1bfef9fb0eda31f663a3e12f3177fa2b97c207461faafd4e82",
+    "identitySha256": "50c4c515a3dd3eb78cd134464bbc947993bc68411f64ffb88011f539f80dd518",
+    "binarySha256": "43952a94fb2149991a0428242c37f7b4817f7e4b7e77e489c896aff1e876181b",
+    "id": 714228326,
+    "url": "https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases/download/v0.1.0/runtime-linux-x64.tar.gz"
+  }
+}

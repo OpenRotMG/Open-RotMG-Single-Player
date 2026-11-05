@@ -1,0 +1,127 @@
+{
+  "head": "16ec1744e1d0cbc6a43960b968a3a7b55a1724a6",
+  "promotionHead": "8873130b08836ef12a517e6f7e4edb461e15496e",
+  "runId": 42068062946,
+  "tag": "v0.1.0",
+  "sequence": 1,
+  "targets": [
+    {
+      "archive": "/home/runner/work/Open-RotMG-Single-Player/Open-RotMG-Single-Player/evidence/runtime-update-ubuntu-22.04/runtime-inputs/C/runtime-linux-x64.tar.gz",
+      "target": "linux-x64",
+      "pins": {
+        "server": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Server",
+          "commit": "2c700135d755a4210c2204334aafee2572205ec1",
+          "dataSha256": "1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
+        },
+        "client": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Client",
+          "commit": "d3016983e6fa807be8bf700001e0ba2cf0fc2a7e",
+          "preparedSha256": "486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Client"
+        },
+        "ruffle": {
+          "version": "0.7.1-openrotmg.16",
+          "sourceCommit": "89a7049965f3090e706265670df309a5128233ac",
+          "bundleSha256": "579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435"
+        }
+      },
+      "startupBackup": 1,
+      "clientNamespace": 1,
+      "payload": {
+        "name": "runtime-linux-x64.tar.gz",
+        "bytes": 50675204,
+        "sha256": "47494f3f82d8e3173ade702e5774f047e5a2bf4d15b3304fd820231013b2c47d",
+        "expandedBytes": 111763149,
+        "assetsSha256": "1b8083d00a7bdf1bfef9fb0eda31f663a3e12f3177fa2b97c207461faafd4e82",
+        "identitySha256": "50c4c515a3dd3eb78cd134464bbc947993bc68411f64ffb88011f539f80dd518",
+        "binarySha256": "43952a94fb2149991a0428242c37f7b4817f7e4b7e77e489c896aff1e876181b"
+      }
+    },
+    {
+      "archive": "/home/runner/work/Open-RotMG-Single-Player/Open-RotMG-Single-Player/evidence/runtime-update-windows-2022/runtime-inputs/C/runtime-win32-x64.tar.gz",
+      "target": "win32-x64",
+      "pins": {
+        "server": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Server",
+          "commit": "2c700135d755a4210c2204334aafee2572205ec1",
+          "dataSha256": "1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
+        },
+        "client": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Client",
+          "commit": "d3016983e6fa807be8bf700001e0ba2cf0fc2a7e",
+          "preparedSha256": "486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Client"
+        },
+        "ruffle": {
+          "version": "0.7.1-openrotmg.16",
+          "sourceCommit": "89a7049965f3090e706265670df309a5128233ac",
+          "bundleSha256": "579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435"
+        }
+      },
+      "startupBackup": 1,
+      "clientNamespace": 1,
+      "payload": {
+        "name": "runtime-win32-x64.tar.gz",
+        "bytes": 50035390,
+        "sha256": "b8c73976e4544c149e2bef540e36d514145c6f72d471613fe03ce71f2c2ff262",
+        "expandedBytes": 110054036,
+        "assetsSha256": "6898411e98cae0c0c0607fd6cb0bb255e9c31fb38d54fe915bfffa283dda3f46",
+        "identitySha256": "9a0c3e1e220e02fa163891b65cc8b37ff012f777572eb16c6a222d48412bc869",
+        "binarySha256": "b025f6db41285da4c9f35d1a1a8abcdf114e6030fa082cab3be965b0826472cb"
+      }
+    },
+    {
+      "archive": "/home/runner/work/Open-RotMG-Single-Player/Open-RotMG-Single-Player/evidence/runtime-update-macos-15/runtime-inputs/C/runtime-darwin-arm64.tar.gz",
+      "target": "darwin-arm64",
+      "pins": {
+        "server": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Server",
+          "commit": "2c700135d755a4210c2204334aafee2572205ec1",
+          "dataSha256": "1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server"
+        },
+        "client": {
+          "repository": "https://github.com/dginovker/Open-RotMG-Client",
+          "commit": "d3016983e6fa807be8bf700001e0ba2cf0fc2a7e",
+          "preparedSha256": "486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71",
+          "upstream": "https://github.com/OpenRotMG/Open-RotMG-Client"
+        },
+        "ruffle": {
+          "version": "0.7.1-openrotmg.16",
+          "sourceCommit": "89a7049965f3090e706265670df309a5128233ac",
+          "bundleSha256": "579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435"
+        }
+      },
+      "startupBackup": 1,
+      "clientNamespace": 1,
+      "payload": {
+        "name": "runtime-darwin-arm64.tar.gz",
+        "bytes": 49521827,
+        "sha256": "662d20df6d749098564437f760576c46a78630f83de34da803b37c641ab500dc",
+        "expandedBytes": 105197584,
+        "assetsSha256": "41f9ec4c25b509d7d05956c5d7190b43a79ed0dc6f3478c167b50333b821f9da",
+        "identitySha256": "da32d186310e791d046c6de60a26969e28a15f82011156b720397ac0e912ada3",
+        "binarySha256": "ea81c44da08f37392ff40252e34548f0ed106bc96f0d8d6f92a867cf9dfe34ed"
+      }
+    }
+  ],
+  "resume": {
+    "releaseId": 435513734,
+    "failedPromotionRun": 42075685932
+  },
+  "sourceEquivalence": {
+    "nativeHead": "16ec1744e1d0cbc6a43960b968a3a7b55a1724a6",
+    "promotionHead": "8873130b08836ef12a517e6f7e4edb461e15496e",
+    "changed": [
+      ".github/workflows/promote-runtime.yml",
+      "scripts/promote-runtime.mjs",
+      "scripts/runtime-release-history.mjs",
+      "tests/runtime-draft-resumption.test.mjs",
+      "tests/runtime-update-workflows.test.mjs"
+    ],
+    "unchangedEntries": 155
+  }
+}
