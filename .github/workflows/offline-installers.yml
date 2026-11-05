@@ -1,0 +1,95 @@
+name: Native offline installers from exact promoted runtime
+on:
+  workflow_dispatch:
+    inputs:
+      installer_sha:
+        description: Full reviewed installer source SHA matching the selected dispatch ref
+        required: true
+        type: string
+      runtime_head:
+        description: Full trusted-main runtime promotion/native source SHA
+        required: true
+        type: string
+      runtime_native_run:
+        description: Exact successful three-target runtime-updates-test run consumed by promotion
+        required: true
+        type: string
+      runtime_promotion_run:
+        description: Exact successful promote-runtime run that staged the signed runtime draft
+        required: true
+        type: string
+      tag:
+        description: Fixed existing runtime release tag (no latest lookup, no new release)
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  installers:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      INSTALLER_SHA: ${{ inputs.installer_sha }}
+      RUNTIME_HEAD: ${{ inputs.runtime_head }}
+      RUNTIME_NATIVE_RUN: ${{ inputs.runtime_native_run }}
+      RUNTIME_PROMOTION_RUN: ${{ inputs.runtime_promotion_run }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      OPENROTMG_TEST_BROWSER_MODE: ci-playwright
+      PI_NATIVE_TEST_CHROME_ARGS: '["--ignore-gpu-blocklist"]'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth dbus-x11 unzip zip
+      - name: Install locked launcher/maker tools and test without building any runtime
+        run: npm ci && npm test
+      - name: Consume only exact parent-promoted signed assets (read-only token)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/installer-inputs.mjs prepare
+      - name: Use the pinned WiX v3 tools already on the standard hosted Windows image
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bin = Join-Path $env:WIX 'bin'
+          $version = (& (Join-Path $bin 'candle.exe') '-?') -join "`n"
+          if ($version -notmatch '3\.14\.1\.8722') { throw "Unexpected WiX tool version: $version" }
+          $bin >> $env:GITHUB_PATH
+      - name: Make complete native offline installer/archive using existing release build input
+        run: npm run make
+      - name: Retain corresponding source, exact checksums, unsigned status and separate source/runtime attribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/installer-inputs.mjs collect
+      - name: Install only CI browser/display test tools (not consumer dependencies)
+        run: npm exec -- playwright install --with-deps chromium
+      - name: Verify actual installed/extracted application, saves and same-version reinstall
+        shell: bash
+        run: |
+          export OPENROTMG_TEST_TMP_ROOT="$RUNNER_TEMP/ins"
+          artifact=$(node --input-type=module -e "import fs from 'node:fs'; const r=JSON.parse(fs.readFileSync('.qa/installer-delivery/installer-receipt.json')); console.log('.qa/installer-delivery/'+r.installer.name)")
+          npm run verify:release -- "$artifact"
+      - name: Retain delivery and distinct installed-native acceptance receipt in Actions only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: offline-installer-${{ matrix.os }}
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .qa/installer-delivery/*
+            .qa/installer-tests/run-*/installer-result.json
+            .qa/installer-tests/run-*/*.png
+            .qa/installer-tests/run-*/*.log
