@@ -6,6 +6,7 @@ import {join,resolve} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {boundedFile,hashFile,REPOSITORY,targetName,verifyManifest} from '../dist/update-format.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
+import {requireReleaseAssetMetadata} from './runtime-release-history.mjs';
 
 export function installerBindings(env,head){
  const {INSTALLER_SHA:installerSourceHead,RUNTIME_HEAD:runtimeHead,RUNTIME_NATIVE_RUN:runtimeNativeRun,RUNTIME_PROMOTION_RUN:runtimePromotedRun,RELEASE_TAG:tag}=env;
@@ -15,18 +16,22 @@ export function installerBindings(env,head){
  assert.equal(installerSourceHead,head,'Dispatch ref must resolve to the requested installer SHA');
  return {installerSourceHead,runtimeHead,runtimeNativeRun,runtimePromotedRun,tag};
 }
-export function validateInstallerPromotion(binding,{promotion,native,validated,release},target){
+export function validateInstallerPromotion(binding,{promotion,native,validated,draft,release},target){
+ assert(/^[a-f0-9]{40}$/.test(validated.promotionHead),'Exact protected promotion-controller SHA required');
  for(const [run,id,path] of [[promotion,binding.runtimePromotedRun,'.github/workflows/promote-runtime.yml'],[native,binding.runtimeNativeRun,'.github/workflows/runtime-updates-test.yml']]){
-  assert.equal(String(run.id),id);assert.equal(run.head_sha,binding.runtimeHead);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,path);assert.equal(run.conclusion,'success');assert.equal(run.head_repository.full_name,REPOSITORY);
+  assert.equal(String(run.id),id);assert.equal(run.head_sha,run===promotion?validated.promotionHead:binding.runtimeHead);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,path);assert.equal(run.conclusion,'success');assert.equal(run.head_repository.full_name,REPOSITORY);
  }
  assert.equal(validated.head,binding.runtimeHead);assert.equal(String(validated.runId),binding.runtimeNativeRun);assert.equal(validated.tag,binding.tag);
- assert.equal(release.tag_name,binding.tag);assert.equal(release.target_commitish,binding.runtimeHead);assert(Number.isSafeInteger(release.id)&&release.id>0);
+ assert(draft&&Number.isSafeInteger(draft.id)&&draft.id>0,'Protected promotion must retain its exact draft ID');assert.equal(draft.draft,true);assert.equal(draft.tag_name,binding.tag);assert.equal(draft.target_commitish,binding.runtimeHead);
+ assert.equal(release.id,draft.id);assert.equal(release.tag_name,binding.tag);assert.equal(release.target_commitish,binding.runtimeHead);
  assert(Number.isSafeInteger(validated.sequence)&&validated.sequence>0);
  assert.equal(validated.targets.filter(entry=>entry.target===target).length,1,'Exactly one promoted native target required');
  const entry=validated.targets.find(entry=>entry.target===target);
  const assets=['.json','.json.sig','.tar.gz'].map(suffix=>{
   const name=`runtime-${target}${suffix}`,matches=release.assets.filter(asset=>asset.name===name);assert.equal(matches.length,1,'Exactly one immutable release asset required: '+name);
-  const asset=matches[0];assert(Number.isSafeInteger(asset.id)&&asset.id>0);assert(Number.isSafeInteger(asset.size)&&asset.size>0);assert.equal(asset.browser_download_url,`https://github.com/${REPOSITORY}/releases/download/${binding.tag}/${name}`);return asset;
+  const asset=matches[0];requireReleaseAssetMetadata(release,asset,binding.tag);
+  if(suffix==='.tar.gz'){const original=draft.assets.filter(a=>a.name===name);assert.equal(original.length,1);assert.equal(asset.id,original[0].id,'Native archive asset was replaced after protected promotion');assert.equal(asset.size,original[0].size);}
+  return asset;
  });
  return {entry,assets};
 }
@@ -39,10 +44,12 @@ export async function prepareInstaller(){
  assert.equal(git('status','--porcelain','--untracked-files=no'),'','Installer source must be clean');
  const root=resolve('.qa/installer-inputs');await mkdir('.qa',{recursive:true});await mkdir(root);
  const api=path=>JSON.parse(gh('api',`repos/${REPOSITORY}/${path}`));
- const promotion=api(`actions/runs/${binding.runtimePromotedRun}`),native=api(`actions/runs/${binding.runtimeNativeRun}`),release=api(`releases/tags/${binding.tag}`);
+ const promotion=api(`actions/runs/${binding.runtimePromotedRun}`),native=api(`actions/runs/${binding.runtimeNativeRun}`);
  gh('run','download',binding.runtimePromotedRun,'--repo',REPOSITORY,'--name','runtime-draft-receipts','--dir',join(root,'promotion'));
- const validated=await json(join(root,'promotion/validated/validated.json')),target=targetName();
- const {entry,assets}=validateInstallerPromotion(binding,{promotion,native,validated,release},target);
+ const validated=await json(join(root,'promotion/validated/validated.json')),draft=await json(join(root,'promotion/draft.json')),target=targetName();
+ assert(Number.isSafeInteger(draft.id)&&draft.id>0,'Protected promotion must retain its exact draft ID');
+ const release=api(`releases/${draft.id}`);
+ const {entry,assets}=validateInstallerPromotion(binding,{promotion,native,validated,draft,release},target);
  for(const asset of assets){const path=join(root,asset.name),fd=openSync(path,'wx');try{execFileSync('gh',['api',`repos/${REPOSITORY}/releases/assets/${asset.id}`,'-H','Accept: application/octet-stream'],{stdio:['ignore',fd,'inherit']});}finally{closeSync(fd);}assert.equal((await stat(path)).size,asset.size,'Downloaded exact asset size mismatch');}
  const [manifestAsset,signatureAsset,archiveAsset]=assets,manifest=join(root,manifestAsset.name),signature=join(root,signatureAsset.name),archive=join(root,archiveAsset.name);
  const value=verifyManifest(await boundedFile(manifest,64*1024),await boundedFile(signature,64),MANIFEST_PUBLIC_KEY,release.id,binding.tag,target,(await json('package.json')).version,'https://github.com');
@@ -50,7 +57,7 @@ export async function prepareInstaller(){
  for(const key of ['sha256','bytes','expandedBytes','identitySha256','binarySha256','assetsSha256'])assert.equal(value.payload[key],entry.payload[key],'Signed archive differs from tested promoted archive: '+key);
  assert.equal(await hashFile(archive),value.payload.sha256);
  const inputs=join(root,'build-inputs.json');await writeFile(inputs,JSON.stringify({runtimeRelease:{manifest,signature,archive}},null,2)+'\n',{flag:'wx'});
- await writeFile(join(root,'attribution.json'),JSON.stringify({...binding,target,releaseId:release.id,sequence:value.sequence,runtimeArchive:{name:archiveAsset.name,assetId:archiveAsset.id,sha256:value.payload.sha256,bytes:value.payload.bytes},pins:value.pins},null,2)+'\n',{flag:'wx'});
+ await writeFile(join(root,'attribution.json'),JSON.stringify({...binding,runtimePromotionHead:validated.promotionHead,target,releaseId:release.id,sequence:value.sequence,runtimeArchive:{name:archiveAsset.name,assetId:archiveAsset.id,sha256:value.payload.sha256,bytes:value.payload.bytes},pins:value.pins},null,2)+'\n',{flag:'wx'});
  await writeFile(process.env.GITHUB_ENV,`OPENROTMG_BUILD_INPUTS=${inputs}\n`,{flag:'a'});
 }
 async function collectInstaller(){
