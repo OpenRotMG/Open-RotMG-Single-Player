@@ -24,7 +24,7 @@ export class RuntimeUpdates extends EventEmitter{
   private initialization?:Promise<void>;private task?:Promise<UpdateView>;private controller?:AbortController;
   private current?:Generation;private committed?:Generation;private staged?:Generation;private available?:RuntimeSummary;
   private transaction?:Pending;private startingPending?:Pending;private startAuthorization?:Authorization;
-  private authorityActivity?:Activity;private serverActivity?:Activity;private explicitRecovery=false;private bookkeepingTask?:Promise<void>;private quarantined=false;private recoveryCompletion?:{command:string;ack:unknown};private recoveryAuthority?:AuthorityCompletion;
+  private authorityActivity?:Activity;private serverActivity?:Activity;private explicitRecovery=false;private bookkeepingTask?:Promise<void>;private quarantined=false;private recoveryCompletion?:{command:string;ack:unknown};private recoveryAuthority?:AuthorityCompletion;private recoveryEpoch?:number;private recoveryStarted=0;private recoveryCompletions:AuthorityCompletion[]=[];
   private refusedCheck?:{format:1;kind:'service'|'rejected'|'launcher';message:string;selected:Selection};
   private failureSerial=0;private failure?:UpdateProblem;private phase:UpdateView['phase']='initializing';private message='Preparing explicit installed runtime…';
   constructor(private runtime:Runtime,readonly policy:UpdatePolicy,private confirm:(value:UpdateConfirmation)=>Promise<boolean>){
@@ -259,13 +259,13 @@ export class RuntimeUpdates extends EventEmitter{
     demand(this.runtime.view().operation||this.runtime.view().status==='starting','Save authority requires the existing Runtime reservation');
     const allowed=[this.current?.id,this.transaction?.from.id,this.transaction?.to.id].filter((id):id is string=>!!id).map(id=>join(this.store.root(id),this.policy.target==='win32-x64'?'openrotmg.exe':'openrotmg'));
     demand(allowed.includes(binary),'Authority binary is not an installed/pending authenticated runtime');
-    if(this.explicitRecovery)return;
+    if(this.explicitRecovery){await this.runtime.verifyFailureGate();demand(this.recoveryEpoch!==undefined&&this.recoveryEpoch===this.failureSerial,'Recovery authority token was not armed or was invalidated by a new failure');++this.recoveryStarted;return;}
     if(this.serverActivity){demand(this.runtime.view().pid,'Server fence has no live owned server');return;}
     const selected=this.transaction?.phase==='preparing'?this.transaction.from:this.current?select(this.current):undefined;demand(selected,'Authority has no selected runtime');
     this.authorityActivity=await this.fence.active('authority',selected,this.transaction?.id??null);
   }
   async authorityClosed(completion:AuthorityCompletion){
-    if(this.explicitRecovery)this.recoveryAuthority=completion;
+    if(this.explicitRecovery){this.recoveryAuthority=completion;this.recoveryCompletions.push(completion);}
     if(this.authorityActivity){const activity=this.authorityActivity;this.authorityActivity=undefined;try{await this.fence.authorityFinished(activity,completion);}catch(error){this.runtime.blockAmbiguousSave(error as Error);throw error;}}
   }
   async failureAuthorized():Promise<boolean>{
@@ -298,12 +298,12 @@ export class RuntimeUpdates extends EventEmitter{
   }
   async recover():Promise<UpdateView>{
     return this.runtime.recoveryOperation('Explicit local runtime recovery',async()=>{
-      this.explicitRecovery=true;this.recoveryCompletion=undefined;this.recoveryAuthority=undefined;
+      this.explicitRecovery=true;this.recoveryEpoch=undefined;this.recoveryCompletion=undefined;this.recoveryAuthority=undefined;this.recoveryStarted=0;this.recoveryCompletions=[];
       try{this.abort();if(this.task)await this.task;if(await exists(this.store.path('runtime-pending.json')))await this.restorePending();else await this.verifyCurrent();return this.view();}
       catch(error){
         const proof=this.recoveryCompletion as {command:string;ack:unknown}|undefined,problem=new UpdateProblem('recovery',`${proof?`Recovery ${proof.command} actual close0/strict acknowledgement=${JSON.stringify(proof.ack)}; `:''}${String(error)}. No unknown operation was replayed.`);this.problem(problem);throw problem;
       }
-      finally{this.explicitRecovery=false;this.recoveryCompletion=undefined;this.recoveryAuthority=undefined;}
+      finally{this.explicitRecovery=false;this.recoveryEpoch=undefined;this.recoveryCompletion=undefined;this.recoveryAuthority=undefined;this.recoveryStarted=0;this.recoveryCompletions=[];}
     });
   }
   private async finishRecovery(receipt:Receipt,sha:string,selected:Generation,failedCandidate?:Generation){
@@ -312,9 +312,9 @@ export class RuntimeUpdates extends EventEmitter{
     demand(equal(current,receipt.from)||equal(current,receipt.to),'Recovery completion has a foreign authoritative selection');
     demand(this.failureSerial===failureSerial,'A new failure superseded recovery finalization');
     await this.bookkeep(async()=>{
-      await this.store.choose(selected);await this.fence.publish(receipt,'clean');
+      await this.store.choose(selected);await this.fence.publish(receipt,'active');
       if(failedCandidate){const profile=await this.store.profile();if(!profile.failed.includes(failedCandidate.id)){profile.failed.push(failedCandidate.id);await durableRecord(this.store.path('runtime-profile.json'),profile);}}
-      const completed={...p,phase:'recovered' as const,recovery:{kind:receipt.kind,receiptSha256:sha}};await this.writePending(completed);await this.archivePending(completed);
+      const completed={...p,phase:'recovered' as const,recovery:{kind:receipt.kind,receiptSha256:sha}};await this.writePending(completed);const activity=await this.fence.activity();demand(activity&&activity.id===receipt.fenceId&&activity.receiptSha256===sha,'Recovery settlement token changed');await this.fence.clean(activity,{receipt:sha});await this.archivePending(completed);
       this.current=selected;this.committed=selected;this.runtime.selectResources(this.store.root(selected.id));
     });
     await this.runtime.verifyFailureGate();await this.runtime.completeUpdateRecovery(sha);this.initialization=Promise.resolve();this.failure=undefined;
@@ -333,26 +333,40 @@ export class RuntimeUpdates extends EventEmitter{
       this.runtime.blockAmbiguousSave(new Error(`Interrupted updater-owned startup ${p.id}; completion unknown`));await this.runtime.verifyFailureGate();p=await readPending(this.store);
     }
     demand(p.failureSha256!==null&&await this.fence.markerSha256()===p.failureSha256,'Pending startup is not bound to this exact shutdown-failure marker');
-    const native=await this.captureNative(p);p=native.pending;const input=native.backup;
-    demand(input,'No game database existed before this interrupted startup. Current state and ack are retained; no stale/empty backup substitution or automatic rollback is allowed. Manual recovery is required.');
-    const staged=await this.stageRecoveryInput(input);let receipt:Receipt|undefined,receiptSha:string|undefined,actualRestore:unknown,primary:unknown;
+    const originalBytes=await boundedFile(this.store.path('runtime-pending.json'));demand(equal(pending(JSON.parse(originalBytes.toString('utf8'))),p),'Failed pending changed before recovery intent');
+    const ack=await readNativeAck(this.store,p);demand(ack.outcome==='verified-backup','No game database existed before this interrupted startup; no empty/stale backup substitution is allowed');
+    if(p.nativeAck)demand(equal(p.nativeAck,ack),'Recorded native backup acknowledgement changed');
+    const inputPath=backupPath(this.store,p.migrationName),info=await lstat(inputPath);demand(info.isFile()&&!info.isSymbolicLink(),'Native recovery input is not a regular fixed snapshot');await this.sealedBackup(inputPath);demand(await hashFile(inputPath)===ack.sha256,'Native recovery backup digest changed');
+    const previous=await this.fence.pointer(),old=await this.fence.activity(),oldBytes=old?await boundedFile(this.store.path('runtime-activity.json')):undefined;
+    if(previous){demand(previous.state==='retired'&&previous.markerSha256===p.failureSha256,'Prior recovery authorization is stale/foreign');await this.fence.lineage(previous.sha256);demand(old&&old.receiptSha256===previous.sha256&&old.pendingId===p.id&&equal(old.selected,p.to),'Prior activity is foreign to failed pending recovery');}
+    else demand(!old,'An unrelated activity cannot authorize first restore recovery');
+    const failureSerial=this.failureSerial,activityId=randomUUID(),preName=fileName('pre-restore'),prePath=backupPath(this.store,preName);
+    const intent={format:1,id:randomUUID(),pendingSha256:await this.fence.rememberBytes(originalBytes),oldActivitySha256:oldBytes?await this.fence.rememberBytes(oldBytes):null,markerSha256:p.failureSha256,previousSha256:previous?.sha256??null,selected:p.to,prior:p.from,candidate:p.to,backupName:p.migrationName,backupSha256:ack.sha256,activityId,target:this.policy.target},intentSha=await this.fence.remember(intent);
+    p={...p,nativeAck:ack};await this.writePending({...p,phase:'recovering',recovery:{kind:'restore',intentSha256:intentSha,preRestoreName:preName,inputSha256:ack.sha256}});
+    const token:Activity={format:1,id:activityId,receiptSha256:previous?.sha256??null,kind:'recovery',state:'active',from:p.to,selected:p.to,pendingId:p.id,proof:{intent:intentSha}};await durableRecord(this.store.path('runtime-activity.json'),token);this.recoveryEpoch=failureSerial;
+    const stillOwned=async()=>{
+      await this.runtime.verifyFailureGate();demand(equal(await this.fence.evidence(intentSha),intent)&&equal(await this.fence.evidence(intent.pendingSha256),pending(JSON.parse(originalBytes.toString('utf8')))),'Restore immutable intent/pending evidence changed');if(intent.oldActivitySha256)demand(equal(await this.fence.evidence(intent.oldActivitySha256),old),'Restore original activity evidence changed');await this.store.load(p.from);await this.store.load(p.to);if(previous)await this.fence.lineage(previous.sha256);const live=await readPending(this.store),activity=await this.fence.activity();
+      demand(this.failureSerial===failureSerial&&await this.fence.markerSha256()===p.failureSha256&&equal(selection(await record(this.store.path('runtime-selection.json'))),p.to)&&equal(await this.fence.pointer(),previous)&&live.phase==='recovering'&&equal({...live,phase:p.phase,recovery:p.recovery},p)&&live.recovery?.intentSha256===intentSha&&equal(activity,token),'Restore recovery intent/activity/selection/marker was superseded');await this.runtime.verifyFailureGate();demand(this.failureSerial===failureSerial,'A new failure invalidated restore recovery authority');
+    };
+    const unchangedAttempt=async(reason:string)=>{
+      await stillOwned();demand(this.recoveryStarted===this.recoveryCompletions.length&&this.recoveryCompletions.every(c=>c.outcome==='unchanged'&&c.code>0),'Recovery authority outcome is not strictly unchanged');
+      await this.fence.remember({format:1,kind:'restore-attempt-settled',intentSha256:intentSha,reason,authorities:this.recoveryCompletions.map(c=>({...c,closed:true,signal:null}))});
+      if(oldBytes)await durableBytes(this.store.path('runtime-activity.json'),oldBytes);else{await unlink(this.store.path('runtime-activity.json'));await syncDirectory(this.runtime.userData);}
+      await durableBytes(this.store.path('runtime-pending.json'),originalBytes);this.transaction=pending(JSON.parse(originalBytes.toString('utf8')));
+    };
+    let staged:{stage:string;path:string}|undefined,receipt:Receipt|undefined,receiptSha:string|undefined,actualRestore:unknown,primary:unknown,writeBoundary=false;
     try{
+      if(!await this.confirm({kind:'restore-update',message:'Restore the freshest protected startup backup?',detail:`${inputPath}\nNative acknowledgement schema ${ack.source_schema}; SHA256 ${ack.sha256}.\nRust must verify this full snapshot and exact prior runtime ${from.version} compatibility before mutation. All current progress/credentials will be replaced ONLY after an independent verified pre-restore snapshot. Original failure/activity/pending evidence stays retained.`})||this.runtime.view().closing){await unchangedAttempt('canceled-before-authority');return;}
+      await stillOwned();const input=await this.verifiedBackup(candidate,p.migrationName);demand(input.sha256===ack.sha256&&input.metadata.schema===ack.source_schema,'Fresh native recovery backup schema/digest changed');staged=await this.stageRecoveryInput(input);
       const compatible=snapshotPreview(await saveAuthority(this.authority(from),'verify-snapshot',[staged.path,join(this.store.root(from.id),'data')]));demand(compatible.schema===input.metadata.schema,'Prior runtime cannot read freshest startup backup');
-      if(!await this.confirm({kind:'restore-update',message:'Restore the freshest protected startup backup?',detail:`${backupPath(this.store,input.name)}\nSchema ${input.metadata.schema}; ${input.metadata.account_count} accounts; ${input.metadata.character_count} characters.\nRestore exact prior runtime ${from.version}. All current progress/credentials will be replaced ONLY after a separate verified pre-restore backup. Prior failure evidence and candidate are retained.`})||this.runtime.view().closing)return;
-      const original=structuredClone(p),preName=fileName('pre-restore'),prePath=backupPath(this.store,preName),previous=await this.fence.pointer();
-      if(previous)demand(previous.state==='retired'&&previous.markerSha256===p.failureSha256,'Prior recovery authorization is stale/foreign to this candidate failure');
-      await this.writePending({...p,phase:'recovering',recovery:{kind:'restore',preRestoreName:preName,inputSha256:input.sha256}});
-      actualRestore=await saveAuthority(this.authority(candidate),'restore',[this.runtime.runtimePaths().state,join(this.store.root(candidate.id),'data'),staged.path,prePath]);
-      this.recoveryCompletion={command:'restore',ack:actualRestore};
-      await this.writePending({...this.transaction!,recovery:{kind:'restore',preRestoreName:preName,inputSha256:input.sha256,ack:actualRestore}});
-      const pre=await this.verifiedBackup(candidate,preName);
-      receipt={format:1,id:randomUUID(),kind:'restore',markerSha256:p.failureSha256!,previousSha256:previous?.sha256??null,from:p.to,to:p.from,pendingId:p.id,fenceId:randomUUID(),proof:{pending:original,input,preRestore:pre,restoreAck:actualRestore,authority:p.to,close:{code:0,signal:null}}};
-      receiptSha=await this.fence.remember(receipt);await this.fence.lineage(receiptSha);
-      await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,receiptSha256:receiptSha}});
-    }catch(error){primary=error;throw new UpdateProblem('recovery',`${actualRestore===undefined?'':`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; `}${String(error)}. No restore replay is permitted.`);}
-    finally{await this.store.cleanup(staged.stage,actualRestore===undefined?primary:`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; follow-up=${String(primary)}`);}
-    demand(receipt&&receiptSha,'Recovery has no complete verified restore proof');
-    await this.finishRecovery(receipt,receiptSha,from,p.kind==='update'?candidate:undefined);this.update('ready',`Recovered ${from.version} from the freshest verified startup backup. Previous failure evidence retained; failed candidate requires explicit retry or a newer release.`);
+      await stillOwned();demand(await hashFile(staged.path)===input.sha256,'Privately verified restore input changed before mutation');writeBoundary=true;await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,writeBoundary:true}});
+      actualRestore=await saveAuthority(this.authority(candidate),'restore',[this.runtime.runtimePaths().state,join(this.store.root(candidate.id),'data'),staged.path,prePath]);this.recoveryCompletion={command:'restore',ack:actualRestore};
+      await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,ack:actualRestore}});const pre=await this.verifiedBackup(candidate,preName);
+      receipt={format:1,id:randomUUID(),kind:'restore',markerSha256:p.failureSha256!,previousSha256:previous?.sha256??null,from:p.to,to:p.from,pendingId:p.id,fenceId:activityId,proof:{pending:p,input,preRestore:pre,restoreAck:actualRestore,authority:p.to,close:{code:0,signal:null},intentSha256:intentSha}};
+      receiptSha=await this.fence.remember(receipt);await this.fence.lineage(receiptSha);await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,receiptSha256:receiptSha}});
+    }catch(error){primary=error;if(!writeBoundary&&error instanceof AuthorityUnchangedError&&this.recoveryStarted===this.recoveryCompletions.length&&this.recoveryCompletions.every(c=>c.outcome==='unchanged'&&c.code>0))await unchangedAttempt('strict-unchanged-before-write');throw new UpdateProblem('recovery',`${actualRestore===undefined?'':`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; `}${String(error)}. No restore replay is permitted.`);}
+    finally{if(staged)await this.store.cleanup(staged.stage,actualRestore===undefined?primary:`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; follow-up=${String(primary)}`);}
+    demand(receipt&&receiptSha,'Recovery has no complete verified restore proof');await this.finishRecovery(receipt,receiptSha,from,p.kind==='update'?candidate:undefined);this.update('ready',`Recovered ${from.version} from freshest verified native backup. Original failure/activity/intent retained; failed candidate requires explicit retry or a newer release.`);
   }
   private async finalizeRecordedRecovery(p:Pending){
     const sha=p.recovery?.receiptSha256;demand(typeof sha==='string','Recovery has no exact completion receipt');
@@ -362,20 +376,16 @@ export class RuntimeUpdates extends EventEmitter{
     demand(equal(current,r.from)||equal(current,r.to),'Recorded recovery has an unrelated current selection');
     if(pointer){demand(pointer.sha256===sha||pointer.sha256===r.previousSha256,'Recorded recovery predecessor pointer changed');if(pointer.sha256===sha)demand(pointer.state==='authorized'&&equal(current,r.to),'Published recovery selection changed');}
     const activity=await this.fence.activity();
-    if(activity?.receiptSha256===sha){demand(activity.kind==='recovery'&&activity.state==='clean'&&activity.id===r.fenceId&&equal(activity.selected,r.to),'Recorded recovery fence was replaced by later work');}
-    else if(r.previousSha256===null)demand(!activity,'Foreign activity appeared during first recovery');
-    else{
-      demand(activity?.receiptSha256===r.previousSha256,'Recorded recovery activity predecessor changed');
-      if(r.kind==='current')demand(activity.kind==='authority'&&activity.state==='active'&&activity.id===r.fenceId&&activity.pendingId===p.id&&p.recovery?.repairActivityId===r.fenceId&&equal(activity.selected,r.to),'Current-save recovery repair activity changed');
-      else demand(activity.pendingId===p.id&&equal(activity.selected,p.to),'Restore recovery activity belongs to another candidate');
-    }
+    if(activity?.receiptSha256===sha){demand(activity.kind==='recovery'&&['active','clean'].includes(activity.state)&&activity.id===r.fenceId&&equal(activity.selected,r.to)&&equal(activity.proof,{receipt:sha}),'Recorded recovery fence was replaced by later work');}
+    else if(r.kind==='restore')demand(activity?.kind==='recovery'&&activity.state==='active'&&activity.id===r.fenceId&&activity.pendingId===p.id&&activity.receiptSha256===r.previousSha256&&equal(activity.selected,p.to)&&equal(activity.proof,{intent:r.proof.intentSha256})&&p.recovery?.intentSha256===r.proof.intentSha256,'Recorded restore lost its exact ACTIVE recovery intent');
+    else demand(activity?.receiptSha256===r.previousSha256&&activity.kind==='authority'&&activity.state==='active'&&activity.id===r.fenceId&&activity.pendingId===p.id&&p.recovery?.repairActivityId===r.fenceId&&equal(activity.selected,r.to),'Current-save recovery repair activity changed');
     if(!await this.confirm({kind:'verify-current',message:'Finalize the recorded completed recovery?',detail:'The exact Rust completion receipt is already durable. This only settles selection/authorization bookkeeping; it does NOT rerun restore or any unknown operation. Original failure and current/pre-restore backups remain retained.'})||this.runtime.view().closing)return;
     const selected=await this.store.load(r.to);await this.finishRecovery(r,sha,selected,r.kind==='restore'&&p.kind==='update'?await this.store.load(p.to):undefined);
     this.update('ready','Recorded recovery finalized without replay. Previous operation/failure evidence remains retained.');
   }
   private async finalizeRecordedReady(p:Pending){
     demand(p.readiness&&p.nativeAck&&p.failureSha256===null&&equal(selection(await record(this.store.path('runtime-selection.json'))),p.to),'Recorded ready startup has mismatched selection/proof');
-    const selected=await this.store.load(p.to);demand(p.readiness.binarySha256===selected.binarySha256,'Recorded readiness binary changed');await this.captureNative(p);
+    const selected=await this.store.load(p.to);demand(p.readiness.binarySha256===selected.binarySha256,'Recorded readiness binary changed');const ack=await readNativeAck(this.store,p);demand(equal(ack,p.nativeAck),'Recorded readiness native acknowledgement changed');if(ack.outcome==='verified-backup')demand(await hashFile(backupPath(this.store,p.migrationName))===ack.sha256,'Recorded native backup changed');else demand(!await exists(backupPath(this.store,p.migrationName)),'Recorded no-save proof has a foreign backup file');
     const pointer=await this.fence.pointer(),auth=pointer?await this.fence.authorization():undefined,activity=await this.fence.activity();
     if(pointer)demand(auth&&activity&&activity.kind==='server'&&activity.state==='active'&&activity.pendingId===p.id&&equal(activity.selected,p.to),'Interrupted transition has no exact active recovery fence');
     else demand(!activity&&!await exists(this.store.path('shutdown-failed.json')),'Unrelated failure cannot be blessed by recorded readiness');
@@ -406,7 +416,7 @@ export class RuntimeUpdates extends EventEmitter{
     const interruptedStartup=interruptedBytes?{sha256:await this.fence.rememberBytes(interruptedBytes),outcome:'unknown',settlement:'current-validation'}:null;
     const id=randomUUID(),activityId=randomUUID(),name=fileName('recovery-current');await mkdir(join(this.runtime.userData,'backups'),{recursive:true,mode:0o700});
     const intent:Pending={format:1,id,kind:'start',phase:'recovering',from:select(selected),to:select(selected),preBackup:null,noDatabase:false,migrationName:name,pid:null,nativeAck:null,readiness:null,failureSha256:markerSha,recovery:{kind:'current',oldActivitySha256:oldSha,previousSha256:auth.sha256,repairActivityId:activityId,interruptedStartup}};await this.writePending(intent);
-    await this.fence.active('authority',select(selected),id,auth,activityId);
+    await this.fence.active('authority',select(selected),id,auth,activityId);this.recoveryEpoch=failureSerial;
     let snapshot:{backup:Backup;ack:unknown};
     try{snapshot=await this.snapshot(selected,name);if(interrupted)demand(snapshot.backup.metadata.schema===22,'Interrupted same-generation startup remains UNKNOWN: current snapshot is not fully verified target schema22');}
     catch(error){

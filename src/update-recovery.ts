@@ -7,7 +7,8 @@ import {boundedFile,demand,digest,exact,hex,integer,UpdateProblem} from './updat
 import {durableBytes,durableRecord,exists,record,RuntimeStore,Selection,selection} from './update-store';
 
 export type ReadyProof={pid:number;binary:string;resources:string;healthProcess:number;listenerSeen:true};
-export type Activity={format:1;id:string;receiptSha256:string;kind:'server'|'authority'|'recovery';state:'active'|'clean';from:Selection;selected:Selection;pendingId:string|null;proof:unknown};
+// The first restore has no authorization receipt yet; only its failure-bound ACTIVE recovery intent may have no root.
+export type Activity={format:1;id:string;receiptSha256:string|null;kind:'server'|'authority'|'recovery';state:'active'|'clean';from:Selection;selected:Selection;pendingId:string|null;proof:unknown};
 export type Receipt={format:1;id:string;kind:'restore'|'current'|'transition';markerSha256:string;previousSha256:string|null;from:Selection;to:Selection;pendingId:string;fenceId:string;proof:Record<string,unknown>};
 export type Authorization={sha256:string;receipt:Receipt};
 const bytes=(value:unknown)=>Buffer.from(JSON.stringify(value,null,2)+'\n');
@@ -37,7 +38,7 @@ export class RecoveredRuntimeFence{
   }
   private checkedActivity(value:unknown):Activity{
     exact(value,'format,id,receiptSha256,kind,state,from,selected,pendingId,proof','recovered-profile activity fence');
-    demand(value.format===1&&uuid(value.id)&&hex(value.receiptSha256)&&['server','authority','recovery'].includes(String(value.kind))&&['active','clean'].includes(String(value.state))&&(value.pendingId===null||uuid(value.pendingId)),'Invalid recovered-profile activity fence');selection(value.from);selection(value.selected);return value as unknown as Activity;
+    demand(value.format===1&&uuid(value.id)&&(hex(value.receiptSha256)||value.receiptSha256===null&&value.kind==='recovery'&&value.state==='active')&&['server','authority','recovery'].includes(String(value.kind))&&['active','clean'].includes(String(value.state))&&(value.pendingId===null||uuid(value.pendingId)),'Invalid recovered-profile activity fence');selection(value.from);selection(value.selected);return value as unknown as Activity;
   }
   async lineage(sha:string):Promise<Authorization>{
     const chain:Authorization[]=[],seen=new Set<string>();let next:string|null=sha;
@@ -51,13 +52,22 @@ export class RecoveredRuntimeFence{
     for(let i=chain.length-1;i>=0;i--){
       const r=chain[i].receipt,previous=chain[i+1];
       if(r.kind==='restore'){
-        exact(r.proof,'pending,input,preRestore,restoreAck,authority,close','restore proof');const p=pending(r.proof.pending),input=backup(r.proof.input),pre=backup(r.proof.preRestore);
+        exact(r.proof,'pending,input,preRestore,restoreAck,authority,close,intentSha256','restore proof');const p=pending(r.proof.pending),input=backup(r.proof.input),pre=backup(r.proof.preRestore);
         exact(r.proof.restoreAck,'restored,backup','actual restore acknowledgement');exact(r.proof.close,'code,signal','actual restore close');
         demand(p.id===r.pendingId&&p.failureSha256===r.markerSha256&&equal(p.to,r.from)&&equal(p.from,r.to)&&equal(r.proof.authority,p.to)&&p.nativeAck!==null&&p.pid!==null,'Restore proof is foreign to pending update');
         const ack=nativeAck(p.nativeAck,backupPath(this.store,p.migrationName),p.pid);
         demand(ack.outcome==='verified-backup'&&input.name===p.migrationName&&input.sha256===ack.sha256&&input.metadata.schema===ack.source_schema&&equal(input.authority,p.to)&&equal(pre.authority,p.to),'Restore did not use the freshest verified under-lock snapshot');
         demand(r.proof.restoreAck.restored===true&&r.proof.restoreAck.backup===backupPath(this.store,pre.name)&&r.proof.close.code===0&&r.proof.close.signal===null,'Restore lacks actual successful close/strict acknowledgement');
-        if(previous)demand(equal(previous.receipt.to,p.from),'Restore predecessor selection mismatch');
+        demand(hex(r.proof.intentSha256),'Restore has no exact write-ahead recovery intent');const intent=await this.evidence(r.proof.intentSha256);
+        exact(intent,'format,id,pendingSha256,oldActivitySha256,markerSha256,previousSha256,selected,prior,candidate,backupName,backupSha256,activityId,target','restore recovery intent');
+        demand(intent.format===1&&uuid(intent.id)&&intent.id!==p.id&&hex(intent.pendingSha256)&&(intent.oldActivitySha256===null||hex(intent.oldActivitySha256))&&intent.markerSha256===r.markerSha256&&intent.previousSha256===r.previousSha256&&intent.activityId===r.fenceId&&intent.target===this.store.policy.target&&equal(selection(intent.selected),p.to)&&equal(selection(intent.candidate),p.to)&&equal(selection(intent.prior),p.from)&&intent.backupName===input.name&&intent.backupSha256===input.sha256,'Restore recovery intent changed identity/backup/marker/selection');
+        const original=pending(await this.evidence(intent.pendingSha256));demand(equal({...original,nativeAck:p.nativeAck},p)&&(original.nativeAck===null||equal(original.nativeAck,p.nativeAck)),'Restore recovery changed the exact failed pending intent');
+        if(previous){demand(hex(intent.oldActivitySha256),'Recovered restore lost its old activity');const old=this.checkedActivity(await this.evidence(intent.oldActivitySha256));demand(old.receiptSha256===previous.sha256&&old.pendingId===p.id&&equal(old.selected,p.to),'Restore recovery old activity is foreign');}
+        else demand(intent.oldActivitySha256===null,'First recovery cannot borrow an unrelated old activity');
+        if(previous){
+          const prior=previous.receipt,ownReadyTransition=prior.kind==='transition'&&prior.pendingId===p.id&&p.kind==='update'&&p.phase==='ready'&&equal(prior.from,p.from)&&equal(prior.to,p.to)&&equal(prior.proof.pending,{...p,failureSha256:null});
+          demand(ownReadyTransition||prior.pendingId!==p.id&&equal(prior.to,p.from),'Restore predecessor selection mismatch or foreign completed transition');
+        }
       }else if(r.kind==='current'){
         demand(previous,'Current-save recovery has no explicit recovered-profile lineage');exact(r.proof,'oldActivitySha256,interruptedStartup,snapshot,snapshotAck,verification,authority,close','current-save recovery proof');
         demand(hex(r.proof.oldActivitySha256),'Missing unknown activity proof');const old=this.checkedActivity(await this.evidence(r.proof.oldActivitySha256));const snapshot=backup(r.proof.snapshot);

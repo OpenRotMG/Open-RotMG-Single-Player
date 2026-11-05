@@ -18,7 +18,7 @@ export async function recovered(){
  const input={name:'fresh-native-unit.sqlite',sha256:'a'.repeat(64),metadata,authority:select(b)},pre={name:'pre-restore-unit.sqlite',sha256:'b'.repeat(64),metadata,authority:select(b)};
  const p={format:1,id,kind:'update',phase:'starting',from:select(a),to:select(b),preBackup:null,noDatabase:false,migrationName:input.name,pid:123,nativeAck:{protocol:1,operation:'pre-migration',process:123,backup:backupPath(store,input.name),sha256:input.sha256,source_schema:22,target_schema:22,outcome:'verified-backup'},readiness:null,failureSha256:markerSha,recovery:null};
  const receipt={format:1,id:randomUUID(),kind:'restore',markerSha256:markerSha,previousSha256:null,from:select(b),to:select(a),pendingId:id,fenceId:randomUUID(),proof:{pending:p,input,preRestore:pre,restoreAck:{restored:true,backup:backupPath(store,pre.name)},authority:select(b),close:{code:0,signal:null}}};
- const fence=new RecoveredRuntimeFence(store),sha=await fence.publish(receipt,'clean');return{root,user,store,policy,a,b,p,receipt,fence,sha,marker};
+ const fence=new RecoveredRuntimeFence(store),intent={format:1,id:randomUUID(),pendingSha256:await fence.remember(p),oldActivitySha256:null,markerSha256:markerSha,previousSha256:null,selected:p.to,prior:p.from,candidate:p.to,backupName:input.name,backupSha256:input.sha256,activityId:receipt.fenceId,target:'linux-x64'};receipt.proof.intentSha256=await fence.remember(intent);const sha=await fence.publish(receipt,'clean');return{root,user,store,policy,a,b,p,receipt,fence,sha,marker};
 }
 
 export async function capableRecovered(){
