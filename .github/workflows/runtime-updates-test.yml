@@ -48,6 +48,11 @@ jobs:
             .qa/runtime-inputs/C/*.tar.gz
             .qa/runtime-inputs/A/*.json
             .qa/runtime-updates/run-*/*.json
+            .qa/runtime-updates/run-*/*.pem
+            .qa/runtime-updates/run-*/**/runtimes/*/generation.json
+            .qa/runtime-updates/run-*/**/runtimes/release-*/manifest.json
+            .qa/runtime-updates/run-*/**/runtimes/release-*/manifest.sig
+            .qa/runtime-updates/run-*/cut-*/*.json
             .qa/runtime-updates/run-*/*.png
             .qa/runtime-updates/run-*/*.log
             .qa/runtime-updates/run-*/*.xml

@@ -1,19 +1,16 @@
 import {chromium} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {EventEmitter} from 'node:events';
-import {createServer} from 'node:net';
 import {setTimeout as delay} from 'node:timers/promises';
 import {resolve} from 'node:path';
 import assert from 'node:assert/strict';
 
-async function freePort(){const server=createServer();await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const port=server.address().port;await new Promise(ok=>server.close(ok));return port;}
-async function endpoint(port,child){
+async function endpoint(child,stderr){
  const deadline=Date.now()+30_000;
  while(Date.now()<deadline){
   assert(child.exitCode===null&&child.signalCode===null,'Owned Electron exited before debugger attachment');
-  try{
-   const response=await fetch(`http://127.0.0.1:${port}/json/list`,{signal:AbortSignal.timeout(500)});assert.equal(response.status,200,'Unexpected service on owned Node inspector port');const targets=await response.json();assert.equal(targets.length,1,'Owned Node inspector must expose one target');const url=new URL(targets[0].webSocketDebuggerUrl);assert.equal(url.origin,`ws://127.0.0.1:${port}`);assert(!url.username&&!url.password&&!url.search&&!url.hash);return url.href;
-  }catch(error){if(!['ECONNREFUSED','ECONNRESET'].includes(error.cause?.code)&&error.name!=='TimeoutError')throw error;}
+  const match=/Debugger listening on (ws:\/\/127\.0\.0\.1:[0-9]+\/[^\s]+)/.exec(stderr());
+  if(match){const url=new URL(match[1]);assert(url.protocol==='ws:'&&url.hostname==='127.0.0.1'&&url.port&&!url.username&&!url.password&&!url.search&&!url.hash);return url.href;}
   await delay(50);
  }
  throw Error('Owned Electron main inspector did not open before startup; no fixture was injected');
@@ -28,14 +25,14 @@ async function inspector(url){
  return{send,evaluate,frameEvaluate,on:(...args)=>events.on(...args),close:()=>socket.close()};
 }
 export async function launchUpdateTest({executablePath,profile,env,policy,setupMain=''}){
- const nodePort=await freePort(),chromePort=await freePort(),args=[`--inspect-brk=${nodePort}`,`--remote-debugging-port=${chromePort}`,`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])];
+ const args=['--inspect-brk=0','--remote-debugging-port=0',`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])];
  const child=spawn(executablePath,args,{env,stdio:['ignore','pipe','pipe'],windowsHide:true}),events=new EventEmitter();let debug,browser,mainContext,resumed=false,stderr='',stdout='';
  // Crash cuts need main's actual exit independently of inherited pipes held by a paused owned backend.
  const exited=new Promise(ok=>child.once('exit',(code,signal)=>ok({code,signal})));
  const closed=new Promise(ok=>child.once('close',(code,signal)=>{events.emit('close',{code,signal});ok({code,signal});}));let spawnError;child.once('error',error=>spawnError=error);child.stdout.on('data',bytes=>stdout+=bytes);child.stderr.on('data',bytes=>{stderr+=bytes;if(stderr.includes('Waiting for the debugger to disconnect'))debug?.close();});
  console.log(`update-test-launch spawned owned Electron pid=${child.pid}`);
  try{
-  debug=await inspector(await endpoint(nodePort,child));
+  debug=await inspector(await endpoint(child,()=>stderr));
   const pauses=[],pauseLog=[],scripts=new Map();debug.on('Debugger.scriptParsed',value=>scripts.set(value.scriptId,{url:value.url,contextId:value.executionContextId}));debug.on('Debugger.paused',value=>{pauses.push(value);pauseLog.push(value.callFrames.map(frame=>({url:frame.url,scriptId:frame.location.scriptId,line:frame.location.lineNumber})));});
   await debug.send('Runtime.enable');await debug.send('Debugger.enable');console.log('update-test-launch inspector attached before startup');
   await debug.send('Debugger.setBreakpointByUrl',{urlRegex:'app\\.asar[/\\\\]dist[/\\\\]main\\.js$',lineNumber:0});await debug.send('Runtime.runIfWaitingForDebugger');
@@ -69,7 +66,8 @@ export async function launchUpdateTest({executablePath,profile,env,policy,setupM
   assert(Number.isSafeInteger(mainContext),'Actual main context was not observed');
   const proof=await debug.frameEvaluate(script,mainFrame.callFrameId);assert(proof.beforeMain);console.log('update-test-launch fixture attached before main');resumed=true;await debug.send('Debugger.resume');console.log('update-test-launch main resumed');
   const chromeDeadline=Date.now()+30000;while(!stderr.includes('DevTools listening on ')&&Date.now()<chromeDeadline&&child.exitCode===null)await delay(50);assert(stderr.includes('DevTools listening on '),`Owned Electron Chromium inspector missing: ${stderr}`);
-  browser=await chromium.connectOverCDP(`http://127.0.0.1:${chromePort}`);console.log('update-test-launch Chromium attached');
+  const chromeURL=new URL(/DevTools listening on (ws:\/\/127\.0\.0\.1:[0-9]+\/devtools\/browser\/[^\s]+)/.exec(stderr)?.[1]);assert(chromeURL.hostname==='127.0.0.1'&&!chromeURL.search&&!chromeURL.hash);
+  browser=await chromium.connectOverCDP(chromeURL.href);console.log('update-test-launch Chromium attached');
   const app={
    process:()=>child,
    evaluate:(fn,arg)=>debug.evaluate(`(${fn.toString()})(process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js')('electron'),${JSON.stringify(arg)})`,mainContext),
