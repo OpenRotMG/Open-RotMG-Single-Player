@@ -10,7 +10,7 @@ import {extractRuntime} from './update-archive';
 import {discover,downloadPayload} from './update-network';
 import {UpdatePolicy} from './update-policy';
 import {exists,generation,Generation,record,RuntimeStore,select,Selection,selection} from './update-store';
-import {Backup,backup,backupName,backupPath,NativeStartupAck,Pending,pending,readNativeAck,readPending} from './update-journal';
+import {Backup,backup,backupName,backupPath,NativeStartupAck,Pending,pending,readNativeAck,readPending,uuid} from './update-journal';
 import {Activity,Authorization,ReadyProof,Receipt,RecoveredRuntimeFence} from './update-recovery';
 
 export type RuntimeSummary={version:string;sequence:number;server:string;client:string;ruffle:string;kind:'source'|'release'};
@@ -25,7 +25,7 @@ export class RuntimeUpdates extends EventEmitter{
   private current?:Generation;private committed?:Generation;private staged?:Generation;private available?:RuntimeSummary;
   private transaction?:Pending;private startingPending?:Pending;private startAuthorization?:Authorization;
   private authorityActivity?:Activity;private serverActivity?:Activity;private explicitRecovery=false;private bookkeepingTask?:Promise<void>;private quarantined=false;private recoveryCompletion?:{command:string;ack:unknown};private recoveryAuthority?:AuthorityCompletion;private recoveryEpoch?:number;private recoveryStarted=0;private recoveryCompletions:AuthorityCompletion[]=[];
-  private refusedCheck?:{format:1;kind:'service'|'rejected'|'launcher';message:string;selected:Selection};
+  private refusedCheck?:{format:1;id:string;kind:'service'|'rejected'|'launcher';message:string;selected:Selection};
   private failureSerial=0;private failure?:UpdateProblem;private phase:UpdateView['phase']='initializing';private message='Preparing explicit installed runtime…';
   constructor(private runtime:Runtime,readonly policy:UpdatePolicy,private confirm:(value:UpdateConfirmation)=>Promise<boolean>){
     super();this.store=new RuntimeStore(runtime.userData,policy,error=>runtime.blockAmbiguousSave(error));this.fence=new RecoveredRuntimeFence(this.store);runtime.attachUpdates(this);
@@ -51,7 +51,7 @@ export class RuntimeUpdates extends EventEmitter{
   }
   private async initializeOwned(){
     const value=await this.store.initialize();this.current=value.selected;this.committed=value.selected;
-    if(await exists(this.store.path('runtime-check-refusal.json'))){const refused=await record(this.store.path('runtime-check-refusal.json'));exact(refused,'format,kind,message,selected','unresolved runtime check refusal');demand(refused.format===1&&['service','rejected','launcher'].includes(String(refused.kind))&&typeof refused.message==='string'&&refused.message.length<=4000,'Invalid persisted runtime check refusal');await this.store.load(selection(refused.selected));this.refusedCheck=refused as typeof this.refusedCheck;}
+    if(await exists(this.store.path('runtime-check-refusal.json'))){const refused=await record(this.store.path('runtime-check-refusal.json'));exact(refused,'format,id,kind,message,selected','unresolved runtime check refusal');demand(refused.format===1&&uuid(refused.id)&&['service','rejected','launcher'].includes(String(refused.kind))&&typeof refused.message==='string'&&refused.message.length<=4000,'Invalid persisted runtime check refusal');await this.store.load(selection(refused.selected));this.refusedCheck=refused as typeof this.refusedCheck;}
     if(await exists(this.store.path('runtime-pending.json'))){
       this.transaction=await readPending(this.store);await this.store.load(this.transaction.from);await this.store.load(this.transaction.to);
       this.committed=await this.store.load(this.transaction.from);
@@ -64,7 +64,7 @@ export class RuntimeUpdates extends EventEmitter{
   }
   private async recordRefusal(error?:UpdateProblem){
     const path=this.store.path('runtime-check-refusal.json');
-    if(error){demand(this.current&&['service','rejected','launcher'].includes(error.kind),'Invalid runtime refusal context');const value={format:1 as const,kind:error.kind as 'service'|'rejected'|'launcher',message:error.message.slice(0,4000),selected:select(this.current)};await this.store.writeRecord(path,value);this.refusedCheck=value;}
+    if(error){demand(this.current&&['service','rejected','launcher'].includes(error.kind),'Invalid runtime refusal context');const value={format:1 as const,id:randomUUID(),kind:error.kind as 'service'|'rejected'|'launcher',message:error.message.slice(0,4000),selected:select(this.current)};await this.store.writeRecord(path,value);this.refusedCheck=value;}
     else{if(await exists(path)){await this.store.retireControl(path,'refusal');}this.refusedCheck=undefined;}
   }
   private async initialized(){if(this.initialization)await this.initialization;else await this.initializeOwned();}
