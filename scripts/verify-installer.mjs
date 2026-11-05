@@ -85,7 +85,7 @@ async function journey(){
   restoreProtection=await protectInstallation(installation);await assertInstallationProtected(installation,runtime);await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
   check('Same-version native reinstall/repair preserves identical userData database and real playable saved progress',true);
   report.status='passed';
- }catch(error){report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
+ }catch(error){if(error.installerInvocation)report.installerInvocation=error.installerInvocation;report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
   for(const [name,cleanup] of [['browser',()=>game?.close()],['launcher',()=>app?.close()],['install protection',()=>restoreProtection?.()],['display',()=>display?.close()],['port lease',()=>lease?.release()]])try{await cleanup();}catch(error){report.errors.push(`${name}: ${error.stack??error}`);}
   if(serverPid&&alive(serverPid))report.errors.push(`Owned server ${serverPid} remains alive; NOT force-killed, no save success claimed`);
