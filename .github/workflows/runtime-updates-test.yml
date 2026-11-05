@@ -53,6 +53,7 @@ jobs:
             .qa/runtime-inputs/producer.json
             .qa/runtime-inputs/C/*.json
             .qa/runtime-inputs/C/*.log
+            .qa/runtime-inputs/C/desktop-metadata-windows-cli/*.json
             .qa/runtime-inputs/C/*.tar.gz
             .qa/runtime-inputs/A/*.json
             .qa/runtime-updates/offline-proof.json

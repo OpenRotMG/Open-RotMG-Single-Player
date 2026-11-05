@@ -1,7 +1,8 @@
 {
   "format": 1,
-  "server": "2e66e57406a1a95e0385a8e6beb42d3ba3aab388",
+  "server": "6e6e6801f61ae030437d6c6ed69dec9082409cb0",
   "clientNamespace": 1,
+  "desktopMetadata": 1,
   "save": {
     "cli": 1,
     "read": [21, 22],
