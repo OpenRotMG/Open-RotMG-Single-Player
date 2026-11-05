@@ -58,7 +58,7 @@ test('windows-path-validation rejects wrong actual Windows image or PID generati
 test('Phase5 paired runtime pins are exact and cannot inherit historical Windows qualification',async()=>{
   const pins=JSON.parse(await readFile('source-pins.json','utf8'));
   assert.deepEqual(pins,{
-    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:'6e6e6801f61ae030437d6c6ed69dec9082409cb0',dataSha256:'1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
+    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:'2c700135d755a4210c2204334aafee2572205ec1',dataSha256:'1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
     client:{repository:'https://github.com/dginovker/Open-RotMG-Client',commit:'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e',preparedSha256:'486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
     ruffle:{version:'0.7.1-openrotmg.16',sourceCommit:'89a7049965f3090e706265670df309a5128233ac',bundleSha256:'579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435'},
   });
