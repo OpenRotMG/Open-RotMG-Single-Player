@@ -1,0 +1,81 @@
+name: Stage authenticated runtime draft from exact native checks
+on:
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: Successful three-target runtime-updates-test run at this exact reviewed main SHA
+        required: true
+        type: string
+      tag:
+        description: New immutable release tag (first consumer v0.1.0; does not publish)
+        required: true
+        type: string
+      sequence:
+        description: New positive monotonically increasing production sequence
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+jobs:
+  stage-draft:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+      - name: Install only trusted-main validation tools, never candidate binaries or scripts
+        run: npm ci --ignore-scripts && npx tsc
+      - name: Fetch exact native run and data-only artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+          TAG: ${{ inputs.tag }}
+          SEQUENCE: ${{ inputs.sequence }}
+        shell: bash
+        run: |
+          [[ "$NATIVE_RUN" =~ ^[1-9][0-9]*$ ]]
+          mkdir evidence
+          gh api "repos/OpenRotMG/Open-RotMG-Single-Player/actions/runs/$NATIVE_RUN" > evidence/run.json
+          gh api "repos/OpenRotMG/Open-RotMG-Single-Player/actions/runs/$NATIVE_RUN/jobs?per_page=100" > evidence/jobs.json
+          gh run download "$NATIVE_RUN" --repo OpenRotMG/Open-RotMG-Single-Player --dir evidence
+          node scripts/promote-runtime.mjs validate evidence validated "$TAG" "$SEQUENCE"
+      - name: Create NEW draft and upload exact already-tested payloads without clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          SEQUENCE: ${{ inputs.sequence }}
+        shell: bash
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SEQUENCE" =~ ^[1-9][0-9]*$ ]]
+          gh release create "$TAG" --repo OpenRotMG/Open-RotMG-Single-Player --draft --target "$GITHUB_SHA" --title "$TAG" --notes "$(printf 'RUNTIME_SEQUENCE=%s\nCANDIDATE_SHA=%s\nAuthenticated paired runtime; draft pending parent publication and Phase 6 installer delivery.' "$SEQUENCE" "$GITHUB_SHA")"
+          find evidence -name 'runtime-*.tar.gz' -type f -print0 | xargs -0 gh release upload "$TAG" --repo OpenRotMG/Open-RotMG-Single-Player
+          gh api "repos/OpenRotMG/Open-RotMG-Single-Player/releases/tags/$TAG" > draft.json
+      - name: Sign exact metadata with trusted-main code (only secret-bearing step)
+        env:
+          RUNTIME_MANIFEST_SIGNING_KEY: ${{ secrets.RUNTIME_MANIFEST_SIGNING_KEY }}
+          TAG: ${{ inputs.tag }}
+          SEQUENCE: ${{ inputs.sequence }}
+        run: node scripts/promote-runtime.mjs sign validated/validated.json signed draft.json "$TAG" "$SEQUENCE"
+      - name: Upload public metadata and raw detached signatures; leave release DRAFT
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release upload "$TAG" signed/runtime-* --repo OpenRotMG/Open-RotMG-Single-Player
+      - name: Preserve small validation/public metadata receipts, never private key material
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-draft-receipts
+          path: |
+            validated/validated.json
+            draft.json
+            signed/*
+          if-no-files-found: error

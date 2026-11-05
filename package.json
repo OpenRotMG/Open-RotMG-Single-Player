@@ -12,7 +12,8 @@
     "test": "tsc && node --test tests/*.test.mjs",
     "package": "npm run build && electron-forge package",
     "package:test": "npm test && npm run package && node scripts/package-test.mjs",
-    "test:e2e": "node scripts/save-controls-test.mjs"
+    "test:e2e": "node scripts/save-controls-test.mjs",
+    "test:runtime-updates": "node scripts/runtime-updates-test.mjs"
   },
   "devDependencies": {
     "@electron-forge/cli": "8.0.1",

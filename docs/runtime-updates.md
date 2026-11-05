@@ -1,0 +1,33 @@
+# Paired runtime updates
+
+This is still a source preview. First consumer `v0.1.0` / production sequence 1 is reserved, not published. Runtime authentication is not OS installer signing or launcher self-update. Linux x64, Windows x64 and Apple Silicon macOS require their corresponding native updater gates; local results do not qualify another platform.
+
+## Consumer behavior
+
+Startup, stopped Start and Options → Check / update now share one bounded task. A running game may discover/download a candidate but stays on its exact old pair until actual clean stop. Close aborts safe network work and settles owned work; it never force-kills a transactional authority. HTTP 503/rate limits, rejected metadata and minimum-launcher errors are not called offline. A rejected check never silently starts another pair. If selection is verified and no pending ambiguity exists, Play installed version is a deliberate alternative. Refused checks and authenticated sequence identities survive restart; later network unavailability does not erase them.
+
+The first source build has explicit sequence 0. Managed selections point to immutable, complete generations under userData, not a name that resolves to a newer installer's bundled files. A missing/corrupt authoritative selection or bootstrap anchor fails closed. No runtime, orphan, manual-backup or recovery-evidence garbage collection runs automatically.
+
+Rust alone owns SQL and `state.lock`. Before every capable stopped Start, the launcher records a fresh sibling `userData/backups/*.sqlite` path. The actual server acquires StateLock, verifies/snapshots the *current* save, flushes its exact `.ack.json`, and retains exclusion through migration and the owned server lifetime. An earlier pre-update snapshot does not cover intervening external CLI progress. Only actual PID-bound readiness completes activation. Full snapshots have no portable-account 32-MiB cap.
+
+Recovery never deletes `shutdown-failed.json` or `state.lock`. A failed candidate may be explicitly restored from its freshest verified under-lock startup snapshot, with a separate pre-restore snapshot and preserved original evidence. Failed candidates require explicit retry or a newer eligible release. Recovered profiles have write-ahead ACTIVE fences through actual authority/server close; missing acknowledgement or failed clean persistence blocks play even after a real commit. The narrow manual current-save remedy preserves newer current progress: exact already-authorized generation only, no update/restore mismatch, actual Rust snapshot/verification. An interrupted ordinary same-generation Start additionally requires full current schema22 proof. It never claims the old Start/migration/shutdown succeeded or replays it. Recorded completed recovery bookkeeping can be finalized without repeating restore.
+
+The browser opens `http://127.0.0.1:47831/_runtime/{whole-build-identity-SHA256}/`. That digest binds server, client, Ruffle and data, not just the client revision. New static resources are namespace-qualified and no-store; APIs/websocket remain rooted. Old already-open documents are not silently relabelled.
+
+## Authenticated format
+
+Fixed repository: https://github.com/OpenRotMG/Open-RotMG-Single-Player
+
+Each actual release generation contains `runtime-{linux-x64|win32-x64|darwin-arm64}.json`, raw 64-byte `.json.sig`, and `.tar.gz`. Embedded Ed25519 public-key SHA256 is `5038cb15fb3673dbb2042a3c77cd53c86b624948dfcd1da9f96403fc4d6ac07c`. There is no production environment override for key, origin, payload path or runtime choice. Metadata is authenticated as exact bytes before payload use, bound to release ID/tag/asset ID/URL/size/SHA256, target, minimum launcher and exact component/inventory identity. Format 1 requires `clientNamespace:1` and save CLI1/read21,22/write22/`startupBackup:1`. Authenticated incompatible/future headers still retain their positive sequence/byte identity, without authorizing their payload.
+
+Downloads are bounded and redirects constrained. Raw tar paths, aliases, duplicates, links, metadata types and expanded bytes are checked before extraction; installed native headers, full inventory, capability notice and build identity are then verified. No installer script or developer extraction command executes.
+
+## Testing and draft promotion
+
+`npm test` runs protocol, lifecycle, archive, IPC, sequence and crash-fence unit regressions. Synthetic records in these tests are explicitly not Rust/native migration proof.
+
+`npm run test:runtime-updates` exercises the real packaged app through attached-process fixture injection before main executes. It requires absolute `OPENROTMG_RUNTIME_UPDATE_INPUTS` JSON fields `A`, `C`, `archive`, `archiveInfo`, an explicit native browser mode and owned display/temp environment. These are test-driver inputs, never consumer configuration. Fixtures use ephemeral keys and local fictional release IDs/tags. On Linux the driver creates a private D-Bus/Xvfb/Xauthority context. Only `--ignore-gpu-blocklist` is permitted for the controlled software-WebGL browser; no interception/cache-disabling or sandbox bypass qualifies normal-cache evidence.
+
+`.github/workflows/runtime-updates-test.yml` uses standard Linux/Windows/ARMmac hosted runners. It builds A then C sequentially in one source clone pair, retains exact native payloads, and checks actual Windows in-use image behavior plus the Rust publication/flush-failure/schema21 regressions. Do not dispatch historical Phase 1 or Windows permission campaigns as a substitute.
+
+`.github/workflows/promote-runtime.yml` runs only on trusted main and requires an already-successful three-target native run at that **exact same main SHA**. Candidate artifacts are data only; candidate binaries/scripts never execute in the signing job. The private key exists only in the signing step and must match the embedded public key. Exact tested archives are uploaded without recompression or clobber; manifests bind the resulting real draft release/asset IDs. The workflow leaves the release **DRAFT**. It does not publish a consumer release, create installers, or bypass repository/security settings. Parent review/native dispatch/signing/publication remain separate actions. If a prior step already created a draft, inspect that result rather than replaying creation or replacing accepted assets. Final consumer publication must preserve the exact artifacts and immutable generation; Phase 6 installers must embed those promoted bytes, not rebuild/regzip at the same sequence.

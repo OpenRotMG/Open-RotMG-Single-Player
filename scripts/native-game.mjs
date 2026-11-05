@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {openNativeEdge,openNativeOwnedEdge} from './native-edge.mjs';
 
 const fixtureCredentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
-export async function nativeGame({out,origin,env,check,report,ownedEdge,credentials = fixtureCredentials}) {
+export async function nativeGame({out,origin,env,check,report,ownedEdge,credentials = fixtureCredentials,normalCache = false,clientURL = origin,onPage}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
   assert(['vps-managed','ci-playwright','ci-edge','ci-owned-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright, ci-edge or ci-owned-edge explicitly');assert((mode==='ci-owned-edge')===!!ownedEdge,'ci-owned-edge requires only the prepared owned policy image');
   if(mode!=='vps-managed')assert(process.env.GITHUB_ACTIONS==='true','CI browser modes are restricted to GitHub Actions owned runners');
@@ -18,7 +18,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
     assert(process.env.PI_NATIVE_TEST_CHROME, 'PI_NATIVE_TEST_CHROME must select the native Chrome binary');
   }
   report.browserMode=mode;
-  let session, sequence=0, expected;
+  let session, sequence=0, expected,entryURL=clientURL;
   const account = async name => {
     const response = await fetch(origin+'/legacy-api/char/list',{method:'POST',body:new URLSearchParams(credentials)});
     assert(response.ok,'Ordinary account read failed');
@@ -61,22 +61,25 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       (report.browsers??=[]).push({owner,pid,profile,argv});
     }
     report.gameBrowserVersion=browser.version();
-    if(mode!=='ci-owned-edge')await page.route('**/*',route=>{
+    if(onPage)await onPage({page,browser,context,pid:report.browsers.at(-1).pid});
+    // Playwright request interception disables HTTP caching; cache qualification observes normal requests instead.
+    if(mode!=='ci-owned-edge'&&!normalCache)await page.route('**/*',route=>{
       const url=new URL(route.request().url());
       if(url.origin===origin)return route.continue();
       (report.blockedBrowserRequests??=[]).push(url.origin);return route.abort('blockedbyclient');
     });
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
-    let verified=0,charLists=0;
+    let verified=0,charLists=0,playGeneration=0,currentAccountHasFixtureCharacter=false;
     const responseErrors=[];
     page.on('response',response=>{
       const path=new URL(response.url()).pathname;
       if(!['/legacy-api/account/verify','/legacy-api/char/list'].includes(path))return;
-      void response.finished().then(error=>{if(error)responseErrors.push(String(error));else if(path.endsWith('/verify'))verified++;else charLists++;},error=>responseErrors.push(String(error)));
+      const receivedIn=playGeneration;
+      void response.finished().then(async error=>{if(receivedIn!==playGeneration)return;if(error)responseErrors.push(String(error));else if(path.endsWith('/verify'))verified++;else{const hasCharacter=normalCache?/<Char id="1">/.test(await response.text()):false;if(receivedIn===playGeneration){currentAccountHasFixtureCharacter=hasCharacter;charLists++;}}}).catch(error=>{if(receivedIn===playGeneration)responseErrors.push(String(error));});
     });
     const settled=async(predicate,label)=>{const deadline=Date.now()+30000;while(!predicate()&&Date.now()<deadline)await delay(100);assert(predicate(),label);assert.deepEqual(responseErrors,[]);await delay(500);await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));};
-    let frames=0;page.on('websocket',socket=>{if(socket.url()===origin.replace('http:','ws:')+'/game')socket.on('framereceived',()=>frames++);});
+    let frames=0;page.on('websocket',socket=>{const receivedIn=playGeneration;if(socket.url()===origin.replace('http:','ws:')+'/game')socket.on('framereceived',()=>{if(receivedIn===playGeneration)frames++;});});
     const close=async()=>{
       const failures=[];
       try{if(mode==='vps-managed'){
@@ -88,20 +91,25 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       try{await writeFile(join(out,`${name}-browser.log`),errors+'\n'+JSON.stringify(consoleLog,null,2));}catch(error){failures.push(error);}
       if(failures.length)throw new AggregateError(failures,failures.map(error=>String(error.stack??error)).join('\n'));
     };
-    session={page,close};
+    const play=async(name)=>{
+    playGeneration++;verified=0;charLists=0;frames=0;currentAccountHasFixtureCharacter=false;responseErrors.length=0;consoleLog.length=0;
     try {
-      await page.goto(origin);
+      assert.equal(new URL(entryURL).origin,origin,'Native client entry must stay on the fixed owned loopback server');
+      await page.goto(entryURL);
       await page.waitForFunction(()=>document.querySelector('ruffle-player')?.ruffle().isPlaying===true,{},{timeout:60000});
       await delay(3000);
       await page.evaluate(()=>{const modal=document.querySelector('ruffle-player').shadowRoot.querySelector('#hardware-acceleration-modal');if(modal&&!modal.classList.contains('hidden'))modal.querySelector('.close-modal').click();});
       const rect=await page.locator('ruffle-player').boundingBox();assert(rect.width===800&&rect.height===600,'Unclipped native 800x600 game required');
       const click=async(x,y)=>page.mouse.click(rect.x+x,rect.y+y);
+      if(normalCache){await settled(()=>charLists>=1,'Initial real account character response must settle before choosing sign-in');await click(400,300);await delay(300);}
+      if(!currentAccountHasFixtureCharacter){
       await click(500,550);await delay(300);
       await click(400,438);await delay(300);
       await click(400,228);await page.keyboard.type(credentials.guid);
       await click(400,315);await page.keyboard.type(credentials.password);
       await click(492,420);await settled(()=>verified>=2,'Normal sign-in and Current account verification must finish');
       await click(480,386);await settled(()=>charLists>=2,'Post-login character refresh must finish before Play');
+      }else check(`${name}: real remembered account authenticated character response observed`,charLists>=1&&currentAccountHasFixtureCharacter);
       await click(400,550);await delay(500);await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));
       await click(160,130);
       const deadline=Date.now()+30000;while(frames<10&&Date.now()<deadline)await delay(100);
@@ -119,7 +127,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
         return {webgl2:true,lost:gl.isContextLost(),renderer:gl.getParameter(gl.RENDERER),unmaskedRenderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):null};
       });
       check(`${name}: live WebGL2 context is not lost`,graphics.webgl2&&!graphics.lost);
-      (report.nativeSessions??=[]).push({name,frames,verified,charLists,graphics});
+      (report.nativeSessions??=[]).push({name,frames,verified,charLists,graphics,entryURL:page.url(),browserPid:report.browsers.at(-1).pid,normalCache});
       const shot=join(out,`${name}-native-game.png`);await page.screenshot({path:shot});report.screenshots.push(shot);
       return {page,rect,close};
     } catch(error) {
@@ -127,11 +135,20 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       try{await close();}catch(cleanup){failures.push(cleanup);}session=undefined;
       if(failures.length>1)throw new AggregateError(failures,failures.map(failure=>String(failure.stack??failure)).join('\n'));throw error;
     }
+    };
+    session={page,close,play};return play(name);
   };
   const close=async()=>{if(session){const current=session;session=undefined;await current.close();}};
   const current=await open('before');
   return {
     close,
+    get page(){assert(session,'No active native browser session');return session.page;},
+    async reopenSameBrowser(url){
+      if(url!==undefined)entryURL=url;
+      assert(normalCache&&session,'Same-browser verification requires the declared normal-cache session');
+      const name=`same-cache-${sequence++}`;await session.play(name);const actual=await account(name);
+      check(`${name}: same browser retains exact character progress`,JSON.stringify(actual)===JSON.stringify(expected));
+    },
     async mutate() {
       const before=await account('before');check('fixture starts with an equipped weapon',before[0]===2711);
       const {page,rect}=current;

@@ -1,0 +1,58 @@
+name: Native paired runtime update safety
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runtime-updates:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      OPENROTMG_TEST_BROWSER_MODE: ci-playwright
+      PI_NATIVE_TEST_CHROME_ARGS: '["--ignore-gpu-blocklist"]'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+          cache: npm
+      - run: npm ci
+      - run: npm exec -- playwright install --with-deps chromium
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb xauth dbus-x11
+      - name: Unit tests and fresh sequential native A/C producer plus mandatory Rust publication regressions
+        run: npm test && node scripts/ci-runtime-inputs.mjs
+      - name: Package and exercise real native paired updates
+        shell: bash
+        run: |
+          export OPENROTMG_BUILD_INPUTS="$PWD/.qa/runtime-inputs/C/build-inputs.json"
+          export OPENROTMG_RUNTIME_UPDATE_INPUTS="$PWD/.qa/runtime-inputs/native-inputs.json"
+          export OPENROTMG_TEST_TMP_ROOT="$RUNNER_TEMP/upd"
+          npm run package
+          npm run test:runtime-updates
+      - name: Retain exact native payload, bindings, failures and normal-cache evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: runtime-update-${{ matrix.os }}
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .qa/runtime-inputs/producer.json
+            .qa/runtime-inputs/C/*.json
+            .qa/runtime-inputs/C/*.log
+            .qa/runtime-inputs/C/*.tar.gz
+            .qa/runtime-inputs/A/*.json
+            .qa/runtime-updates/run-*/*.json
+            .qa/runtime-updates/run-*/*.png
+            .qa/runtime-updates/run-*/*.log
+            .qa/runtime-updates/run-*/*.xml
+            .qa/runtime-updates/run-*/paired-profile/*.json
+            .qa/runtime-updates/run-*/paired-profile/diagnostics/**
+            .qa/runtime-updates/run-*/migration-profile/*.json
+            .qa/runtime-updates/run-*/migration-profile/diagnostics/**
+            .qa/runtime-updates/run-*/migration-profile/runtime-recovery-history/**
