@@ -19,7 +19,7 @@ async function inspector(url){
  const socket=new WebSocket(url);await new Promise((ok,bad)=>{socket.addEventListener('open',ok,{once:true});socket.addEventListener('error',bad,{once:true});});
  let sequence=0;const pending=new Map(),events=new EventEmitter();socket.addEventListener('message',event=>{const data=JSON.parse(event.data);if(data.id){const p=pending.get(data.id);if(p){pending.delete(data.id);data.error?p.reject(Error(JSON.stringify(data.error))):p.resolve(data.result);}}else if(data.method)events.emit(data.method,data.params);});
  socket.addEventListener('close',()=>{for(const p of pending.values())p.reject(Error('Owned Node inspector disconnected'));pending.clear();});
- const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
+ const send=(method,params={})=>new Promise((resolve,reject)=>{if(socket.readyState!==WebSocket.OPEN){reject(Error('Owned Node inspector is closed'));return;}const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params}));});
  const evaluate=async(expression,contextId)=>{assert(Number.isSafeInteger(contextId),'Explicit owned main execution context required');const value=await send('Runtime.evaluate',{expression,contextId,awaitPromise:true,returnByValue:true});assert(!value.exceptionDetails,JSON.stringify(value.exceptionDetails));return value.result.value;};
  const frameEvaluate=async(expression,callFrameId)=>{const value=await send('Debugger.evaluateOnCallFrame',{expression,callFrameId,returnByValue:true});assert(!value.exceptionDetails,JSON.stringify(value.exceptionDetails));return value.result.value;};
  return{send,evaluate,frameEvaluate,on:(...args)=>events.on(...args),close:()=>socket.close()};
@@ -73,8 +73,9 @@ export async function launchUpdateTest({executablePath,profile,env,policy,setupM
    evaluate:(fn,arg)=>debug.evaluate(`(${fn.toString()})(process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js')('electron'),${JSON.stringify(arg)})`,mainContext),
    firstWindow:async()=>{const context=browser.contexts()[0];return context.pages()[0]??context.waitForEvent('page',{timeout:30000});},
    waitForEvent:async name=>{assert(['close','exit'].includes(name));return name==='exit'?exited:closed;},
-   detach:async()=>{debug.close();await browser.close();},
-   close:async()=>{await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());return closed;},
+   detach:async()=>{assert(child.exitCode!==null||child.signalCode!==null,'Detach requires actual owned main exit');debug.close();await browser.close();},
+   // app.exit can close inspector before replying; only actual owned main exit settles that race.
+   close:async()=>{try{await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());}catch(error){if(child.exitCode===null&&child.signalCode===null){const timer=new AbortController();try{await Promise.race([exited,delay(5000,undefined,{signal:timer.signal}).then(()=>{throw error;})]);}finally{timer.abort();}}}return closed;},
    stderr:()=>stderr,stdout:()=>stdout,
   };
   assert.equal(await app.evaluate(()=>process.pid),child.pid);return{app,proof};
