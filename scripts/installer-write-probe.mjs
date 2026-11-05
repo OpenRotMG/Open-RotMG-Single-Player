@@ -7,6 +7,9 @@ import {fileURLToPath} from 'node:url';
 import {windowsPowerShellExecutable} from './native-boundaries.mjs';
 
 export function requireWindowsInstallerWriteDenied(value,request){
+ assert.equal(value.status,'complete');assert.equal(value.transport.inputCodePage,65001);assert.equal(value.transport.outputCodePage,65001);assert.equal(value.transport.inputRedirected,true);assert.equal(value.transport.outputRedirected,true);assert.equal(value.transport.requestUtf8Base64,Buffer.from(JSON.stringify(request),'utf8').toString('base64'));assert.deepEqual(value.transport.decodedDirectories,request.directories);
+ assert(Array.isArray(value.directoryChecks));assert.equal(value.directoryChecks.length,2);
+ for(const [index,check] of value.directoryChecks.entries()){assert.equal(check.directory,request.directories[index]);assert.equal(check.utf8Base64,Buffer.from(check.directory,'utf8').toString('base64'));assert.equal(check.provider.fullName,check.directory);assert.equal(check.provider.directory,true);assert.equal(check.provider.reparse,false);assert.equal(check.providerError,undefined);}
  assert.equal(request.directories.length,2);assert.equal(value.format,1);assert.equal(value.method,'FileStream(CreateNew,Write,None)');assert.equal(value.fileOptions,0);assert(typeof value.sid==='string'&&/^S-\d+(?:-\d+)+$/.test(value.sid));assert(Number.isSafeInteger(value.pid)&&value.pid>0);for(const version of [value.powerShell,value.dotnet])assert(typeof version==='string'&&version.length>0&&version.length<=64);assert(Array.isArray(value.privileges)&&value.privileges.length<=2);assert.equal(new Set(value.privileges.map(row=>row.name)).size,value.privileges.length);
  for(const row of value.privileges){assert(['SeBackupPrivilege','SeRestorePrivilege'].includes(row.name));assert(typeof row.state==='string'&&row.state.length>0&&row.state.length<=128);}
  assert(Array.isArray(value.probes));assert.equal(value.probes.length,request.directories.length);
@@ -28,7 +31,7 @@ export async function assertWindowsInstallerWriteDenied(root,resources,out,phase
  try{
   const stdout=run(engine,args,{input:JSON.stringify(request),encoding:'utf8',timeout:30000,maxBuffer:64*1024,windowsHide:true,shell:false});assert.equal(typeof stdout,'string');assert(Buffer.byteLength(stdout)<=64*1024,'Probe output exceeds bound');diagnostic.stdout=stdout;
   diagnostic.result=JSON.parse(stdout);requireWindowsInstallerWriteDenied(diagnostic.result,request);diagnostic.status='passed';
- }catch(error){failure=error;diagnostic.status='failed';diagnostic.error={message:String(error.message??error),code:error.code??null,status:error.status??null,signal:error.signal??null};if(error.stdout!==undefined)diagnostic.stdout=String(error.stdout).slice(0,64*1024);if(error.stderr!==undefined)diagnostic.stderr=String(error.stderr).slice(0,4096);}
+ }catch(error){failure=error;diagnostic.status='failed';diagnostic.error={message:String(error.message??error),code:error.code??null,status:error.status??null,signal:error.signal??null};if(error.stdout!==undefined){diagnostic.stdout=String(error.stdout).slice(0,64*1024);try{diagnostic.result=JSON.parse(diagnostic.stdout);}catch(parseError){diagnostic.outputParseError=parseError.message;}}if(error.stderr!==undefined)diagnostic.stderr=String(error.stderr).slice(0,4096);}
  diagnostic.finishedAt=new Date().toISOString();await writeFile(path,JSON.stringify(diagnostic,null,2)+'\n');
  if(failure){const error=new Error(`Windows installed normal-write probe failed: ${failure.message}; evidence: ${path}`,{cause:failure});error.windowsWriteProbe=diagnostic;throw error;}
  return diagnostic;
