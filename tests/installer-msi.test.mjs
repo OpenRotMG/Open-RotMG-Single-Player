@@ -53,7 +53,10 @@ test('Windows MSI helper records actual controlled native timeout without retry 
 test('Windows MSI helper does not wait for inherited pipe EOF: controlled child exit completes while file-backed descendant waits',async()=>{
  const {artifact,root,out}=await owned(),release=join(out,'release-child'),done=join(out,'child-done');
  const descendant=`const fs=require('fs');const timer=setInterval(()=>{if(fs.existsSync(${JSON.stringify(release)})){clearInterval(timer);process.stdout.write('descendant retained output');fs.writeFileSync(${JSON.stringify(done)},'done');}},20);setTimeout(()=>process.exit(1),5000).unref();`;
- const child=`require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore',1,2],windowsVerbatimArguments:false}).unref();`;
+ // Detachment avoids the intermediate Node's Windows kill-on-close job; release/TTL still bounds this owned fixture.
+ const descendantOptions={stdio:['ignore',1,2],windowsVerbatimArguments:false,detached:true,windowsHide:true};
+ assert.equal(descendantOptions.detached,true);assert.equal(descendantOptions.windowsHide,true);assert.deepEqual(descendantOptions.stdio,['ignore',1,2]);
+ const child=`require('child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],${JSON.stringify(descendantOptions)}).unref();`;
  try{
   const result=await installWindowsMsi(artifact,root,out,false,(file,args,options)=>{checkInvocation(file,args,options,out);return spawnSync(process.execPath,['-e',child],{...options,windowsVerbatimArguments:false,timeout:2000});});
   assert.equal(result.result.status,0);assert.equal(result.result.timedOut,false);await assert.rejects(stat(done),error=>error.code==='ENOENT');
