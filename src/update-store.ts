@@ -102,7 +102,7 @@ export class RuntimeStore{
     const identity=await verifyRuntime(baseline.root,this.policy.target,manifest);await verifyCapabilities(baseline.root,identity.pins,baseline.startupBackup,baseline.clientNamespace);
     return generation(identity,baseline.identitySha256,this.policy.target,baseline.startupBackup,baseline.clientNamespace,manifest,baseline.manifest?digest(baseline.manifest):undefined);
   }
-  async stage(){await this.container(this.staging);return mkdtemp(join(this.staging,'generation-'));}
+  async stage(){await this.container(this.staging);if(this.metadata){const path=join(this.staging,'generation-'+randomUUID().replaceAll('-',''));demand(!await exists(path),'Fresh generation staging container already exists');await this.container(path);return path;}return mkdtemp(join(this.staging,'generation-'));}
   async remember(bytes:Uint8Array,signature:Uint8Array,manifest:Pick<Manifest,'sequence'>){
     const directory=join(this.userData,'runtime-manifests');await this.container(directory);
     const prefix=`${manifest.sequence}-`,sha=digest(bytes);
