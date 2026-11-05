@@ -2,7 +2,9 @@
 
 Desktop launcher for playing Open RotMG offline with local saves.
 
-**Source preview only.** No player download yet.
+Downloads for Linux x64, Windows x64 and Apple Silicon Mac: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases/tag/v0.1.0
+
+Windows and Mac packages are unsigned and may be blocked by OS security protections. Apple notarization and Intel Mac are not supported.
 
 The Options panel checks authenticated paired server/client/Ruffle/data updates. Running games are never restarted for an update. Saves and accumulating full backups stay outside the installation; launcher/Electron self-update is not included.
 
