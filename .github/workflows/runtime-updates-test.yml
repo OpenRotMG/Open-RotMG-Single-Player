@@ -33,7 +33,11 @@ jobs:
           export OPENROTMG_RUNTIME_UPDATE_INPUTS="$PWD/.qa/runtime-inputs/native-inputs.json"
           export OPENROTMG_TEST_TMP_ROOT="$RUNNER_TEMP/upd"
           npm run package
-          npm run test:runtime-updates
+          if [ "$RUNNER_OS" = Linux ]; then
+            node scripts/offline-linux.mjs --runtime-updates
+          else
+            npm run test:runtime-updates
+          fi
       - name: Retain exact native payload, bindings, failures and normal-cache evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -47,6 +51,7 @@ jobs:
             .qa/runtime-inputs/C/*.log
             .qa/runtime-inputs/C/*.tar.gz
             .qa/runtime-inputs/A/*.json
+            .qa/runtime-updates/offline-proof.json
             .qa/runtime-updates/run-*/*.json
             .qa/runtime-updates/run-*/*.pem
             .qa/runtime-updates/run-*/**/runtimes/*/generation.json

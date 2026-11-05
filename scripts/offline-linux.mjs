@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdir,readlink,writeFile} from 'node:fs/promises';
 import {connect} from 'node:net';
+import {resolve,dirname} from 'node:path';
+const runtimeUpdates=process.argv.includes('--runtime-updates');
+if(runtimeUpdates)assert.deepEqual(process.argv.slice(2).filter(arg=>!['--runtime-updates','--isolated'].includes(arg)),[],'Runtime offline gate accepts no arbitrary script/arguments');
 
 assert(process.platform==='linux','The network-namespace gate is Linux only');
 const namespace=await readlink('/proc/self/ns/net');
@@ -22,9 +25,9 @@ if(!process.argv.includes('--isolated')) {
     socket.once('connect',()=>{socket.destroy();bad(Error('External egress unexpectedly succeeded'));});
     socket.once('error',error=>{try{assert.equal(error.code,'ENETUNREACH');probes.push({host,port:443,error:error.code});ok();}catch(cause){bad(cause);}});
   });
-  await mkdir('.qa/integration',{recursive:true});
-  await writeFile('.qa/integration/offline-proof.json',JSON.stringify({uid:process.getuid(),namespace,parentNamespace:process.env.OPENROTMG_PARENT_NETNS,links:JSON.parse(links),routes,probes},null,2));
-  const child=spawn(process.execPath,['scripts/package-test.mjs',...process.argv.slice(2).filter(arg=>arg!=='--isolated')],{stdio:'inherit',env:process.env});
+  const proof=resolve(runtimeUpdates?'.qa/runtime-updates/offline-proof.json':'.qa/integration/offline-proof.json');await mkdir(dirname(proof),{recursive:true});
+  await writeFile(proof,JSON.stringify({uid:process.getuid(),namespace,parentNamespace:process.env.OPENROTMG_PARENT_NETNS,links:JSON.parse(links),routes,probes},null,2));
+  const child=spawn(process.execPath,[runtimeUpdates?'scripts/runtime-updates-test.mjs':'scripts/package-test.mjs',...process.argv.slice(2).filter(arg=>!['--isolated','--runtime-updates'].includes(arg))],{stdio:'inherit',env:{...process.env,...(runtimeUpdates?{OPENROTMG_RUNTIME_UPDATE_OFFLINE_PROOF:proof}:{})}});
   child.on('error',error=>{console.error(error);process.exitCode=1;});
   child.on('exit',(code,signal)=>{if(signal)console.error(`Offline package test exited with ${signal}`);process.exitCode=code??1;});
 }
