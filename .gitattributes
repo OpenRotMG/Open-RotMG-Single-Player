@@ -1,0 +1,4 @@
+tests/fixtures/installer-transport/draft.json -text
+tests/fixtures/installer-transport/validated.json -text
+tests/fixtures/installer-transport/runtime-linux-x64.json -text
+tests/fixtures/installer-transport/runtime-linux-x64.json.sig -text

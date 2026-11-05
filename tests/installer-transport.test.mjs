@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,mkdtemp,readFile,writeFile,copyFile,open,stat} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {createServer} from 'node:http';
+import {execFileSync} from 'node:child_process';
 import {prepareInstallerInputs,requireInstallerArtifact} from '../scripts/installer-inputs.mjs';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 import {hashFile,REPOSITORY,verifyManifest} from '../dist/update-format.js';
@@ -45,6 +46,16 @@ const readPins=await readFile('source-pins.json','utf8');
 test('installer transport public fixture is the original production exact-byte signed baseline, without any test signing key',async()=>{
  const value=verifyManifest(await readFile(join(fixtures,'runtime-linux-x64.json')),await readFile(join(fixtures,'runtime-linux-x64.json.sig')),MANIFEST_PUBLIC_KEY,435513734,'v0.1.0','linux-x64','0.1.0','https://github.com');
  assert.equal(value.sequence,1);assert.equal(value.payload.id,714228326);assert.equal(value.payload.sha256,'47494f3f82d8e3173ade702e5774f047e5a2bf4d15b3304fd820231013b2c47d');assert.deepEqual(value.pins,JSON.parse(readPins));
+});
+test('installer authentic fixture bytes survive actual Git LF/CRLF checkout filters without normalizing signed metadata',async()=>{
+ const signature=await readFile(join(fixtures,'runtime-linux-x64.json.sig'));
+ for(const [autocrlf,eol] of [['false','lf'],['true','crlf']])for(const name of ['draft.json','validated.json','runtime-linux-x64.json','runtime-linux-x64.json.sig']){
+  const path='tests/fixtures/installer-transport/'+name,raw=execFileSync('git',['show','HEAD:'+path]),filtered=execFileSync('git',['-c','core.autocrlf='+autocrlf,'-c','core.eol='+eol,'cat-file','--filters','--path='+path,'HEAD:'+path]);
+  assert.deepEqual(filtered,raw,`${path}: autocrlf=${autocrlf}, eol=${eol}`);assert.deepEqual(await readFile(join(fixtures,name)),raw);
+  if(name==='runtime-linux-x64.json')verifyManifest(filtered,signature,MANIFEST_PUBLIC_KEY,435513734,'v0.1.0','linux-x64','0.1.0','https://github.com');
+ }
+ const manifest=await readFile(join(fixtures,'runtime-linux-x64.json')),altered=Buffer.from(manifest.toString('utf8').replaceAll('\n','\r\n'));assert.notDeepEqual(altered,manifest);
+ assert.throws(()=>verifyManifest(altered,signature,MANIFEST_PUBLIC_KEY,435513734,'v0.1.0','linux-x64','0.1.0','https://github.com'),/signature/);
 });
 test('installer native Actions identity rejects missing, duplicate, wrong ID/name/run/head/repository, incomplete and expired input',()=>{
  const changes=[x=>x.artifacts=[],x=>x.artifacts.push(x.artifacts[0]),x=>x.total_count=1000,x=>x.artifacts[0].id=0,x=>x.artifacts[0].name='other',x=>x.artifacts[0].expired=true,x=>x.artifacts[0].expires_at='2000-01-01T00:00:00Z',x=>x.artifacts[0].workflow_run.id=1,x=>x.artifacts[0].workflow_run.head_sha=promotionHead,x=>x.artifacts[0].workflow_run.head_branch='candidate',x=>x.artifacts[0].workflow_run.repository_id=1,x=>x.artifacts[0].workflow_run.head_repository_id=1,x=>x.artifacts[0].url+='wrong'];
