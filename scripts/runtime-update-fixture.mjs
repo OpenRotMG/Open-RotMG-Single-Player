@@ -20,7 +20,7 @@ export async function runtimeFixture({out,runtime,archive,archiveInfo,target=tar
  assert.equal(archiveInfo.target,target);assert.deepEqual(archiveInfo.pins,identity.pins);assert.equal((await stat(archive)).size,archiveInfo.payload.bytes);assert.equal(await hashFile(archive),archiveInfo.payload.sha256);assert.equal(archiveInfo.startupBackup,1);assert.equal(archiveInfo.clientNamespace,1);assert.equal(archiveInfo.payload.binarySha256,identity.binarySha256);
  let mode='503',sequence=2,hold=false,held=[];const requests=[],errors=[];
  const server=createServer((request,response)=>{
-  const path=new URL(request.url,'http://fixture.invalid').pathname;requests.push({method:request.method,path,at:new Date().toISOString()});
+  const path=new URL(request.url,'http://fixture.invalid').pathname,entry={method:request.method,path,at:new Date().toISOString(),mode,status:null};requests.push(entry);response.once('finish',()=>{entry.status=response.statusCode;});
   if(request.method!=='GET'){errors.push('Unexpected non-GET runtime request; no request body was recorded');response.writeHead(405);response.end();return;}
   if(path.endsWith('/latest')&&hold){held.push(response);response.on('close',()=>{held=held.filter(item=>item!==response);});return;}
   serve(path,response);
