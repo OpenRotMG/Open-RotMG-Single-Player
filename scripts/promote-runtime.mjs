@@ -4,8 +4,9 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile,readdir,lstat} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {extractRuntime} from '../dist/update-archive.js';
-import {authenticateManifest,digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities} from '../dist/update-format.js';
+import {digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities} from '../dist/update-format.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
+import {requireAvailableRuntimeSequence} from './runtime-release-history.mjs';
 
 assert.equal(process.env.GITHUB_ACTIONS,'true','Promotion is restricted to the trusted-main hosted workflow');
 const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();assert.equal(process.env.GITHUB_REF,'refs/heads/main');assert.equal(process.env.GITHUB_SHA,head);assert.equal(execFileSync('git',['status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim(),'');
@@ -15,16 +16,7 @@ async function files(root){const result=[];async function walk(path){const info=
 const [mode,input,output,...extra]=process.argv.slice(2);assert(['validate','sign'].includes(mode));assert(input&&output);await mkdir(output,{recursive:true});
 if(mode==='validate'){
  assert.equal(extra.length,2);const[tag,sequenceText]=extra,sequence=Number(sequenceText);assert(/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag));assert(/^[1-9][0-9]*$/.test(sequenceText)&&Number.isSafeInteger(sequence));
- let highest=0,finished=false;const gh=(...args)=>execFileSync('gh',['api',...args],{maxBuffer:1024*1024});
- for(let page=1;page<=100;page++){
-  const releases=JSON.parse(gh(`repos/${REPOSITORY}/releases?per_page=100&page=${page}`));assert(Array.isArray(releases));
-  for(const release of releases){
-   assert.notEqual(release.tag_name,tag,'Release/tag already exists; inspect prior actions instead of replaying or clobbering');const reservation=/(?:^|\n)RUNTIME_SEQUENCE=([1-9][0-9]*)(?:\n|$)/.exec(release.body??'');if(reservation){const reserved=Number(reservation[1]);assert(Number.isSafeInteger(reserved));highest=Math.max(highest,reserved);}
-   for(const asset of release.assets.filter(a=>/^runtime-(linux-x64|win32-x64|darwin-arm64)\.json$/.test(a.name))){const sig=release.assets.filter(a=>a.name===asset.name+'.sig');assert.equal(sig.length,1,'Existing signed metadata is incomplete; no new sequence may bypass it');assert(asset.size>0&&asset.size<=65536&&sig[0].size===64);assert(Number.isSafeInteger(asset.id)&&Number.isSafeInteger(sig[0].id));const bytes=gh(`repos/${REPOSITORY}/releases/assets/${asset.id}`,'-H','Accept: application/octet-stream'),signature=gh(`repos/${REPOSITORY}/releases/assets/${sig[0].id}`,'-H','Accept: application/octet-stream'),header=authenticateManifest(bytes,signature,MANIFEST_PUBLIC_KEY,release.id,release.tag_name);highest=Math.max(highest,header.sequence);}
-  }
-  if(releases.length<100){finished=true;break;}
- }
- assert(finished,'Release history exceeds bounded review window');assert(sequence>highest,'Production sequence must exceed every authenticated or draft-reserved sequence');if(highest===0){assert.equal(sequence,1);assert.equal(tag,'v0.1.0');}
+ requireAvailableRuntimeSequence((...args)=>execFileSync('gh',['api',...args],{maxBuffer:1024*1024}),MANIFEST_PUBLIC_KEY,tag,sequence);
  const root=resolve(input),run=await json(join(root,'run.json')),jobs=await json(join(root,'jobs.json'));
  assert.equal(run.head_sha,head);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,'.github/workflows/runtime-updates-test.yml');assert.equal(run.conclusion,'success');assert.equal(run.head_repository.full_name,REPOSITORY);
  const targets=[];for(const[os,target]of[['ubuntu-22.04','linux-x64'],['windows-2022','win32-x64'],['macos-15','darwin-arm64']]){
