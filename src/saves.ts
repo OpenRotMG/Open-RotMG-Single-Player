@@ -30,9 +30,13 @@ export function checkedPassword(value: unknown, confirmation: unknown): string {
   return value;
 }
 
+export class AuthorityUnchangedError extends Error { constructor(message:string) { super(message);this.name='AuthorityUnchangedError'; } }
+
 /** Only server-owned named save commands are reachable here; paths never come from IPC. */
-export async function saveAuthority(runtime: Runtime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore', paths: string[], password?: string): Promise<unknown> {
+export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'blockAmbiguousSave'|'authorityStarting'|'authorityClosed'>;
+export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore', paths: string[], password?: string): Promise<unknown> {
   const { binary } = runtime.runtimePaths();
+  await runtime.authorityStarting(command,binary);
   let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
   const child = spawn(binary, ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
   const collect = (current: Buffer, bytes: Buffer) => {
@@ -63,7 +67,8 @@ export async function saveAuthority(runtime: Runtime, command: 'preview' | 'impo
     const failure = result as {protocol: number; operation: string; outcome: string; error: string};
     if (!failure || Object.keys(failure).length !== 4 || failure.protocol !== 1 || failure.operation !== command || !['unchanged', 'unknown'].includes(failure.outcome) || typeof failure.error !== 'string' || !failure.error.trim() || Buffer.byteLength(failure.error) > MAX_OUTPUT_BYTES) throw unverified(`exit=${code}; invalid failure envelope (protocol/operation/outcome/error)`);
     if (failure.outcome === 'unknown') throw unverified(`exit=${code}; ${failure.error}`);
-    throw new Error(`Save authority ${command} failed (exit ${code}) at ${binary}: ${failure.error}. Destination game save unchanged; output/backup files may exist. No output success is claimed.`);
+    await runtime.authorityClosed({command,binary,code,outcome:'unchanged',ack:failure});
+    throw new AuthorityUnchangedError(`Save authority ${command} failed (exit ${code}) at ${binary}: ${failure.error}. Destination game save unchanged; output/backup files may exist. No output success is claimed.`);
   }
   try {
     if (command === 'preview') importPreview(result);
@@ -79,6 +84,7 @@ export async function saveAuthority(runtime: Runtime, command: 'preview' | 'impo
       if (!value || Object.keys(value).length !== 4 || !positive(value.account) || value.login !== `player-${value.account}@local.invalid` || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
     }
   } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
+  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:result});
   return result;
 }
 function authorityEnvironment() {

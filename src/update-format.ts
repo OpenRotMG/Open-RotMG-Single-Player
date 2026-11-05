@@ -15,7 +15,7 @@ export type Pins = {
 };
 export type BuildIdentity = {pins: Pins; platform: string; arch: string; binarySha256: string; buildReceiptSha256: string; assetsSha256: string};
 export type Manifest = {
-  format: 1; releaseId: number; tag: string; version: string; sequence: number; target: Target; minLauncher: string;
+  format: 1; releaseId: number; tag: string; version: string; sequence: number; target: Target; minLauncher: string; clientNamespace: 1;
   save: {cli: 1; read: [21, 22]; write: 22; startupBackup: 1}; pins: Pins;
   payload: {id: number; name: string; url: string; bytes: number; sha256: string; expandedBytes: number; assetsSha256: string; identitySha256: string; binarySha256: string};
 };
@@ -44,7 +44,7 @@ export function validatePins(value: unknown): Pins {
   exact(value.ruffle, 'version,sourceCommit,bundleSha256', 'Ruffle pins');
   const {server, client, ruffle} = value;
   demand(['https://github.com/OpenRotMG/Open-RotMG-Server', 'https://github.com/dginovker/Open-RotMG-Server'].includes(String(server.repository)) && server.upstream === 'https://github.com/OpenRotMG/Open-RotMG-Server', 'Untrusted server source repository');
-  demand(client.repository === 'https://github.com/OpenRotMG/Open-RotMG-Client' && client.upstream === client.repository, 'Untrusted client source repository');
+  demand(['https://github.com/OpenRotMG/Open-RotMG-Client','https://github.com/dginovker/Open-RotMG-Client'].includes(String(client.repository)) && client.upstream === 'https://github.com/OpenRotMG/Open-RotMG-Client', 'Untrusted client source repository');
   demand(hex(server.commit, 40) && hex(client.commit, 40) && hex(ruffle.sourceCommit, 40) && hex(server.dataSha256) && hex(client.preparedSha256) && hex(ruffle.bundleSha256) && label(ruffle.version), 'Invalid immutable component identities');
   return value as unknown as Pins;
 }
@@ -62,22 +62,29 @@ export function versionAtLeast(actual: string, minimum: string) {
   for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
   return true;
 }
-export function verifyManifest(bytes: Uint8Array, signature: Uint8Array, key: string, releaseId: number | undefined, tag: string | undefined, target: Target, launcher: string): Manifest {
+export function authenticateManifest(bytes:Uint8Array,signature:Uint8Array,key:string,releaseId?:number,tag?:string):Record<string,unknown>&{sequence:number;releaseId:number;tag:string}{
   demand(bytes.byteLength <= MAX_METADATA && signature.byteLength === 64, 'Invalid manifest/signature size');
   let authenticated = false;
   try { const publicKey = createPublicKey(key); authenticated = publicKey.asymmetricKeyType === 'ed25519' && verify(null, bytes, publicKey, signature); }
   catch { throw new UpdateProblem('rejected', 'Runtime manifest signing key or signature is invalid'); }
   demand(authenticated, 'Runtime manifest signature verification failed');
-  const value = decodeJson(bytes);
-  exact(value, 'format,releaseId,tag,version,sequence,target,minLauncher,save,pins,payload', 'runtime manifest');
+  const value=decodeJson(bytes) as Record<string,unknown>;
+  demand(value!==null&&typeof value==='object'&&!Array.isArray(value)&&integer(value.sequence,1)&&integer(value.releaseId,1)&&label(value.tag)&&(releaseId===undefined||value.releaseId===releaseId)&&(tag===undefined||value.tag===tag),'Invalid authenticated sequence/release generation header');
+  return value as Record<string,unknown>&{sequence:number;releaseId:number;tag:string};
+}
+export function verifyManifest(bytes: Uint8Array, signature: Uint8Array, key: string, releaseId: number | undefined, tag: string | undefined, target: Target, launcher: string, assetOrigin: string): Manifest {
+  const value=authenticateManifest(bytes,signature,key,releaseId,tag);
+  exact(value, 'format,releaseId,tag,version,sequence,target,minLauncher,clientNamespace,save,pins,payload', 'runtime manifest');
   demand(value.format === 1 && integer(value.releaseId,1) && label(value.tag) && (releaseId === undefined || value.releaseId === releaseId) && (tag === undefined || value.tag === tag) && label(value.version) && integer(value.sequence, 1), 'Unsupported/future or mismatched release identity');
   demand(value.target === target, 'Runtime manifest target mismatch');
+  demand(value.clientNamespace===1,'Unsupported generation-qualified client namespace capability');
   exact(value.save, 'cli,read,write,startupBackup', 'save compatibility');
   demand(value.save.cli === 1 && value.save.write === 22 && value.save.startupBackup === 1 && JSON.stringify(value.save.read) === '[21,22]', 'Unsupported runtime CLI/save compatibility');
   validatePins(value.pins);
   exact(value.payload, 'id,name,url,bytes,sha256,expandedBytes,assetsSha256,identitySha256,binarySha256', 'runtime payload');
   const p = value.payload;
   demand(integer(p.id, 1) && p.name === `runtime-${target}.tar.gz` && typeof p.url === 'string' && integer(p.bytes, 1, MAX_PAYLOAD) && integer(p.expandedBytes, 1, MAX_EXPANDED) && [p.sha256,p.assetsSha256,p.identitySha256,p.binarySha256].every(v => hex(v)), 'Invalid bounded payload identity');
+  demand(p.url===`${assetOrigin}/${REPOSITORY}/releases/download/${value.tag}/${p.name}`,'Signed payload URL is not the fixed trusted repository/generation asset');
   launcherVersion(value.minLauncher);
   if (!versionAtLeast(launcher, String(value.minLauncher))) throw new UpdateProblem('launcher', `Runtime requires launcher ${value.minLauncher}; install it manually from ${RELEASES_PAGE}`);
   return value as unknown as Manifest;
@@ -119,6 +126,12 @@ export async function verifyBinary(path: string, target: Target) {
     else { const pe = buffer.readUInt32LE(60); demand(buffer.toString('ascii',0,2) === 'MZ' && pe + 26 <= bytesRead && buffer.toString('ascii',pe,pe+4) === 'PE\0\0' && buffer.readUInt16LE(pe+4) === 0x8664 && buffer.readUInt16LE(pe+24) === 0x20b,'Server is not native Windows x64 PE32+'); }
   } finally { await handle.close(); }
 }
+export async function verifyCapabilities(root:string,pins:Pins,startupBackup:0|1,clientNamespace:0|1):Promise<void>{
+  const path=join(root,'notices','runtime-capabilities.json');
+  try{await lstat(path);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'&&startupBackup===0&&clientNamespace===0)return;throw error;}
+  const value=decodeJson(await boundedFile(path,MAX_METADATA));exact(value,'format,server,clientNamespace,save','runtime capability notice');exact(value.save,'cli,read,write,startupBackup','runtime capability save protocol');
+  demand(value.format===1&&value.server===pins.server.commit&&value.clientNamespace===clientNamespace&&value.save.cli===1&&JSON.stringify(value.save.read)==='[21,22]'&&value.save.write===22&&value.save.startupBackup===startupBackup,'Declared runtime capabilities differ from authenticated/explicit baseline contract');
+}
 export async function verifyRuntime(root: string, target: Target, expected?: Manifest): Promise<BuildIdentity> {
   const files = await runtimeFiles(root,target), inventory = decodeJson(await boundedFile(join(root,'inventory.json')), 4 * 1024 * 1024);
   exact(inventory,'files,sha256','runtime inventory');
@@ -141,6 +154,7 @@ export async function verifyRuntime(root: string, target: Target, expected?: Man
   const binary = target === 'win32-x64' ? 'openrotmg.exe' : 'openrotmg';
   demand(hashes[binary] === identity.binarySha256 && (await boundedFile(join(root,'REVISION'),41)).toString('utf8').trim() === (identity.pins as Pins).server.commit,'Native server/revision identity mismatch');
   await verifyBinary(join(root,binary),target);
+  if(expected)await verifyCapabilities(root,expected.pins,1,1);
   if (expected) demand(identity.assetsSha256 === expected.payload.assetsSha256 && identity.binarySha256 === expected.payload.binarySha256 && digest(identityBytes) === expected.payload.identitySha256 && JSON.stringify(identity.pins) === JSON.stringify(expected.pins),'Signed pair differs from extracted runtime');
   return identity as unknown as BuildIdentity;
 }

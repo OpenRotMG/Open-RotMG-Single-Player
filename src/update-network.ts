@@ -1,6 +1,6 @@
 import {createHash} from 'node:crypto';
 import {open} from 'node:fs/promises';
-import {demand, integer, label, Manifest, MAX_METADATA, MAX_PAYLOAD, REPOSITORY, UpdateProblem, verifyManifest, decodeJson} from './update-format';
+import {authenticateManifest,demand, integer, label, Manifest, MAX_METADATA, MAX_PAYLOAD, REPOSITORY, UpdateProblem, verifyManifest, decodeJson} from './update-format';
 import {UpdatePolicy} from './update-policy';
 
 type Asset={id:number;name:string;size:number;browser_download_url:string};
@@ -74,7 +74,7 @@ export function assetURL(policy:UpdatePolicy,tag:string,name:string):string{
   demand(label(tag)&&/^runtime-(linux-x64|win32-x64|darwin-arm64)\.(?:json(?:\.sig)?|tar\.gz)$/.test(name),'Invalid fixed release asset name');
   return `${policy.assetOrigin}/${REPOSITORY}/releases/download/${tag}/${name}`;
 }
-export async function discover(policy:UpdatePolicy,signal:AbortSignal):Promise<{release:Release;manifest:Manifest;bytes:Buffer;signature:Buffer}>{
+export async function discover(policy:UpdatePolicy,signal:AbortSignal,remember?:(bytes:Buffer,signature:Buffer,sequence:number)=>Promise<void>):Promise<{release:Release;manifest:Manifest;bytes:Buffer;signature:Buffer}>{
   const value=decodeJson(await metadata(policy.discovery,policy,signal,1024*1024),1024*1024) as Record<string,unknown>;
   demand(value&&typeof value==='object'&&integer(value.id,1)&&label(value.tag_name)&&value.draft===false&&value.prerelease===false&&value.url===policy.discovery.replace(/\/latest$/,`/${value.id}`)&&Array.isArray(value.assets)&&value.assets.length<=64,'Invalid immutable GitHub runtime generation');
   const names=new Set<string>(),ids=new Set<number>();
@@ -89,7 +89,9 @@ export async function discover(policy:UpdatePolicy,signal:AbortSignal):Promise<{
   for(const part of parts)if(part.status==='rejected')throw part.reason;
   const [bytes,signature]=parts.map(part=>(part as PromiseFulfilledResult<Buffer>).value);
   demand(bytes.byteLength===manifestAsset.size&&signature.byteLength===signatureAsset.size,'Manifest/signature asset truncated or changed');
-  const manifest=verifyManifest(bytes,signature,policy.publicKey,release.id,release.tag_name,policy.target,policy.launcher);
+  const header=authenticateManifest(bytes,signature,policy.publicKey,release.id,release.tag_name);
+  if(remember)await remember(bytes,signature,header.sequence);
+  const manifest=verifyManifest(bytes,signature,policy.publicKey,release.id,release.tag_name,policy.target,policy.launcher,policy.assetOrigin);
   demand(manifest.payload.id===payload.id&&manifest.payload.name===payload.name&&manifest.payload.url===payload.browser_download_url&&manifest.payload.bytes===payload.size,'Signed payload does not belong to the resolved release generation');
   return{release,manifest,bytes,signature};
 }

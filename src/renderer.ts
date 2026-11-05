@@ -1,8 +1,10 @@
 import type { View } from './runtime';
 import type { ImportPreview, SaveResult } from './saves';
+import type { UpdateView, RuntimeSummary } from './updates';
 declare global {
   interface Window { launcher: {
-    status(): Promise<View>; start(): Promise<void>; stop(): Promise<void>; client(): Promise<void>; help(): Promise<void>;
+    status(): Promise<View>; start(): Promise<void>; startInstalled():Promise<void>; stop(): Promise<void>; client(): Promise<void>; help(): Promise<void>;
+    updates():Promise<UpdateView>;checkUpdates():Promise<UpdateView>;retryUpdate():Promise<UpdateView>;recoverRuntime():Promise<UpdateView>;releases():Promise<void>;updatesChanged(callback:(view:UpdateView)=>void):void;
     importPlayer(): Promise<ImportPreview | undefined>; confirmImport(expected: string, password: string, confirmation: string, replace: boolean): Promise<SaveResult | undefined>; cancelImport(): Promise<boolean>;
     makeBackup(): Promise<SaveResult>; openBackupFolder(): Promise<SaveResult>; restoreBackup(): Promise<SaveResult | undefined>;
     changed(callback: (view: View) => void): void;
@@ -13,8 +15,10 @@ const start = element<HTMLButtonElement>('start'), stop = element<HTMLButtonElem
 const password = element<HTMLInputElement>('password'), confirmation = element<HTMLInputElement>('confirmation');
 let preview: ImportPreview | undefined;
 let submitting = false;
+let runtimeView:View|undefined, updateView:UpdateView|undefined;
 function clearPasswords() { password.value = ''; confirmation.value = ''; }
 function render(view: View) {
+  runtimeView=view;
   element('status').textContent = view.status.toUpperCase();
   element('message').textContent = view.operation ? `${view.operation} — ${view.message}` : view.message;
   element('diagnostics').textContent = `Detailed logs: ${view.diagnostics}`;
@@ -25,6 +29,31 @@ function render(view: View) {
   stop.disabled = busy || !['starting', 'ready'].includes(view.status);
   client.disabled = busy || view.status !== 'ready';
   for (const id of ['import', 'backup', 'folder', 'restore']) element<HTMLButtonElement>(id).disabled = busy || !['stopped', 'ready'].includes(view.status);
+  updateButtons();
+}
+function updateButtons(){
+  const v=runtimeView,u=updateView,busy=!v||!!v.operation||v.closing||['starting','stopping'].includes(v.status);
+  if(v){
+    const recovery=u?.phase==='recovery'||u?.phase==='initializing';start.disabled=busy||v.status!=='stopped'||recovery;
+    for(const id of ['import','backup','folder','restore'])element<HTMLButtonElement>(id).disabled=busy||!['stopped','ready'].includes(v.status)||recovery;
+  }
+  element<HTMLButtonElement>('check-updates').disabled=busy||!u||['initializing','checking','downloading','activating'].includes(u.phase);
+  element<HTMLButtonElement>('play-installed').hidden=!u?.canPlayInstalled;
+  element<HTMLButtonElement>('play-installed').disabled=busy||v?.status!=='stopped';
+  element<HTMLButtonElement>('retry-update').hidden=!u?.canRetry;
+  element<HTMLButtonElement>('retry-update').disabled=busy||v?.status!=='stopped';
+  element<HTMLButtonElement>('recover-runtime').hidden=!u?.canRecover;
+  element<HTMLButtonElement>('recover-runtime').disabled=busy||!v||!['stopped','failed'].includes(v.status)||v.pid!==undefined;
+  element<HTMLButtonElement>('runtime-releases').hidden=u?.phase!=='launcher';
+  element<HTMLButtonElement>('runtime-releases').disabled=!!v?.closing;
+}
+function runtimeSummary(value:RuntimeSummary){return `${value.version} (${value.kind==='source'?'explicit source build; not a downloaded release':`authenticated release ${value.sequence}`})\nServer ${value.server}\nClient ${value.client}\nRuffle ${value.ruffle}`;}
+function renderUpdates(view:UpdateView){
+  updateView=view;
+  element('update-installed').textContent=view.installed?`Installed (verified baseline / completed update): ${runtimeSummary(view.installed)}`:'Installed runtime: not yet verified';
+  element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'Available runtime: not verified';
+  element('update-message').textContent=`${view.phase.toUpperCase()} — ${view.message}`;
+  element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
 }
 const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { element('error').textContent = String(error); }); };
 function result(value: SaveResult | undefined) {
@@ -73,5 +102,11 @@ element('backup').onclick = () => saveAction(() => window.launcher.makeBackup())
 element('folder').onclick = () => saveAction(() => window.launcher.openBackupFolder());
 element('restore').onclick = () => saveAction(() => window.launcher.restoreBackup());
 window.addEventListener('pagehide', clearPasswords);
+element('check-updates').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.checkUpdates()));
+element('play-installed').onclick=()=>invoke(()=>window.launcher.startInstalled());
+element('retry-update').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.retryUpdate()));
+element('recover-runtime').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.recoverRuntime()));
+element('runtime-releases').onclick=()=>invoke(()=>window.launcher.releases());
 window.launcher.changed(render);
-invoke(async () => render(await window.launcher.status()));
+window.launcher.updatesChanged(renderUpdates);
+invoke(async () => {render(await window.launcher.status());renderUpdates(await window.launcher.updates());});

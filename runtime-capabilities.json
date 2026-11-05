@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "server": "2e66e57406a1a95e0385a8e6beb42d3ba3aab388",
+  "clientNamespace": 1,
+  "save": {
+    "cli": 1,
+    "read": [21, 22],
+    "write": 22,
+    "startupBackup": 1
+  }
+}

@@ -3,6 +3,9 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { Runtime } from './runtime';
 import { SaveControls } from './saves';
+import { RuntimeUpdates } from './updates';
+import { createUpdatePolicy } from './update-policy';
+import { RELEASES_PAGE } from './update-format';
 
 app.setName('Open RotMG Single Player');
 // Chromium's singleton lock is tied to this persistent userData directory, not the install path.
@@ -11,10 +14,12 @@ else {
   let window: BrowserWindow | undefined;
   let runtime: Runtime;
   let saves: SaveControls;
+  let updates: RuntimeUpdates;
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
   app.whenReady().then(() => {
-    runtime = new Runtime(join(process.resourcesPath, 'runtime'), app.getPath('userData'));
+    const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
+    runtime = new Runtime(policy.baseline.root, app.getPath('userData'));
     window = new BrowserWindow({ width: 900, height: 700, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -35,16 +40,29 @@ else {
       })).response === 1,
       openFolder: path => shell.openPath(path),
     });
+    updates = new RuntimeUpdates(runtime, policy, async prompt => (await dialog.showMessageBox(window!, {
+      type:'warning',title:'Local runtime recovery/update',message:prompt.message,detail:prompt.detail,
+      buttons:['Cancel',prompt.kind==='restore-update'?'Back up current save and restore':prompt.kind==='retry-update'?'Retry exact runtime':'Verify and continue'],defaultId:0,cancelId:0,noLink:true,
+    })).response===1);
     const checked = (channel: string, action: (...args: unknown[]) => unknown, valid: (args: unknown[]) => boolean = args => args.length === 0) => ipcMain.handle(channel, (event, ...args: unknown[]) => {
       if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return action(...args);
     });
     checked('runtime:status', () => runtime.view());
     checked('runtime:start', () => runtime.start());
+    checked('runtime:start-installed', () => {
+      if(!updates.view().canPlayInstalled)throw new Error('Explicit installed-version play requires a rejected/unavailable check, verified stopped selection and no pending ambiguity');
+      return runtime.start(true);
+    });
+    checked('update:status', () => updates.view());
+    checked('update:check', () => updates.check());
+    checked('update:retry', () => updates.retry());
+    checked('update:recover', () => updates.recover());
+    checked('update:releases', () => shell.openExternal(RELEASES_PAGE));
     checked('runtime:stop', () => runtime.stop());
     checked('runtime:client', async () => {
       if (runtime.view().status !== 'ready' || runtime.view().operation || runtime.view().closing) throw new Error('Server is not ready');
-      await shell.openExternal(runtime.origin + '/');
+      await shell.openExternal(runtime.clientURL());
     });
     checked('runtime:help', () => shell.openExternal('https://openrotmg.org/export/'));
     checked('save:import', () => saves.beginImport());
@@ -54,6 +72,8 @@ else {
     checked('save:folder', () => saves.openBackupFolder());
     checked('save:restore', () => saves.restoreBackup());
     runtime.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view); });
+    updates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('update:changed', view); });
+    void updates.startup();
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
     void window.loadURL(index);
   }).catch(error => { dialog.showErrorBox('Launcher startup failed', String(error)); app.exit(1); });

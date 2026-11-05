@@ -8,7 +8,7 @@ const metadata={account:1,login:'player-1@local.invalid',replaced:true,disclosur
 async function fixture(){
  const elements=new Map(),calls=[];let change,finish,reject,cancel=true;
  const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',value:'',disabled:false,hidden:true});return elements.get(id);};
- const launcher={status:async()=>({status:'stopped',logs:[],message:'Stopped',diagnostics:'private',closing:false}),changed:callback=>change=callback,importPlayer:async()=>metadata,confirmImport:(...args)=>{calls.push(args);return new Promise((ok,bad)=>{finish=ok;reject=bad;});},cancelImport:async()=>cancel};
+ const launcher={updates:async()=>({phase:'ready',message:'Fixture, not a runtime check',canPlayInstalled:false,canRecover:false,canRetry:false}),updatesChanged(){},status:async()=>({status:'stopped',logs:[],message:'Stopped',diagnostics:'private',closing:false}),changed:callback=>change=callback,importPlayer:async()=>metadata,confirmImport:(...args)=>{calls.push(args);return new Promise((ok,bad)=>{finish=ok;reject=bad;});},cancelImport:async()=>cancel};
  const source=ts.transpileModule(await readFile('src/renderer.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
  runInNewContext(source,{exports:{},document:{getElementById:element},window:{launcher,addEventListener(){}}});await tick();
  return{element,calls,launcher,change:view=>change(view),finish:value=>finish(value),reject:error=>reject(error),cancel:value=>cancel=value};

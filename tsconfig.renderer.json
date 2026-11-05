@@ -1,1 +1,1 @@
-{"extends":"./tsconfig.json","compilerOptions":{"module":"ES2022","outDir":".qa/renderer"},"include":["src/renderer.ts"]}
+{"extends":"./tsconfig.json","compilerOptions":{"module":"ES2022","moduleResolution":"node","outDir":".qa/renderer"},"include":["src/renderer.ts"]}

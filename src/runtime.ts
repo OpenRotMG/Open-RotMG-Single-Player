@@ -7,6 +7,9 @@ import { access, mkdir, readFile, writeFile, stat, open } from 'node:fs/promises
 import { constants } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import type { RuntimeUpdates } from './updates';
+
+export type AuthorityCompletion = {command:string;binary:string;code:number;outcome:'success'|'unchanged';ack:unknown};
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
 export type View = { status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
@@ -20,6 +23,8 @@ export function desktopServerSpawnOptions(platform: NodeJS.Platform, resources: 
 
 export class Runtime extends EventEmitter {
   private child?: ChildProcessByStdio<Writable, null, null>;
+  private childClosed = false;
+  private startSpawned = false;
   private diskError?: Error;
   private lines: string[] = [];
   private status: Status = 'stopped';
@@ -38,10 +43,26 @@ export class Runtime extends EventEmitter {
   private closing = false;
   readonly origin = `http://127.0.0.1:${PORT}`;
   readonly diagnostics: string;
-  constructor(readonly resources: string, readonly userData: string) {
+  private updates?: RuntimeUpdates;
+  private selectedResources: string;
+  constructor(resources: string, readonly userData: string) {
     super();
+    this.selectedResources = resources;
     this.diagnostics = join(userData, 'diagnostics');
   }
+  get resources() { return this.selectedResources; }
+  attachUpdates(updates: RuntimeUpdates) {
+    if (this.updates || this.boot || this.operation || this.child || this.closing) throw new Error('Runtime update coordinator must attach before startup');
+    this.updates = updates;
+  }
+  selectResources(resources: string) {
+    if (this.child || (!this.boot && !this.operation)) throw new Error('Runtime selection requires stopped lifecycle ownership');
+    this.selectedResources = resources;
+  }
+  ownsLiveChild(pid:number) { return this.child?.pid === pid && !this.childClosed; }
+  isIdle() { return this.status === 'stopped' && !this.child && !this.operation && !this.boot && !this.stopping && !this.closing; }
+  async authorityStarting(command:string,binary:string) { await this.updates?.authorityStarting(command,binary); }
+  async authorityClosed(completion:AuthorityCompletion) { await this.updates?.authorityClosed(completion); }
   view(): View {
     return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics, operation: this.operationName, closing: this.closing };
   }
@@ -56,7 +77,7 @@ export class Runtime extends EventEmitter {
     this.line(String(error));
     if (!this.failureGate) {
       this.failureGate = mkdir(this.userData, { recursive: true, mode: 0o700 })
-        .then(() => writeFile(join(this.userData, 'shutdown-failed.json'), JSON.stringify({ at: new Date().toISOString(), error: String(error) }), { mode: 0o600, flush: true }))
+        .then(() => this.updates ? this.updates.persistFailure(error) : writeFile(join(this.userData, 'shutdown-failed.json'), JSON.stringify({ at: new Date().toISOString(), error: String(error) }), { mode: 0o600, flush: true }))
         .then(() => undefined, cause => {
           const failure = new Error(`Could not persist shutdown failure: ${cause}. Failure gate is NOT recorded; launcher ownership must be retained.`);
           this.failurePersistenceError = failure;
@@ -72,19 +93,25 @@ export class Runtime extends EventEmitter {
     const error = await this.failureGate;
     if (error) throw error;
   }
-  start(): Promise<void> {
+  start(installedOnly = false): Promise<void> {
     if (this.closing || this.operation || this.status !== 'stopped' || this.boot || this.stopping) return Promise.reject(new Error('Start requires a verified stopped server and settled prior startup/shutdown'));
-    this.update('starting', 'Checking bundled runtime and save ownership…');
-    this.boot = this.startOwned().catch(error => {
-      if (this.child || this.unsafe) this.fail(error);
+    this.startSpawned = false;
+    this.update('starting', 'Checking installed runtime and save ownership…');
+    this.boot = this.startOwned(installedOnly).catch(async error => {
+      let updateFailure = false;
+      try { updateFailure = await this.updates?.startFailed(error) ?? false; }
+      catch(bookkeeping) { this.fail(new Error(`Startup failed: ${String(error)}; recovery bookkeeping also failed: ${String(bookkeeping)}`));throw bookkeeping; }
+      if (this.child || this.unsafe || updateFailure) this.fail(error);
       else this.update('stopped', `Cannot start: ${String(error)}. No server is running.`);
       throw error;
-    }).finally(() => { this.boot = undefined; });
+    }).finally(() => { this.boot = undefined; setImmediate(()=>this.emit('change',this.view())); });
     return this.boot;
   }
-  private async startOwned() {
+  private async startOwned(installedOnly: boolean) {
     await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
-    if (await this.exists(join(this.userData, 'shutdown-failed.json'))) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
+    await this.updates?.beforeStart(installedOnly);
+    if (this.closing && this.updates) throw this.updates.canceledBeforeSpawn();
+    if (await this.exists(join(this.userData, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized()) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
     const { binary, data, client: clientPath, state } = this.runtimePaths();
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
     const inventory = JSON.parse(await readFile(join(this.resources, 'inventory.json'), 'utf8')) as { files: string[] };
@@ -100,7 +127,8 @@ export class Runtime extends EventEmitter {
     const config = join(this.userData, 'desktop-config.json');
     await writeFile(config, JSON.stringify({ bind: `127.0.0.1:${PORT}`, origin: this.origin,
       data, client: clientPath, state,
-      behind_proxy: false, shore_bots: false, bot_llm: false, max_players: 85, realm_seed: 42 }, null, 2), { mode: 0o600 });
+      behind_proxy: false, shore_bots: false, bot_llm: false, max_players: 85, realm_seed: 42, ...this.updates?.startupConfig() }, null, 2), { mode: 0o600 });
+    await this.updates?.beforeSpawn(binary);
     const name = new Date().toISOString().replaceAll(':', '-');
     // Direct inherited file descriptors retain EOF-drain diagnostics even if Electron crashes.
     const log = await open(join(this.diagnostics, `${name}.jsonl`), 'wx+', 0o600);
@@ -110,15 +138,20 @@ export class Runtime extends EventEmitter {
     const env: NodeJS.ProcessEnv = { RUST_LOG: 'openrotmg=info,lag=info' };
     for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
     const child = spawn(binary, ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
-    this.child = child;
+    this.child = child;this.childClosed = false;this.startSpawned = true;
     this.closed = new Promise((ok) => {
       child.once('error', error => this.fail(new Error(`Server spawn failed: ${error.message}`)));
       child.once('close', async (code, signal) => {
+        this.childClosed = true;
         clearInterval(tail);
         try { await reading; await refresh(); await log.sync(); } catch(error) { this.diskError = error as Error; this.fail(error); }
         await log.close().catch(error => { this.diskError = error; this.fail(error); });
         this.child = undefined;
-        if (code === 0 && this.expectedStop && !this.diskError && !this.unsafe) this.update(this.boot ? 'stopping' : 'stopped', 'Server stopped. Durable shutdown verified (exit 0).');
+        if (code === 0 && this.expectedStop && !this.diskError && !this.unsafe) {
+          try { await this.updates?.cleanStop({code,signal,pid:child.pid!}); }
+          catch(error) { this.fail(error); }
+          if (!this.unsafe) this.update(this.boot ? 'stopping' : 'stopped', 'Server stopped. Durable shutdown verified (exit 0).');
+        }
         else if (!this.listenerSeen && !this.expectedStop && !this.unsafe) {
           // Only the settled startup attempt may publish stopped and admit a replacement.
           this.line(`Server exited before listening: code=${code}, signal=${signal}`);
@@ -160,6 +193,8 @@ export class Runtime extends EventEmitter {
       });
     }, 250);
     child.stdin.on('error', error => { if (this.child === child) this.fail(new Error(`Private shutdown pipe failed: ${error.message}`)); });
+    try { await this.updates?.spawned(child.pid!); }
+    catch(error) { await this.requestDrain(); throw error; }
     const deadline = performance.now() + READY_MS;
     while (this.child === child && this.status === 'starting' && performance.now() < deadline) {
       this.update('starting', `Preparing offline world… ${Math.ceil((READY_MS - (deadline - performance.now())) / 1000)}s / 600s. World generation can take several minutes.`);
@@ -169,7 +204,12 @@ export class Runtime extends EventEmitter {
           const health = await response.json() as { process: number; bots: number; bot_dialogue: { enabled: boolean } };
           if (health.process !== child.pid) throw new Error(`Readiness PID mismatch: expected ${child.pid}, received ${health.process}`);
           if (health.bots !== 0 || health.bot_dialogue.enabled) throw new Error('Unsafe consumer health: bots/LLM enabled');
-          if (this.listenerSeen) { this.update('ready', `Offline server ready at ${this.origin}`); return; }
+          if (this.listenerSeen) {
+            await this.updates?.ready({pid:child.pid!,binary,resources:this.resources,healthProcess:health.process,listenerSeen:true});
+            if (!this.ownsLiveChild(child.pid!) || this.unsafe || this.expectedStop || this.status !== 'starting') throw new Error('Owned server changed during durable startup bookkeeping; no playable-ready success is claimed');
+            this.updates?.exposedReady();
+            this.update('ready', `Offline server ready at ${this.origin}`); return;
+          }
         }
       } catch (error) {
         if (!(error instanceof TypeError && error.cause && ['ECONNREFUSED', 'ECONNRESET'].includes((error.cause as NodeJS.ErrnoException).code ?? '')) && !(error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
@@ -200,13 +240,20 @@ export class Runtime extends EventEmitter {
     } finally { timer.abort(); }
   }
   /** Holds lifecycle ownership through dialogs, authority children and cleanup, not just the database write. */
-  stoppedOperation<T>(name: string, action: () => Promise<T>): Promise<T> {
-    if (this.closing || this.operation || this.boot || this.stopping || this.status === 'starting' || this.status === 'stopping') return Promise.reject(new Error('Another lifecycle operation is in progress'));
+  stoppedOperation<T>(name: string, action: () => Promise<T>): Promise<T> { return this.reserveOperation(name,action,'save'); }
+  idleOperation<T>(name:string,action:()=>Promise<T>):Promise<T> { return this.reserveOperation(name,action,'update'); }
+  recoveryOperation<T>(name:string,action:()=>Promise<T>):Promise<T> { return this.reserveOperation(name,action,'recovery'); }
+  private reserveOperation<T>(name:string,action:()=>Promise<T>,kind:'save'|'update'|'recovery'):Promise<T> {
+    if (this.closing || this.operation || this.boot || this.stopping || this.status === 'starting' || this.status === 'stopping' || (kind !== 'save' && this.child) || (kind === 'update' && this.status !== 'stopped')) return Promise.reject(new Error('Another lifecycle operation is in progress'));
     this.operationName = name;
     const operation = Promise.resolve().then(async () => {
-      await this.stopOwned();
+      if (kind === 'save') await this.stopOwned();
+      if (kind === 'recovery' && this.closed) await this.closed;
       await this.verifyFailureGate();
-      if (this.unsafe || await this.exists(join(this.userData, 'shutdown-failed.json'))) throw new Error('Previous shutdown was not verified; save operations are blocked');
+      if (kind !== 'recovery') {
+        if (this.unsafe || (await this.exists(join(this.userData, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized())) throw new Error('Previous shutdown was not verified; save operations are blocked');
+        if (kind === 'save') await this.updates?.beforeSave();
+      }
       return action();
     }).finally(() => {
       this.operation = undefined; this.operationName = undefined; this.emit('change', this.view());
@@ -217,13 +264,23 @@ export class Runtime extends EventEmitter {
   }
   async close(): Promise<void> {
     this.closing = true;
+    this.updates?.abort();
     this.emit('change', this.view());
     try {
       if (this.operation) await this.operation;
       await this.stopOwned();
+      await this.updates?.settle();
       await this.verifyFailureGate();
     } catch (error) { this.closing = false; this.emit('change', this.view()); throw error; }
   }
+  async completeUpdateRecovery(receiptSha256:string) {
+    if (!this.operation || this.child || this.boot || this.stopping || this.closing || !this.updates) throw new Error('Updater recovery requires exclusive stopped ownership');
+    await this.updates.verifyRecoveryComplete(receiptSha256);
+    this.updates.recoveryAcknowledged();
+    this.unsafe = false;this.failureGate = undefined;this.failurePersistenceError = undefined;
+    this.update('stopped','Current save recovered/verified. Previous failure evidence is retained; no clean shutdown is claimed for that failure.');
+  }
+  clientURL() { return this.updates ? this.updates.clientURL() : this.origin + '/'; }
   runtimePaths() {
     return { binary: join(this.resources, process.platform === 'win32' ? 'openrotmg.exe' : 'openrotmg'), data: join(this.resources, 'data'), client: join(this.resources, 'client'), state: join(this.userData, 'state') };
   }
@@ -239,11 +296,17 @@ export class Runtime extends EventEmitter {
     this.update('stopping', 'Saving active characters and stopping server…');
     this.stopping = (async () => {
       // Start may still be validating files; do not release ownership until its promise settles.
-      if (!this.child) await this.boot;
+      if (!this.child) {
+        try { await this.boot; }
+        catch(error) {
+          if (!this.startSpawned && !this.unsafe && this.updates?.canCancelStart()) { this.update('stopped','Startup canceled before any server process was invoked. Pending update intent is retained; no game shutdown is claimed.');return; }
+          throw error;
+        }
+      }
       await this.requestDrain();
       await this.boot;
       if (!this.child && !this.unsafe && this.expectedStop) this.update('stopped', 'Server stopped. Durable shutdown verified (exit 0).');
-    })().catch(error => { this.fail(error); throw error; }).finally(() => { this.stopping = undefined; });
+    })().catch(error => { this.fail(error); throw error; }).finally(() => { this.stopping = undefined; setImmediate(()=>this.emit('change',this.view())); });
     return this.stopping;
   }
 }

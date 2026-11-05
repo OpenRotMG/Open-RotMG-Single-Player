@@ -26,7 +26,7 @@ async function publisher(t){
  });
  await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const origin=`http://127.0.0.1:${server.address().port}`;
  t.after(async()=>{server.closeAllConnections();await new Promise(ok=>server.close(ok));});
- const policy={target:'linux-x64',launcher:'0.1.0',baseline:{root:runtime,mode:'source',identitySha256:'a'.repeat(64)},discovery:`${origin}/api/repos/OpenRotMG/Open-RotMG-Single-Player/releases/latest`,assetOrigin:origin,redirectOrigins:[origin],publicKey:publicPEM(keys),request:fetch,metadataDeadline:150,payloadDeadline:1000};
+ const policy={target:'linux-x64',launcher:'0.1.0',baseline:{root:runtime,mode:'source',identitySha256:'a'.repeat(64)},discovery:`${origin}/api/repos/OpenRotMG/Open-RotMG-Single-Player/releases/latest`,assetOrigin:origin,redirectOrigins:[origin],publicKey:publicPEM(keys),request:fetch,metadataDeadline:5000,payloadDeadline:5000};
  manifest=await manifestFor(runtime,join(root,'runtime.tar.gz'),origin);payload=await readFile(join(root,'runtime.tar.gz'));
  const update=mutate=>{const next=structuredClone(manifest);mutate(next);({bytes,signature}=signed(next,keys));};update(()=>{});
  return{root,policy,manifest,mode:value=>{mode=value;},update};
@@ -43,7 +43,7 @@ test('update-network DNS/connect/deadline unavailability differs from cancellati
   await assert.rejects(discover({...f.policy,request:async()=>{throw new TypeError('redacted',{cause:{code}});}},new AbortController().signal),e=>e.kind==='unavailable'&&e.message.includes(code));
  }
  await assert.rejects(discover({...f.policy,request:async()=>{throw new TypeError('do not log arbitrary URL?secret=credential');}},new AbortController().signal),e=>e.kind==='rejected'&&!e.message.includes('credential'));
- f.mode('timeout');await assert.rejects(discover(f.policy,new AbortController().signal),e=>e.kind==='unavailable'&&e.message.includes('TimeoutError'));
+ f.mode('timeout');await assert.rejects(discover({...f.policy,metadataDeadline:150},new AbortController().signal),e=>e.kind==='unavailable'&&e.message.includes('TimeoutError'));
  const controller=new AbortController();controller.abort();await assert.rejects(discover(f.policy,controller.signal),e=>e.kind==='canceled');
 });
 test('update-network rejects untrusted redirects, loops, replaced assets and invalid signatures',async t=>{

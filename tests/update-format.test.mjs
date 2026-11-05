@@ -13,12 +13,12 @@ test('update-format pins the parent-approved public Ed25519 key and native targe
 });
 test('update-format authenticates exact bytes, fixed generation, pair, target and known save protocol before use',async()=>{
  const root=await directory('update-format'),identity=await unitRuntime(root),manifest=await manifestFor(root,join(root,'payload.tar.gz')),keys=keyPair(),key=publicPEM(keys);
- const check=value=>{const s=signed(value,keys);return verifyManifest(s.bytes,s.signature,key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0');};
+ const check=value=>{const s=signed(value,keys);return verifyManifest(s.bytes,s.signature,key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0','https://github.com');};
  assert.deepEqual(check(manifest),manifest);const s=signed(manifest,keys);
- assert.throws(()=>verifyManifest(Buffer.concat([s.bytes,Buffer.from(' ')]),s.signature,key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0'),/signature verification/);
- assert.throws(()=>verifyManifest(s.bytes,s.signature,publicPEM(keyPair()),manifest.releaseId,manifest.tag,'linux-x64','0.1.0'),/signature verification/);
- assert.throws(()=>verifyManifest(s.bytes,s.signature.subarray(1),key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0'),/signature size/);
- for(const mutate of [m=>m.format=2,m=>m.sequence=0,m=>m.sequence=1.5,m=>m.releaseId++,m=>m.tag='fixture-other',m=>m.target='win32-x64',m=>m.keyId='untrusted future key',m=>m.payload.sha256='x'.repeat(64),m=>m.payload.bytes=536870913,m=>m.payload.expandedBytes=2147483649,m=>m.save.cli=2,m=>m.save.read=[21,22,23],m=>m.save.write=23,m=>m.pins.client.repository='https://evil.invalid/client',m=>m.pins.server.commit='main',m=>m.pins.ruffle.version='https://evil.invalid',m=>m.payload.installerURL='https://evil.invalid']){
+ assert.throws(()=>verifyManifest(Buffer.concat([s.bytes,Buffer.from(' ')]),s.signature,key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0','https://github.com'),/signature verification/);
+ assert.throws(()=>verifyManifest(s.bytes,s.signature,publicPEM(keyPair()),manifest.releaseId,manifest.tag,'linux-x64','0.1.0','https://github.com'),/signature verification/);
+ assert.throws(()=>verifyManifest(s.bytes,s.signature.subarray(1),key,manifest.releaseId,manifest.tag,'linux-x64','0.1.0','https://github.com'),/signature size/);
+ for(const mutate of [m=>m.format=2,m=>m.sequence=0,m=>m.sequence=1.5,m=>m.releaseId++,m=>m.tag='fixture-other',m=>m.target='win32-x64',m=>m.clientNamespace=0,m=>m.clientNamespace=2,m=>m.keyId='untrusted future key',m=>m.payload.url='https://evil.invalid/payload',m=>m.payload.sha256='x'.repeat(64),m=>m.payload.bytes=536870913,m=>m.payload.expandedBytes=2147483649,m=>m.save.startupBackup=0,m=>m.save.startupBackup=2,m=>m.save.cli=2,m=>m.save.read=[21,22,23],m=>m.save.write=23,m=>m.pins.client.repository='https://evil.invalid/client',m=>m.pins.server.commit='main',m=>m.pins.ruffle.version='https://evil.invalid',m=>m.payload.installerURL='https://evil.invalid']){
   const bad=structuredClone(manifest);mutate(bad);assert.throws(()=>check(bad));
  }
  const oldLauncher=structuredClone(manifest);oldLauncher.minLauncher='0.2.0';assert.throws(()=>check(oldLauncher),e=>e.kind==='launcher'&&e.message.includes(RELEASES_PAGE));

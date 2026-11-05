@@ -14,13 +14,14 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     const origin=new runtimeExports.Runtime('/owned/resources','/owned/user').origin;assert.equal(origin,'http://127.0.0.1:47831');
     const handlers=new Map(),calls=[],elements=new Map();let ready,changed,status='stopped',pending,openedWindow;
     const view=()=>({status,origin,diagnostics:'owned',logs:[],message:'fixture'});
-    const runtime={view,on:()=>{},origin:view().origin,userData:'/owned/user'};
+    const runtime={view,on:()=>{},origin:view().origin,clientURL:()=>view().origin+'/',userData:'/owned/user'};
     class BrowserWindow {
       constructor(){openedWindow=this;this.webContents={mainFrame:{url:pathToFileURL('/owned/dist/index.html').href},setWindowOpenHandler(){},on(){},session:{setPermissionRequestHandler(){},webRequest:{onBeforeRequest(){}}}};}
       on(){} loadURL(){} isDestroyed(){return false;}
     }
-    const electron={app:{setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>({then:callback=>{ready=Promise.resolve().then(callback);return ready;}}),getPath:()=>'/owned/user',on(){}},BrowserWindow,ipcMain:{handle:(channel,handler)=>handlers.set(channel,handler)},shell:{openExternal:async url=>{calls.push(url);await pending;}},dialog:{showErrorBox:message=>assert.fail(message)}};
-    runInNewContext(await source('src/main.ts'),{exports:{},__dirname:'/owned/dist',process:{resourcesPath:'/owned/resources'},require:id=>id==='electron'?electron:id==='./runtime'?{Runtime:class{constructor(){return runtime;}}}:id==='./saves'?require('../dist/saves.js'):require(id)});
+    class RuntimeUpdates{view(){return{phase:'ready',message:'Fixture, not a runtime check',canPlayInstalled:false,canRecover:false,canRetry:false};}on(){}startup(){}}
+    const electron={app:{getVersion:()=> '0.1.0',setName(){},requestSingleInstanceLock:()=>true,whenReady:()=>({then:callback=>{ready=Promise.resolve().then(callback);return ready;}}),getPath:()=>'/owned/user',on(){}},BrowserWindow,ipcMain:{handle:(channel,handler)=>handlers.set(channel,handler)},shell:{openExternal:async url=>{calls.push(url);await pending;}},dialog:{showErrorBox:message=>assert.fail(message)}};
+    runInNewContext(await source('src/main.ts'),{exports:{},__dirname:'/owned/dist',process:{resourcesPath:'/owned/resources'},require:id=>id==='electron'?electron:id==='./runtime'?{Runtime:class{constructor(){return runtime;}}}:id==='./saves'?require('../dist/saves.js'):id==='./updates'?{RuntimeUpdates}:id==='./update-policy'?{createUpdatePolicy:()=>({baseline:{root:'/owned/resources/runtime'}})}:id==='./update-format'?require('../dist/update-format.js'):require(id)});
     await ready;
     const trusted=()=>({sender:openedWindow.webContents,senderFrame:openedWindow.webContents.mainFrame});
     const action=handlers.get('runtime:client');assert.equal(typeof action,'function');
@@ -32,7 +33,7 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     let finish;pending=new Promise(ok=>finish=ok);let settled=false;const opening=action(trusted()).then(()=>settled=true);await Promise.resolve();assert.equal(settled,false);assert.deepEqual(calls,['http://127.0.0.1:47831/']);finish();await opening;assert.equal(settled,true);
     const failure=Error('actual shell rejection');electron.shell.openExternal=async()=>{throw failure;};await assert.rejects(action(trusted()),error=>error===failure);
     let launcher;
-    const ipcRenderer={invoke:(channel,...args)=>Promise.resolve().then(()=>handlers.get(channel)(trusted(),...args)),on:(channel,callback)=>{assert.equal(channel,'runtime:changed');changed=value=>callback({},value);}};
+    const ipcRenderer={invoke:(channel,...args)=>Promise.resolve().then(()=>handlers.get(channel)(trusted(),...args)),on:(channel,callback)=>{assert(['runtime:changed','update:changed'].includes(channel));if(channel==='runtime:changed')changed=value=>callback({},value);}};
     runInNewContext(await source('src/preload.ts'),{exports:{},require:id=>{assert.equal(id,'electron');return {ipcRenderer,contextBridge:{exposeInMainWorld:(key,value)=>{assert.equal(key,'launcher');launcher=value;}}};}});
     assert(Object.isFrozen(launcher));
     const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false});return elements.get(id);}};

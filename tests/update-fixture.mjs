@@ -10,15 +10,16 @@ export async function directory(name){await mkdir('.qa/unit',{recursive:true});r
 export const keyPair=()=>generateKeyPairSync('ed25519');
 export const publicPEM=keys=>keys.publicKey.export({type:'spki',format:'pem'}).toString();
 export const signed=(manifest,keys)=>{const bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n');return{bytes,signature:sign(null,bytes,keys.privateKey)};};
-export async function unitRuntime(root,{serverCommit='1'.repeat(40),clientCommit='2'.repeat(40)}={}){
+export async function unitRuntime(root,{serverCommit='1'.repeat(40),clientCommit='2'.repeat(40),legacy=false,data='unit test content, not a runnable server'}={}){
  for(const dir of ['data','client/vendor','notices'])await mkdir(join(root,dir),{recursive:true});
  const write=(path,value)=>writeFile(join(root,path),value);
- await write('data/content.xml','unit test content, not a runnable server');
+ await write('data/content.xml',data);
  for(const file of clientFiles.filter(n=>n!=='vendor'))await write('client/'+file,'unit '+file);
  await write('client/vendor/unit.wasm',Buffer.from([0,97,115,109]));
  const header=Buffer.alloc(64);header.set([127,69,76,70,2,1]);header.writeUInt16LE(62,18);await write('openrotmg',header);
  const pins={server:{repository:'https://github.com/dginovker/Open-RotMG-Server',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server',commit:serverCommit,dataSha256:(await tree(root,['data'])).sha256},client:{repository:'https://github.com/OpenRotMG/Open-RotMG-Client',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client',commit:clientCommit,preparedSha256:(await tree(join(root,'client'),clientFiles)).sha256},ruffle:{version:'unit.1',sourceCommit:'3'.repeat(40),bundleSha256:'4'.repeat(64)}};
  await write('REVISION',pins.server.commit+'\n');await write('notices/ruffle-lock.json',JSON.stringify(pins.ruffle));
+ await write('notices/runtime-capabilities.json',JSON.stringify({format:1,server:pins.server.commit,clientNamespace:legacy?0:1,save:{cli:1,read:[21,22],write:22,startupBackup:legacy?0:1}}));
  const inventory=await tree(root,['data','client','notices','openrotmg','REVISION']);
  await write('inventory.json',JSON.stringify({files:Object.keys(inventory.files),sha256:inventory.files},null,2));
  const identity={pins,platform:'linux',arch:'x64',binarySha256:inventory.files.openrotmg,buildReceiptSha256:'5'.repeat(64),assetsSha256:inventory.sha256};
@@ -31,7 +32,7 @@ export async function payload(root,archive){
 }
 export async function manifestFor(root,archive,origin='https://github.com',sequence=1){
  const identity=JSON.parse(await readFile(join(root,'build-identity.json'),'utf8'));
- return{format:1,releaseId:100+sequence,tag:`fixture-${sequence}`,version:`unit-runtime-${sequence}`,sequence,target:'linux-x64',minLauncher:'0.1.0',save:{cli:1,read:[21,22],write:22,startupBackup:1},pins:identity.pins,payload:{id:200+sequence,name:'runtime-linux-x64.tar.gz',url:`${origin}/OpenRotMG/Open-RotMG-Single-Player/releases/download/fixture-${sequence}/runtime-linux-x64.tar.gz`,...await payload(root,archive),assetsSha256:identity.assetsSha256,identitySha256:digest(await readFile(join(root,'build-identity.json'))),binarySha256:identity.binarySha256}};
+ return{format:1,releaseId:100+sequence,tag:`fixture-${sequence}`,version:`unit-runtime-${sequence}`,sequence,target:'linux-x64',minLauncher:'0.1.0',clientNamespace:1,save:{cli:1,read:[21,22],write:22,startupBackup:1},pins:identity.pins,payload:{id:200+sequence,name:'runtime-linux-x64.tar.gz',url:`${origin}/OpenRotMG/Open-RotMG-Single-Player/releases/download/fixture-${sequence}/runtime-linux-x64.tar.gz`,...await payload(root,archive),assetsSha256:identity.assetsSha256,identitySha256:digest(await readFile(join(root,'build-identity.json'))),binarySha256:identity.binarySha256}};
 }
 export function rawArchive(entries){
  const blocks=[];
