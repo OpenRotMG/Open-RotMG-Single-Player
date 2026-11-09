@@ -8,7 +8,7 @@ async function fixture(){
  const elements=new Map(),calls=[];let changed,updated;
  const element=id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false,hidden:true,value:''});return elements.get(id);};
  const runtime={status:'stopped',message:'Stopped',diagnostics:'private',logs:[],closing:false};
- const installed={version:'source-unit',kind:'source',sequence:0,server:'a'.repeat(40),client:'b'.repeat(40),ruffle:'unit.1'};
+ const installed={version:'source-unit',kind:'source',sequence:0,server:'2c700135d755a4210c2204334aafee2572205ec1',client:'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e',ruffle:'unit.1'};
  let update={phase:'ready',message:'Installed, not claiming latest',installed,canPlayInstalled:false,canRecover:false,canRetry:false};
  const launcher={status:async()=>runtime,updates:async()=>update,changed:fn=>changed=fn,updatesChanged:fn=>updated=fn,checkUpdates:async()=>{calls.push(['check']);return update;},startInstalled:async()=>calls.push(['installed']),retryUpdate:async()=>{calls.push(['retry']);return update;},recoverRuntime:async()=>{calls.push(['recover']);return update;},releases:async()=>calls.push(['releases'])};
  const source=ts.transpileModule(await readFile('src/renderer.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
@@ -16,10 +16,10 @@ async function fixture(){
  return{element,calls,runtime,installed,change:v=>changed({...runtime,...v}),update:v=>{update={...update,...v};updated(update);}};
 }
 test('renderer-updates shows exact installed/available pair and specific service error without false latest',async()=>{
- const f=await fixture();assert.match(f.element('update-installed').textContent,/explicit source build; not a downloaded release/);assert(f.element('update-installed').textContent.includes(f.installed.server));assert(f.element('update-installed').textContent.includes(f.installed.client));
+ const f=await fixture();assert.match(f.element('update-installed').textContent,/source build/);assert.match(f.element('update-installed').textContent,/Server commit #2542 · Client commit #88/);assert(!f.element('update-installed').textContent.includes(f.installed.server));
  f.update({phase:'service',message:'Runtime service HTTP 503; not offline',canPlayInstalled:true});assert.match(f.element('update-message').textContent,/HTTP 503/);assert.equal(f.element('play-installed').hidden,false);
  f.element('play-installed').onclick();await tick();assert.deepEqual(f.calls,[['installed']]);
- f.update({available:{...f.installed,kind:'release',sequence:2,version:'fixture-C',server:'c'.repeat(40),client:'d'.repeat(40)}});assert.match(f.element('update-available').textContent,/fixture-C/);assert(f.element('update-available').textContent.includes('c'.repeat(40)));assert(f.element('update-available').textContent.includes('d'.repeat(40)));
+ f.update({available:{...f.installed,kind:'release',sequence:2,version:'fixture-C',server:'c'.repeat(40),client:'d'.repeat(40)}});assert.match(f.element('update-available').textContent,/fixture-C/);assert.match(f.element('update-available').textContent,/Server commit number unavailable · Client commit number unavailable/);assert(!f.element('update-available').textContent.includes('c'.repeat(40)));
 });
 test('renderer-updates permits checks during play but disables conflicting lifecycle/recovery actions',async()=>{
  const f=await fixture();f.change({status:'ready',pid:123});assert.equal(f.element('check-updates').disabled,false);f.element('check-updates').onclick();await tick();assert.deepEqual(f.calls,[['check']]);

@@ -12,7 +12,7 @@ import type { RuntimeUpdates } from './updates';
 export type AuthorityCompletion = {command:string;binary:string;code:number;outcome:'success'|'unchanged';ack:unknown};
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export type View = { status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
+export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
 

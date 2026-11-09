@@ -7,6 +7,7 @@ import { SaveControls } from './saves';
 import { RuntimeUpdates } from './updates';
 import { createUpdatePolicy } from './update-policy';
 import { RELEASES_PAGE } from './update-format';
+import { gameSite } from './game-site';
 
 app.setName('Open RotMG Single Player');
 // The portable launcher names the save folder; starting this file directly would silently use an unrelated OS profile.
@@ -21,12 +22,15 @@ else {
   let runtime: Runtime;
   let saves: SaveControls;
   let updates: RuntimeUpdates;
+  let site: Awaited<ReturnType<typeof gameSite>>;
+  const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
   app.whenReady().then(async () => {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
     const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
     runtime = new Runtime(policy.baseline.root, userData);
+    site = await gameSite(runtime);
     window = new BrowserWindow({ width: 900, height: 700, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -55,7 +59,7 @@ else {
       if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return action(...args);
     });
-    checked('runtime:status', () => runtime.view());
+    checked('runtime:status', view);
     checked('runtime:start', () => runtime.start());
     checked('runtime:start-installed', () => {
       if(!updates.view().canPlayInstalled)throw new Error('Explicit installed-version play requires a rejected/unavailable check, verified stopped selection and no pending ambiguity');
@@ -69,7 +73,7 @@ else {
     checked('runtime:stop', () => runtime.stop());
     checked('runtime:client', async () => {
       if (runtime.view().status !== 'ready' || runtime.view().operation || runtime.view().closing) throw new Error('Server is not ready');
-      await shell.openExternal(runtime.clientURL());
+      await shell.openExternal(site.url());
     });
     checked('runtime:help', () => shell.openExternal('https://openrotmg.org/export/'));
     checked('save:import', () => saves.beginImport());
@@ -78,7 +82,7 @@ else {
     checked('save:backup', () => saves.makeBackup());
     checked('save:folder', () => saves.openBackupFolder());
     checked('save:restore', () => saves.restoreBackup());
-    runtime.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view); });
+    runtime.on('change', () => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view()); });
     updates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('update:changed', view); });
     void updates.startup();
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
@@ -87,7 +91,7 @@ else {
   async function close() {
     if (closing) return;
     closing = true;
-    try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); quitting = true; app.quit(); }
+    try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
     catch (error) {
       if (runtime.view().status !== 'failed') {
         dialog.showErrorBox('Close canceled', `${String(error)}\nThe launcher remains open. No save success is claimed. Inspect the operation error before closing or trying again.`);

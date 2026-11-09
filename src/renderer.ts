@@ -23,6 +23,10 @@ function render(view: View) {
   element('message').textContent = view.operation ? `${view.operation} — ${view.message}` : view.message;
   element('diagnostics').textContent = `Detailed logs: ${view.diagnostics}`;
   element('logs').textContent = view.logs.join('\n');
+  const link=element<HTMLAnchorElement>('client-url');
+  link.hidden=view.status!=='ready'||!view.clientURL;
+  link.textContent=view.clientURL ?? '';
+  link.href=view.clientURL ?? '';
   const busy = !!view.operation || view.closing;
   if (view.closing || (submitting && !view.operation)) hidePreview();
   start.disabled = busy || view.status !== 'stopped';
@@ -47,11 +51,14 @@ function updateButtons(){
   element<HTMLButtonElement>('runtime-releases').hidden=u?.phase!=='launcher';
   element<HTMLButtonElement>('runtime-releases').disabled=!!v?.closing;
 }
-function runtimeSummary(value:RuntimeSummary){return `${value.version} (${value.kind==='source'?'explicit source build; not a downloaded release':`authenticated release ${value.sequence}`})\nServer ${value.server}\nClient ${value.client}\nRuffle ${value.ruffle}`;}
+// Counts are pinned to the same source commits as the shipped runtime, so they remain available offline.
+const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88};
+const commitNumber=(sha:string)=>Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
+function runtimeSummary(value:RuntimeSummary){return `${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server)} · Client ${commitNumber(value.client)}`;}
 function renderUpdates(view:UpdateView){
   updateView=view;
-  element('update-installed').textContent=view.installed?`Installed (verified baseline / completed update): ${runtimeSummary(view.installed)}`:'Installed runtime: not yet verified';
-  element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'Available runtime: not verified';
+  element('update-installed').textContent=view.installed?`Installed: ${runtimeSummary(view.installed)}`:'Installed: checking…';
+  element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'';
   element('update-message').textContent=`${view.phase.toUpperCase()} — ${view.message}`;
   element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
 }
@@ -60,6 +67,14 @@ function result(value: SaveResult | undefined) {
   if (value) element('save-result').textContent = [value.message, value.disclosure, value.path].filter(Boolean).join('\n');
 }
 function hidePreview() { preview = undefined; clearPasswords(); element('import-preview').hidden = true; }
+function showPage(page:'home'|'settings'|'logs') {
+  for(const name of ['home','settings','logs']) element(`${name}-page`).hidden=name!==page;
+  if(page!=='settings')clearPasswords();
+}
+element('show-home').onclick=()=>showPage('home');
+element('show-settings').onclick=()=>showPage('settings');
+element('show-logs').onclick=()=>showPage('logs');
+element('client-url').onclick=event=>{event.preventDefault();invoke(()=>window.launcher.client());};
 start.onclick = () => invoke(() => window.launcher.start());
 stop.onclick = () => invoke(() => window.launcher.stop());
 client.onclick = () => invoke(() => window.launcher.client());

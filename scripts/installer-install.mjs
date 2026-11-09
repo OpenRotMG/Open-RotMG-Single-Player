@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {mkdir,readdir} from 'node:fs/promises';
 import {join,relative,isAbsolute} from 'node:path';
-import {launcherName,portableEntries,windowsTar} from './make-zip.mjs';
+import {launcherName,portableEntries,portableFolder,windowsTar} from './make-zip.mjs';
 
 export function installedPaths(root,platform=process.platform){
  const server=join(root,'server data'),app=platform==='darwin'?join(server,'Open RotMG Single Player.app'):server;
@@ -15,7 +15,9 @@ export async function installArtifact(artifact,root,out){
  // Windows tar.exe takes ANSI arguments, so a non-ASCII -C directory is unreachable; Node sets a Unicode cwd.
  else if(process.platform==='win32')execFileSync(windowsTar(),['-x','-f',artifact],{cwd:root,timeout:120000});
  else execFileSync('unzip',['-q',artifact,'-d',root],{timeout:120000});
- assert.deepEqual((await readdir(root)).sort(),portableEntries(),'ZIP root must be exactly the launcher, README.txt, player data and server data');
- assert.deepEqual(await readdir(join(root,'player data')),[],'A fresh ZIP ships an empty player data folder');
- return {kind:'portable ZIP extraction',path:root};
+ assert.deepEqual(await readdir(root),[portableFolder],'ZIP must extract into one OpenRotMG Singleplayer folder');
+ const path=join(root,portableFolder);
+ assert.deepEqual((await readdir(path)).sort(),portableEntries(),'Game folder must contain exactly the launcher, README.txt, player data and server data');
+ assert.deepEqual(await readdir(join(path,'player data')),[],'A fresh ZIP ships an empty player data folder');
+ return {kind:'portable ZIP extraction',path};
 }
