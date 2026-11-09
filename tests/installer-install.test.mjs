@@ -1,21 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,writeFile,readFile,stat} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,readFile,stat,chmod} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
 import {resolve,join} from 'node:path';
-import {MakerZIP} from '@electron-forge/maker-zip';
-import {installArtifact,writableOwnedInstallation} from '../scripts/installer-install.mjs';
+import {portableZip} from '../scripts/make-zip.mjs';
+import {installArtifact,installedPaths} from '../scripts/installer-install.mjs';
 import {protectInstallation,assertInstallationProtected} from '../scripts/native-boundaries.mjs';
 
-test('installer-install extracts the actual Forge Linux ZIP into a protected non-ASCII path and replaces only installation on reinstall (unit content, not a production app)',{skip:process.platform!=='linux'},async()=>{
- await mkdir('.qa/unit',{recursive:true});const out=await mkdtemp(resolve('.qa/unit/installer-')),input=join(out,'Open RotMG Single Player-linux-x64'),root=join(out,'installed é 日本'),profile=join(out,'persistent profile');
- await mkdir(join(input,'resources'),{recursive:true});await mkdir(profile);await writeFile(join(profile,'save'),'persistent unit sentinel');await writeFile(join(input,'resources/unit'),'unit package content');
- const maker=new MakerZIP({},['linux']);
- const [artifact]=await maker.make({dir:input,makeDir:join(out,'make'),appName:'unit',packageJSON:{version:'0.0.0'},targetArch:'x64',targetPlatform:'linux'});
- await installArtifact(artifact,root,out);assert.equal(await readFile(join(root,'resources/unit'),'utf8'),'unit package content');
- await protectInstallation(root);assert.equal((await stat(join(root,'resources/unit'))).mode&0o222,0);
- if(process.getuid()!==0)await assertInstallationProtected(root,join(root,'resources'));
- await writableOwnedInstallation(root);await writeFile(join(root,'stale'),'unit stale file');
- await installArtifact(artifact,root,out,true);await assert.rejects(stat(join(root,'stale')),error=>error.code==='ENOENT');
- assert.equal(await readFile(join(root,'resources/unit'),'utf8'),'unit package content');assert.equal(await readFile(join(profile,'save'),'utf8'),'persistent unit sentinel');
- await assert.rejects(installArtifact(artifact,join(out,'..','unowned'),out),/run-owned/);
+test('portable ZIP extracts to exactly the launcher, README.txt, empty player data and protected server data (unit content, not a production app)',{skip:process.platform!=='linux'},async()=>{
+ await mkdir('.qa/unit',{recursive:true});const out=await mkdtemp(resolve('.qa/unit/portable-')),input=join(out,'package'),launcher=join(out,'launcher');
+ await mkdir(join(input,'resources'),{recursive:true});await writeFile(join(input,'resources/unit'),'unit package content');
+ await writeFile(launcher,'#!/bin/sh\n');await chmod(launcher,0o755);
+ const zip=join(out,'portable.zip');await portableZip({packageDir:input,launcher,readme:resolve('launcher/README.txt'),stage:join(out,'stage'),zip});
+ const root=join(out,'extracted é 日本');await installArtifact(zip,root,out);const paths=installedPaths(root);
+ assert.equal(await readFile(join(paths.server,'resources/unit'),'utf8'),'unit package content');assert.equal((await stat(paths.launcher)).mode&0o111,0o111);
+ assert.match(await readFile(join(root,'README.txt'),'utf8'),/player data/);
+ await protectInstallation(paths.server);if(process.getuid()!==0)await assertInstallationProtected(paths.server,paths.resources);
+ await writeFile(join(paths.player,'save'),'player data stays writable');
+ await assert.rejects(installArtifact(zip,root,out),/EEXIST/);await assert.rejects(installArtifact(zip,join(out,'..','unowned'),out),/run-owned/);
+ assert.deepEqual([...new Set(execFileSync('unzip',['-Z1',zip],{encoding:'utf8'}).trim().split('\n').map(line=>line.split('/')[0]))].sort(),['OpenRotMG Singleplayer','README.txt','player data','server data']);
 });

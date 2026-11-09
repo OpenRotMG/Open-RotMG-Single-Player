@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
 import {release,version as osVersion} from 'node:os';
 import {randomBytes} from 'node:crypto';
@@ -15,7 +15,7 @@ import {nativeGame} from './native-game.mjs';
 import {processArgv} from './process-argv.mjs';
 import {acquireQaPortLease} from './qa-port.mjs';
 import {packagedChildReady} from './package-readiness.mjs';
-import {installedPaths,installArtifact,writableOwnedInstallation} from './installer-install.mjs';
+import {installedPaths,installArtifact} from './installer-install.mjs';
 import {assertWindowsInstallerWriteDenied} from './installer-write-probe.mjs';
 
 assert.equal(process.argv.length,3,'npm run verify:release -- ARTIFACT (with adjacent installer-receipt.json)');
@@ -24,7 +24,7 @@ if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
 }else await journey();
 async function journey(){
  await mkdir('.qa/installer-tests',{recursive:true});const out=await mkdtemp(resolve('.qa/installer-tests/run-'));
- const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned OS installer; no Authenticode/notarization, downloaded quarantine or SmartScreen qualification','Normal-cache browser requests are uncontrolled; only update availability is controlled (HTTP 503); NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
+ const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned binaries; no Authenticode/notarization. The ZIP is extracted without downloaded quarantine or Mark-of-the-Web, so Gatekeeper/SmartScreen prompts are not qualified','Normal-cache browser requests are uncontrolled; only update availability is controlled (HTTP 503); NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
  const check=(name,value)=>{assert(value,name);report.assertions.push(name);console.log('PASS '+name);};
  const persist=()=>writeFile(join(out,'installer-result.json'),JSON.stringify(report,null,2)+'\n');
  const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
@@ -37,27 +37,28 @@ async function journey(){
   report.delivery=receipt;report.artifact={path:artifact,sha256:await hashFile(artifact)};
   const flags=JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]');assert(flags.length===0||JSON.stringify(flags)==='["--ignore-gpu-blocklist"]','Only approved software WebGL flag allowed');
   lease=await acquireQaPortLease();display=await updateTestDisplay(out);report.display=display.proof;
-  const env=await consumerEnvironment(display.env,out),installation=join(out,'installed Open RotMG é 日本'),profile=join(out,'persistent profile é');
-  report.installations=[await installArtifact(artifact,installation,out)];
-  const launcherVersion=JSON.parse(await readFile('package.json','utf8')).version,{resources,executable}=installedPaths(installation,launcherVersion),runtime=join(resources,'runtime'),binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
+  const env=await consumerEnvironment(display.env,out),installation=join(out,'extracted Open RotMG é 日本');let paths,profile,resources,executable,runtime;
+  const use=root=>{paths=installedPaths(root);({player:profile,resources,executable}=paths);runtime=join(resources,'runtime');};
+  report.installations=[await installArtifact(artifact,installation,out)];use(installation);
+  const launcherVersion=JSON.parse(await readFile('package.json','utf8')).version,binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
   const config=JSON.parse(extractFile(join(resources,'app.asar'),'dist/runtime-baseline.json').toString());assert.equal(config.mode,'release');
   const manifest=verifyManifest(Buffer.from(config.manifest,'base64'),Buffer.from(config.signature,'base64'),MANIFEST_PUBLIC_KEY,receipt.releaseId,receipt.tag,targetName(),launcherVersion,'https://github.com');
   assert(manifest.sequence>0);assert.equal(manifest.sequence,receipt.sequence);assert.equal(manifest.payload.sha256,receipt.runtimeArchive.sha256);assert.deepEqual(manifest.pins,receipt.pins);assert.equal(config.identitySha256,manifest.payload.identitySha256);
-  report.baseline=manifest;report.runtime=await verifyRuntime(runtime,targetName(),manifest);report.linkage=runtimeLinkage(binary);report.installed={installation,executable,resources,executableSha256:await hashFile(executable),asarSha256:await hashFile(join(resources,'app.asar'))};
+  report.baseline=manifest;report.runtime=await verifyRuntime(runtime,targetName(),manifest);report.linkage=runtimeLinkage(binary);report.installed={installation,launcher:paths.launcher,executable,resources,launcherSha256:await hashFile(paths.launcher),executableSha256:await hashFile(executable),asarSha256:await hashFile(join(resources,'app.asar'))};
   const assertProtected=async phase=>{
-   if(process.platform!=='win32')return assertInstallationProtected(installation,runtime);
-   const proof=await assertWindowsInstallerWriteDenied(installation,runtime,out,phase);(report.windowsWriteProbes??=[]).push(proof);
+   if(process.platform!=='win32')return assertInstallationProtected(paths.server,runtime);
+   const proof=await assertWindowsInstallerWriteDenied(paths.server,runtime,out,phase);(report.windowsWriteProbes??=[]).push(proof);
   };
-  restoreProtection=await protectInstallation(installation);await assertProtected('install');
-  check('Actual installed/extracted signed positive runtime baseline matches exact delivery archive, pins and protected non-ASCII path',true);
+  restoreProtection=await protectInstallation(paths.server);await assertProtected('install');
+  check('Extracted ZIP has exactly the launcher, README.txt, empty player data and server data, and its signed runtime baseline matches the delivery archive and pins',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   const secret=randomBytes(24).toString('base64url');let userData;
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
-   ({app}=await launchUpdateTest({executablePath:executable,profile,env,policy:{},setupMain:"module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});"}));
+   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:"module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});"}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.evaluate(()=>window.launcher.updates())).phase==='service','controlled update service refusal');
-   userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,profile);assert(!userData.startsWith(installation));report.userData=userData;
+   userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,profile);report.userData=userData;
    assert.equal(await app.evaluate(()=>process.resourcesPath),resources);assert.equal(await app.evaluate(()=>process.execPath),executable);
    assert.equal(await app.evaluate(()=>process.env.PATH),env.PATH);assert(!(await app.evaluate(()=>process.env.NODE_OPTIONS)));
    const pid=await app.evaluate(()=>process.pid),argv=await processArgv(pid);assert(!argv.includes('--no-sandbox'));
@@ -85,12 +86,14 @@ async function journey(){
   await choose(backup,1);await page.locator('#restore').click();await wait(async()=>/Full local save restored/.test(await page.locator('#save-result').innerText()),'full restore');
   await close();await launch();await start();await game.verify(true);await close();await game.close();
   check('Full backup/restore, cold reopen and active-game Close preserve progress without orphan processes',true);
-  const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;await writableOwnedInstallation(installation);
-  report.installations.push(await installArtifact(artifact,installation,out,true));assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
-  restoreProtection=await protectInstallation(installation);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
-  check('Same-version native reinstall/repair preserves identical userData database and real playable saved progress',true);
+  const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;
+  const replacement=join(out,'new copy Open RotMG é 日本');report.installations.push(await installArtifact(artifact,replacement,out));
+  await rmdir(join(replacement,'player data'));await rename(profile,join(replacement,'player data'));use(replacement);
+  assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
+  restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
+  check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
   report.status='passed';
- }catch(error){if(error.installerInvocation)report.installerInvocation=error.installerInvocation;if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
+ }catch(error){if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
   for(const [name,cleanup] of [['browser',()=>game?.close()],['launcher',()=>app?.close()],['install protection',()=>restoreProtection?.()],['display',()=>display?.close()],['port lease',()=>lease?.release()]])try{await cleanup();}catch(error){report.errors.push(`${name}: ${error.stack??error}`);}
   if(serverPid&&alive(serverPid))report.errors.push(`Owned server ${serverPid} remains alive; NOT force-killed, no save success claimed`);

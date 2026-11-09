@@ -82,9 +82,8 @@ async function collectInstaller(){
  const attribution=await json('.qa/installer-inputs/attribution.json');assert.equal(attribution.installerSourceHead,git('rev-parse','HEAD'));assert.equal(git('status','--porcelain','--untracked-files=no'),'');
  const output=resolve('.qa/installer-delivery');await mkdir(output);
  async function walk(root){const paths=[];for(const entry of await readdir(root,{withFileTypes:true})){const path=join(root,entry.name);if(entry.isDirectory())paths.push(...await walk(path));else if(entry.isFile())paths.push(path);}return paths;}
- const extension={ 'linux-x64':'.zip','win32-x64':'.msi','darwin-arm64':'.dmg'}[attribution.target];assert(extension);
- const installers=(await walk('out/make')).filter(path=>path.endsWith(extension));assert.equal(installers.length,1,'Exactly one native Forge installer/archive required');
- const name=`openrotmg-${(await json('package.json')).version}-${attribution.target}${extension}`;await copyFile(installers[0],join(output,name));
+ const installers=(await walk('out/make')).filter(path=>path.endsWith('.zip'));assert.equal(installers.length,1,'Exactly one portable ZIP required');
+ const name=`openrotmg-singleplayer-${(await json('package.json')).version}-${attribution.target}.zip`;await copyFile(installers[0],join(output,name));
  execFileSync('git',['archive','--format=tar.gz',`--output=${join(output,'launcher-source.tar.gz')}`,attribution.installerSourceHead]);
  const sources=[];
  for(const kind of ['server','client']){

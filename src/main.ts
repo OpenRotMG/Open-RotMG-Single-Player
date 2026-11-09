@@ -9,8 +9,13 @@ import { createUpdatePolicy } from './update-policy';
 import { RELEASES_PAGE } from './update-format';
 
 app.setName('Open RotMG Single Player');
+// The portable launcher names the save folder; starting this file directly would silently use an unrelated OS profile.
+if (app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
+  dialog.showErrorBox('Open the OpenRotMG Singleplayer program', 'Start the game with "OpenRotMG Singleplayer", next to the "player data" and "server data" folders.');
+  app.exit(1);
+}
 // Chromium's singleton lock is tied to this persistent userData directory, not the install path.
-if (!app.requestSingleInstanceLock()) app.quit();
+else if (!app.requestSingleInstanceLock()) app.quit();
 else {
   let window: BrowserWindow | undefined;
   let runtime: Runtime;

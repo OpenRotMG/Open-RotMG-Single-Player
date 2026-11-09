@@ -4,7 +4,7 @@ This is an unreleased source preview. The package bundles the compiled server, c
 
 ## Saves and shutdown
 
-Saves are outside the installation, in Electron's userData `state/` directory. Detailed logs are in `diagnostics/`; the launcher shows the actual path. The server uses loopback port 47831 and reports a conflict without stopping its owner.
+Packaged builds run from the portable ZIP: the `OpenRotMG Singleplayer` launcher passes `--user-data-dir=<ZIP folder>/player data`, and the packaged app refuses to start without it. Saves are in that userData `state/` directory. Detailed logs are in `diagnostics/`; the launcher shows the actual path. The server uses loopback port 47831 and reports a conflict without stopping its owner.
 
 Stop and Close/Quit request durable shutdown through a private pipe. A launcher crash also closes that pipe so the server can drain. Failed shutdowns are not save success: the launcher blocks mutation and records `shutdown-failed.json`. If that record cannot be written, it keeps ownership and shows the error. Preserve the save and diagnostics for investigation. Never delete `state/state.lock` to override a running server.
 

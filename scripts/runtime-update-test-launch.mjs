@@ -24,8 +24,9 @@ async function inspector(url){
  const frameEvaluate=async(expression,callFrameId)=>{const value=await send('Debugger.evaluateOnCallFrame',{expression,callFrameId,returnByValue:true});assert(!value.exceptionDetails,JSON.stringify(value.exceptionDetails));return value.result.value;};
  return{send,evaluate,frameEvaluate,on:(...args)=>events.on(...args),close:()=>socket.close()};
 }
-export async function launchUpdateTest({executablePath,profile,env,policy,setupMain=''}){
- const args=['--inspect-brk=0','--remote-debugging-port=0',`--user-data-dir=${profile}`,...(process.platform==='linux'?['--ozone-platform=x11']:[])];
+// electronPath differs from executablePath when the portable launcher supplies the profile and (on Windows) stays as Electron's parent.
+export async function launchUpdateTest({executablePath,electronPath=executablePath,profile,env,policy,setupMain=''}){
+ const viaLauncher=electronPath!==executablePath,args=['--inspect-brk=0','--remote-debugging-port=0',...(viaLauncher?[]:[`--user-data-dir=${profile}`]),...(process.platform==='linux'?['--ozone-platform=x11']:[])];
  const child=spawn(executablePath,args,{env,stdio:['ignore','pipe','pipe'],windowsHide:true}),events=new EventEmitter();let debug,browser,mainContext,resumed=false,stderr='',stdout='';
  // Crash cuts need main's actual exit independently of inherited pipes held by a paused owned backend.
  const exited=new Promise(ok=>child.once('exit',(code,signal)=>ok({code,signal})));
@@ -41,9 +42,9 @@ export async function launchUpdateTest({executablePath,profile,env,policy,setupM
   console.log(`update-test-launch main breakpoint=${atMain}`);
   assert(atMain,`Owned packaged main did not pause before execution: pauses=${JSON.stringify(pauseLog)}, scripts=${JSON.stringify([...scripts.values()].filter(script=>script.url.includes('app.asar')))}; ${stderr}`);
   const script=`(()=>{
-    if(process.pid!==${child.pid}||!process.argv.includes(${JSON.stringify(`--user-data-dir=${profile}`)}))throw Error('Refusing a foreign main inspector/profile/PID');
+    if((process.pid!==${child.pid}&&!(${viaLauncher}&&process.ppid===${child.pid}))||!process.argv.includes(${JSON.stringify(`--user-data-dir=${profile}`)}))throw Error('Refusing a foreign main inspector/profile/PID');
     const require=process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js');
-    const fs=require('node:fs');if(fs.realpathSync(process.execPath)!==fs.realpathSync(${JSON.stringify(resolve(executablePath))}))throw Error('Refusing a foreign Electron executable');
+    const fs=require('node:fs');if(fs.realpathSync(process.execPath)!==fs.realpathSync(${JSON.stringify(resolve(electronPath))}))throw Error('Refusing a foreign Electron executable');
     const policyPath=require.resolve(process.resourcesPath+'/app.asar/dist/update-policy.js'),mainPath=require.resolve(process.resourcesPath+'/app.asar/dist/main.js'),beforeMain=!require.cache[policyPath]&&(!require.cache[mainPath]||!require.cache[mainPath].loaded);
     if(!beforeMain)throw Error('Packaged update policy was already loaded before fixture attachment');
     const fixture=${JSON.stringify(policy)},module=require(policyPath),productionPolicy=module.createUpdatePolicy;module.createUpdatePolicy=(resources,launcher)=>({...fixture,launcher,metadataBundle:productionPolicy(resources,launcher).metadataBundle,request:fetch});
@@ -78,7 +79,7 @@ export async function launchUpdateTest({executablePath,profile,env,policy,setupM
    close:async()=>{try{await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());}catch(error){if(child.exitCode===null&&child.signalCode===null){const timer=new AbortController();try{await Promise.race([exited,delay(5000,undefined,{signal:timer.signal}).then(()=>{throw error;})]);}finally{timer.abort();}}}return closed;},
    stderr:()=>stderr,stdout:()=>stdout,
   };
-  assert.equal(await app.evaluate(()=>process.pid),child.pid);return{app,proof};
+  assert.equal(await app.evaluate(()=>process.pid),proof.pid);return{app,proof};
  }catch(error){
   if(resumed&&debug){await debug.evaluate("process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js')('electron').app.quit()",mainContext).catch(()=>undefined);await closed;}
   else{debug?.close();if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');await closed;}

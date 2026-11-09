@@ -11,7 +11,7 @@
     "build": "tsc && tsc -p tsconfig.renderer.json && node scripts/build.mjs",
     "test": "tsc && node --test tests/*.test.mjs",
     "package": "npm run build && electron-forge package",
-    "make": "npm run build && node scripts/installer-inputs.mjs check && electron-forge make",
+    "make": "npm run build && node scripts/installer-inputs.mjs check && electron-forge package && node scripts/make-zip.mjs",
     "verify:release": "node scripts/verify-installer.mjs",
     "package:test": "npm test && npm run package && node scripts/package-test.mjs",
     "test:e2e": "node scripts/save-controls-test.mjs",
@@ -19,9 +19,6 @@
   },
   "devDependencies": {
     "@electron-forge/cli": "8.0.1",
-    "@electron-forge/maker-dmg": "8.0.1",
-    "@electron-forge/maker-wix": "8.0.1",
-    "@electron-forge/maker-zip": "8.0.1",
     "@electron/asar": "4.3.1",
     "@playwright/test": "1.64.1",
     "@types/node": "24.10.0",

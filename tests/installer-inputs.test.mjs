@@ -48,16 +48,16 @@ test('installer-inputs validates historical protected draft snapshot URLs withou
  for(const change of changes){const value=structuredClone(m);change(value);assert.throws(()=>validateInstallerPromotion(binding(),value,'linux-x64'));}
  const published=metadata();published.draft.draft=false;assert.throws(()=>validateInstallerPromotion(binding(),published,'linux-x64'));
 });
-test('Forge makers produce real MSI, DMG and Linux-only ZIP without updater/installer event runtime changes',()=>{
+test('Forge only packages; no installer makers or OS signing are configured',()=>{
  const require=createRequire(import.meta.url),forge=require('../forge.config.js');
- assert.deepEqual(forge.makers.map(m=>m.name),['@electron-forge/maker-wix','@electron-forge/maker-dmg','@electron-forge/maker-zip']);
- const msi=forge.makers[0].config;assert.equal(msi.exe,'openrotmg-single-player');assert.equal(msi.upgradeCode,'7522D023-3273-4AE6-B640-96B70E283FA8');assert.equal(msi.defaultInstallMode,'perUser');assert.deepEqual(msi.features,{autoUpdate:false,autoLaunch:false});assert.equal(msi.autoRun,false);assert.deepEqual(forge.makers[2].platforms,['linux']);assert.deepEqual(forge.packagerConfig.extraResource,['runtime']);
- for(const m of forge.makers){assert(!m.config.windowsSign);assert(!m.config.osxSign);assert(!m.config.osxNotarize);}
+ assert.deepEqual(forge.makers,[]);assert.deepEqual(forge.packagerConfig.extraResource,['runtime']);assert(!forge.packagerConfig.osxSign&&!forge.packagerConfig.osxNotarize&&!forge.packagerConfig.windowsSign);
 });
-test('installedPaths points at actual MSI version payload and copied DMG application, not preinstall out tree',()=>{
- assert.equal(installedPaths('/owned é','0.1.0','win32').executable,join('/owned é','app-0.1.0/openrotmg-single-player.exe'));
- assert.equal(installedPaths('/owned é','0.1.0','darwin').resources,join('/owned é','Open RotMG Single Player.app/Contents/Resources'));
- assert.equal(installedPaths('/owned é','0.1.0','linux').resources,join('/owned é','resources'));
+test('installedPaths puts the packaged app in server data and the profile in player data beside the launcher',()=>{
+ assert.equal(installedPaths('/owned é','win32').executable,join('/owned é','server data/openrotmg-single-player.exe'));
+ assert.equal(installedPaths('/owned é','win32').launcher,join('/owned é','OpenRotMG Singleplayer.exe'));
+ assert.equal(installedPaths('/owned é','darwin').resources,join('/owned é','server data/Open RotMG Single Player.app/Contents/Resources'));
+ assert.equal(installedPaths('/owned é','linux').resources,join('/owned é','server data/resources'));
+ assert.equal(installedPaths('/owned é','linux').player,join('/owned é','player data'));
 });
 test('installer maker precheck refuses a source preview or unsigned release metadata, without a production-key fixture',async()=>{
  await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/installer-check-'));await mkdir(join(root,'dist'));await writeFile(join(root,'package.json'),JSON.stringify({version:'0.1.0'}));
