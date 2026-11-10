@@ -94,11 +94,12 @@ async function journey(){
   await page.screenshot({path:join(out,'launcher-ready.png')});
   game=await nativeGame({out,origin:new URL(view.clientURL).origin,clientURL:view.clientURL,env,check,report,normalCache:true,credentials:{guid:login,password:secret}});await game.mutate();await stop();await game.close();
   check('Installed native game import, real progress transaction and durable Stop verified',true);
+  const saveResult=async(pattern,label)=>wait(async()=>{const error=await page.locator('#error').innerText();if(error)throw Error(`${label}: ${error}`);return pattern.test(await page.locator('#save-result').innerText());},label);
   await page.locator('#show-settings').click();
-  await page.locator('#backup').click();await wait(async()=>/Verified full local backup/.test(await page.locator('#save-result').innerText()),'full backup');
+  await page.locator('#backup').click();await saveResult(/Verified full local backup/,'full backup');
   const backups=join(profile,'backups'),names=(await readdir(backups)).filter(n=>n.includes('-manual-')&&n.endsWith('.sqlite'));assert.equal(names.length,1);const backup=join(backups,names[0]);
   report.backup={path:backup,sha256:await hashFile(backup),bytes:(await stat(backup)).size};
-  await choose(backup,1);await page.locator('#restore').click();await wait(async()=>/Full local save restored/.test(await page.locator('#save-result').innerText()),'full restore');
+  await choose(backup,1);await page.locator('#restore').click();await saveResult(/Full local save restored/,'full restore');
   await close();await launch();await start();await game.verify(true);await close();await game.close();
   check('Full backup/restore, cold reopen and active-game Close preserve progress without orphan processes',true);
   const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;
@@ -109,7 +110,9 @@ async function journey(){
   restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
   report.status='passed';
- }catch(error){if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
+ }catch(error){
+  if(page&&!page.isClosed())try{report.failureView=await page.evaluate(async()=>({runtime:await window.launcher.status(),updates:await window.launcher.updates(),error:document.getElementById('error').textContent}));await page.screenshot({path:join(out,'launcher-failure.png')});}catch(capture){report.errors.push('Failure capture: '+String(capture));}
+  if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
   for(const [name,cleanup] of [['browser',()=>game?.close()],['launcher',()=>app?.close()],['install protection',()=>restoreProtection?.()],['display',()=>display?.close()],['port lease',()=>lease?.release()]])try{await cleanup();}catch(error){report.errors.push(`${name}: ${error.stack??error}`);}
   if(serverPid&&alive(serverPid))report.errors.push(`Owned server ${serverPid} remains alive; NOT force-killed, no save success claimed`);
