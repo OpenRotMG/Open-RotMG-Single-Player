@@ -18,7 +18,8 @@ export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'
 export type UpdateConfirmation={kind:'restore-update'|'verify-current'|'retry-update';message:string;detail:string};
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const summary=(g:Generation):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,ruffle:g.pins.ruffle.version,kind:g.kind});
-const fileName=(reason:string,id=randomUUID())=>`${new Date().toISOString().replaceAll(':','-')}-${reason}-${id}.sqlite`;
+// Leave room for native acknowledgement staging suffixes under Windows' path limit in a portable extraction.
+const fileName=(reason:string,id=randomUUID())=>`${Date.now()}-${reason}-${id}.sqlite`;
 export class RuntimeUpdates extends EventEmitter{
   readonly store:RuntimeStore;readonly fence:RecoveredRuntimeFence;
   private initialization?:Promise<void>;private task?:Promise<UpdateView>;private controller?:AbortController;
