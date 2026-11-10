@@ -15,6 +15,7 @@ function unsafeArchive(type){
  return gzipSync(Buffer.concat([header,body,Buffer.alloc(512-body.length),Buffer.alloc(1024)]));
 }
 export async function runtimeFixture({out,runtime,archive,archiveInfo,target=targetName()}){
+ const save=JSON.parse(await readFile(join(runtime,'notices/runtime-capabilities.json'),'utf8')).save;
  const identity=await verifyRuntime(runtime,target);await verifyCapabilities(runtime,identity.pins,1,1);const keys=generateKeyPairSync('ed25519'),foreignKeys=generateKeyPairSync('ed25519'),publicKey=keys.publicKey.export({type:'spki',format:'pem'}).toString();
  if(!archive){archive=join(out,`fixture-runtime-${target}.tar.gz`);archiveInfo=await archiveRuntime(runtime,archive,{startupBackup:1,clientNamespace:1});}
  assert.equal(archiveInfo.target,target);assert.deepEqual(archiveInfo.pins,identity.pins);assert.equal((await stat(archive)).size,archiveInfo.payload.bytes);assert.equal(await hashFile(archive),archiveInfo.payload.sha256);assert.equal(archiveInfo.startupBackup,1);assert.equal(archiveInfo.clientNamespace,1);assert.equal(archiveInfo.payload.binarySha256,identity.binarySha256);
@@ -32,7 +33,7 @@ export async function runtimeFixture({out,runtime,archive,archiveInfo,target=tar
   let synthetic;
   if(mode==='wrong-digest')payload.sha256='0'.repeat(64);
   if(mode==='unsafe-path'||mode==='symlink'){synthetic=unsafeArchive(mode==='unsafe-path'?'path':'symlink');payload.bytes=synthetic.length;payload.sha256=digest(synthetic);payload.expandedBytes=14;}
-  const manifest={format:1,releaseId:10000+sequence,tag,version:`fixture-${identity.pins.server.commit.slice(0,12)}-${sequence}`,sequence,target,minLauncher:'0.1.0',clientNamespace:1,save:{cli:1,read:[21,22],write:22,startupBackup:1},pins:identity.pins,payload};
+  const manifest={format:1,releaseId:10000+sequence,tag,version:`fixture-${identity.pins.server.commit.slice(0,12)}-${sequence}`,sequence,target,minLauncher:save.write===23?'0.1.1':'0.1.0',clientNamespace:1,save,pins:identity.pins,payload};
   if(mode==='future')manifest.format=2;if(mode==='wrong-target')manifest.target=target==='linux-x64'?'win32-x64':'linux-x64';if(mode==='minimum-launcher')manifest.minLauncher='999.0.0';if(mode==='future-key')manifest.keyId='untrusted-future-key';if(mode==='legacy-capability')manifest.save.startupBackup=0;
   let bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n');if(mode==='malformed')bytes=Buffer.from('{not valid JSON');if(mode==='invalid-utf8')bytes=Buffer.from([255]);
   const signature=mode==='signature'?Buffer.alloc(64):sign(null,bytes,mode==='wrong-key'?foreignKeys.privateKey:keys.privateKey);return{manifest,bytes,signature,synthetic};

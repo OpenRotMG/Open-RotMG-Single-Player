@@ -2,7 +2,7 @@ OpenRotMG Singleplayer
 
 Extract the ZIP, open the "OpenRotMG Singleplayer" folder, then open the program of the same name. Start Server, then Start Client to play in your browser.
 
-The gear in the top right opens Settings for players, backups and game updates. Server logs has its own page.
+The gear in the top right opens Settings for players, backups and separate server/client and launcher updates. Server logs has its own page.
 
 player data: your saves, backups, logs and downloaded game updates. Keep it private.
 server data: the game, server and launcher. Don't change anything in it.
@@ -16,4 +16,4 @@ This build isn't signed, so your computer may warn you the first time:
 - macOS (Apple Silicon): a Terminal window opens and stays open while you play. If macOS blocks the program, open System Settings > Privacy & Security and choose Open Anyway. It may ask again for the game itself.
 - Linux x64: run "OpenRotMG Singleplayer" from the extracted folder.
 
-Source code, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases/tag/v0.1.0
+Source code, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases

@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {join} from 'node:path';
 import {AuthorityCompletion} from './runtime';
 import {backup,Backup,backupPath,NativeStartupAck,nativeAck,Pending,pending,uuid} from './update-journal';
-import {boundedFile,demand,digest,exact,hex,integer,UpdateProblem} from './update-format';
+import {boundedFile,demand,digest,exact,hex,integer,UpdateProblem,runtimeSaveSchema} from './update-format';
 import {exists,record,RuntimeStore,Selection,selection} from './update-store';
 
 export type ReadyProof={pid:number;binary:string;resources:string;healthProcess:number;listenerSeen:true};
@@ -54,7 +54,7 @@ export class RecoveredRuntimeFence{
         exact(r.proof,'pending,input,preRestore,restoreAck,authority,close,intentSha256','restore proof');const p=pending(r.proof.pending),input=backup(r.proof.input),pre=backup(r.proof.preRestore);
         exact(r.proof.restoreAck,'restored,backup','actual restore acknowledgement');exact(r.proof.close,'code,signal','actual restore close');
         demand(p.id===r.pendingId&&p.failureSha256===r.markerSha256&&equal(p.to,r.from)&&equal(p.from,r.to)&&equal(r.proof.authority,p.to)&&p.nativeAck!==null&&p.pid!==null,'Restore proof is foreign to pending update');
-        const ack=nativeAck(p.nativeAck,backupPath(this.store,p.migrationName),p.pid);
+        const ack=nativeAck(p.nativeAck,backupPath(this.store,p.migrationName),p.pid,await runtimeSaveSchema(this.store.root(p.to.id)));
         demand(ack.outcome==='verified-backup'&&input.name===p.migrationName&&input.sha256===ack.sha256&&input.metadata.schema===ack.source_schema&&equal(input.authority,p.to)&&equal(pre.authority,p.to),'Restore did not use the freshest verified under-lock snapshot');
         demand(r.proof.restoreAck.restored===true&&r.proof.restoreAck.backup===backupPath(this.store,pre.name)&&r.proof.close.code===0&&r.proof.close.signal===null,'Restore lacks actual successful close/strict acknowledgement');
         demand(hex(r.proof.intentSha256),'Restore has no exact write-ahead recovery intent');const intent=await this.evidence(r.proof.intentSha256);
@@ -79,13 +79,13 @@ export class RecoveredRuntimeFence{
           exact(r.proof.interruptedStartup,'sha256,outcome,settlement','interrupted ordinary startup disposition');const interrupted=r.proof.interruptedStartup;demand(hex(interrupted.sha256)&&interrupted.outcome==='unknown'&&interrupted.settlement==='current-validation','Interrupted startup outcome cannot be relabelled successful');
           const p=pending(await this.evidence(interrupted.sha256)),selected=await this.store.load(r.to);
           demand(p.kind==='start'&&p.phase==='starting'&&p.recovery===null&&p.readiness===null&&p.id===old.pendingId&&p.id!==r.pendingId&&old.kind==='server'&&equal(p.from,r.to)&&equal(p.to,r.to)&&equal(old.from,r.to)&&(p.failureSha256===null||p.failureSha256===r.markerSha256),'Current-save recovery is not the exact interrupted ordinary same-generation startup');
-          demand(selected.startupBackup===1&&selected.clientNamespace===1&&snapshot.metadata.schema===22,'Interrupted startup requires a capable selected runtime and a fully verified current target-schema22 snapshot');
+          demand(selected.startupBackup===1&&selected.clientNamespace===1&&snapshot.metadata.schema===await runtimeSaveSchema(this.store.root(selected.id)),'Interrupted startup requires a capable selected runtime and a fully verified current target-schema snapshot');
         }
       }else{
         demand(previous,'Healthy runtime transition has no recovery predecessor');exact(r.proof,'pending,nativeAck,readiness','healthy runtime transition proof');const p=pending(r.proof.pending);
         exact(r.proof.readiness,'pid,healthProcess,listenerSeen,binarySha256,selected','owned readiness proof');const ready=r.proof.readiness;
         demand(p.id===r.pendingId&&p.phase==='ready'&&p.failureSha256===null&&equal(p.from,previous.receipt.to)&&equal(p.from,r.from)&&equal(p.to,r.to)&&r.markerSha256===previous.receipt.markerSha256,'Transition changed recovery root or prior selection');
-        demand(p.pid!==null&&equal(r.proof.nativeAck,p.nativeAck)&&equal(r.proof.readiness,p.readiness),'Transition native/readiness acknowledgement mismatch');nativeAck(r.proof.nativeAck,backupPath(this.store,p.migrationName),p.pid);
+        demand(p.pid!==null&&equal(r.proof.nativeAck,p.nativeAck)&&equal(r.proof.readiness,p.readiness),'Transition native/readiness acknowledgement mismatch');nativeAck(r.proof.nativeAck,backupPath(this.store,p.migrationName),p.pid,await runtimeSaveSchema(this.store.root(p.to.id)));
         const candidate=await this.store.load(p.to);demand(ready.pid===p.pid&&ready.healthProcess===p.pid&&ready.listenerSeen===true&&ready.binarySha256===candidate.binarySha256&&equal(ready.selected,p.to),'Transition has no owned native readiness/migration proof');
       }
     }

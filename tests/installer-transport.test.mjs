@@ -41,11 +41,11 @@ async function model({receipt=()=>{},after=()=>{},before=()=>{},mode='short',arc
  };
  return {root,requests,downloads,prepare:()=>prepareInstallerInputs(binding,{root,target:'linux-x64',launcher:'0.1.0',pins:JSON.parse(readPins),api,download})};
 }
-const readPins=await readFile('source-pins.json','utf8');
+const readPins=JSON.stringify(verifyManifest(await readFile(join(fixtures,'runtime-linux-x64.json')),await readFile(join(fixtures,'runtime-linux-x64.json.sig')),MANIFEST_PUBLIC_KEY,435513734,'v0.1.0','linux-x64','0.1.0','https://github.com').pins);
 
 test('installer transport public fixture is the original production exact-byte signed baseline, without any test signing key',async()=>{
  const value=verifyManifest(await readFile(join(fixtures,'runtime-linux-x64.json')),await readFile(join(fixtures,'runtime-linux-x64.json.sig')),MANIFEST_PUBLIC_KEY,435513734,'v0.1.0','linux-x64','0.1.0','https://github.com');
- assert.equal(value.sequence,1);assert.equal(value.payload.id,714228326);assert.equal(value.payload.sha256,'47494f3f82d8e3173ade702e5774f047e5a2bf4d15b3304fd820231013b2c47d');assert.deepEqual(value.pins,JSON.parse(readPins));
+ assert.equal(value.sequence,1);assert.equal(value.payload.id,714228326);assert.equal(value.payload.sha256,'47494f3f82d8e3173ade702e5774f047e5a2bf4d15b3304fd820231013b2c47d');assert.deepEqual(value.pins,JSON.parse(readPins));assert.equal(value.pins.server.commit,'2c700135d755a4210c2204334aafee2572205ec1');assert.equal(value.pins.client.commit,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e');
 });
 test('installer authentic fixture bytes survive actual Git LF/CRLF checkout filters without normalizing signed metadata',async()=>{
  const signature=await readFile(join(fixtures,'runtime-linux-x64.json.sig'));

@@ -34,7 +34,7 @@ test('update-current-recovery live-writer strict unchanged refusal preserves old
 });
 for(const invalid of ['schema21','missing','corrupt','unknown'])test(`update-current-recovery ${invalid} cannot bless current startup or replay`,async()=>{
  const f=await interrupted(),snapshot=f.updates.snapshot;f.updates.snapshot=async(...args)=>{if(invalid==='schema21'){const value=await snapshot(...args);value.backup.metadata.schema=21;return value;}throw Error(`synthetic ${invalid} snapshot proof`);};
- await assert.rejects(f.updates.recover(),/schema22|synthetic/);await assert.rejects(f.fence.requireClean(select(f.b)),/unknown/);const reopened=await cold(f);assert.equal(reopened.updates.view().phase,'recovery');assert.equal(reopened.updates.view().canPlayInstalled,false);await assert.rejects(reopened.updates.recover(),/manual investigation/);
+ await assert.rejects(f.updates.recover(),/target schema|synthetic/);await assert.rejects(f.fence.requireClean(select(f.b)),/unknown/);const reopened=await cold(f);assert.equal(reopened.updates.view().phase,'recovery');assert.equal(reopened.updates.view().canPlayInstalled,false);await assert.rejects(reopened.updates.recover(),/manual investigation/);
 });
 for(const wrong of ['update','restore','from-to','marker','predecessor','selection'])test(`update-current-recovery wrong ${wrong} never invokes current-save authority`,async()=>{
  const f=await interrupted();let p={...f.p};if(wrong==='update')p.kind='update';if(wrong==='restore'){p.phase='recovering';p.recovery={kind:'restore'};}if(wrong==='from-to')p.from=select(f.a);

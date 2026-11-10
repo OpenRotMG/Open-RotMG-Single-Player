@@ -53,10 +53,13 @@ async function journey(){
   check('ZIP extracts into one OpenRotMG Singleplayer folder containing the launcher, README.txt, empty player data and server data; its signed runtime baseline matches the delivery archive and pins',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
+  if(manifest.save.write===23)check('The exported fixture includes collection_sources, which the old bundled server rejected',Object.hasOwn(JSON.parse(await readFile(portable,'utf8')),'collection_sources'));
   const secret=randomBytes(24).toString('base64url');let userData;
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
-   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:"module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});"}));
+   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:`module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});
+    const appUpdates=require(process.resourcesPath+'/app.asar/dist/launcher-updates.js'),Original=appUpdates.LauncherUpdates;
+    appUpdates.LauncherUpdates=class extends Original{constructor(version,target){const parts=version.split('.').map(Number);parts[2]++;const next=parts.join('.'),repository='OpenRotMG/Open-RotMG-Single-Player';super(version,target,async()=>new Response(JSON.stringify([{id:123,tag_name:'v'+next,url:'https://api.github.com/repos/'+repository+'/releases/123',draft:false,prerelease:false,body:'LAUNCHER_VERSION='+next,assets:[{name:'openrotmg-singleplayer-'+next+'-'+target+'.zip',size:1,browser_download_url:'https://github.com/'+repository+'/releases/download/v'+next+'/openrotmg-singleplayer-'+next+'-'+target+'.zip'}]}])));}};`}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.evaluate(()=>window.launcher.updates())).phase==='service','controlled update service refusal');
    userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,profile);report.userData=userData;
    assert.equal(await app.evaluate(()=>process.resourcesPath),resources);assert.equal(await app.evaluate(()=>process.execPath),executable);
@@ -86,7 +89,14 @@ async function journey(){
   check('Detailed log path lives only on the Server logs page',await page.locator('#logs-page').isVisible()&&await page.locator('#diagnostics').innerText()==='Detailed logs: '+join(profile,'diagnostics'));
   await page.screenshot({path:join(out,'launcher-logs.png')});
   await page.locator('#show-settings').click();
-  check('Settings shows numbered source commits instead of full hashes',/Server commit #2542 · Client commit #88/.test(await page.locator('#update-installed').innerText()));
+  check('Settings shows numbered source commits instead of full hashes',/Server commit #\d+ · Client commit #\d+/.test(await page.locator('#update-installed').innerText()));
+  await page.locator('#check-launcher').click();await wait(async()=>(await page.locator('#download-launcher').isVisible()),'separate launcher update availability');
+  check('Launcher update availability and manual replacement steps do not claim the server/client update succeeded',await page.locator('#launcher-update-steps').isVisible()&&/HTTP 503/.test(await page.locator('#update-message').innerText()));
+  await app.evaluate(({shell})=>{globalThis.savedOpenExternal=shell.openExternal;shell.openExternal=async url=>{globalThis.launcherDownloadURL=url;};});
+  await page.locator('#download-launcher').click();await wait(async()=>!!await app.evaluate(()=>globalThis.launcherDownloadURL),'named launcher download');
+  assert.match(await app.evaluate(()=>globalThis.launcherDownloadURL),/^https:\/\/github.com\/OpenRotMG\/Open-RotMG-Single-Player\/releases\/download\/v[0-9.]+\/openrotmg-singleplayer-[0-9.]+-(linux-x64|win32-x64|darwin-arm64)\.zip$/);
+  await app.evaluate(({shell})=>{shell.openExternal=globalThis.savedOpenExternal;});
+  check('Launcher update invokes only the exact official platform ZIP URL; export is explicitly labeled',await page.locator('#help').innerText()==='Export live account');
   await page.screenshot({path:join(out,'launcher-settings.png')});
   await choose(portable);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});const login=await page.locator('#local-login').inputValue();await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');
   let view=await start();

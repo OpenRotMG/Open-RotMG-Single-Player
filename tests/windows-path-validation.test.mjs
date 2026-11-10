@@ -55,11 +55,11 @@ test('windows-path-validation rejects wrong actual Windows image or PID generati
   assert.throws(()=>assertWindowsPackagedProcess(identity,{...expected,health:{...expected.health,revision:serverCommit}}),/launcher build generation/);
   for(const change of [{executable:'D:\\other\\openrotmg.exe'},{executable:binary+'.other.exe'},{executable:null},{pid:456},{started:'2026-11-02T14:59:59Z'},{started:'2026-11-02T15:00:03Z'},{started:'invalid'}])assert.throws(()=>assertWindowsPackagedProcess({...identity,...change},expected));
 });
-test('Phase5 paired runtime pins are exact and cannot inherit historical Windows qualification',async()=>{
+test('Current paired runtime pins are exact and cannot inherit historical Windows qualification',async()=>{
   const pins=JSON.parse(await readFile('source-pins.json','utf8'));
   assert.deepEqual(pins,{
-    server:{repository:'https://github.com/dginovker/Open-RotMG-Server',commit:'2c700135d755a4210c2204334aafee2572205ec1',dataSha256:'1d760c221a69e3f4e55dd8d32fa2698a9df04ec1f02d9095356897ae13aba1b4',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
-    client:{repository:'https://github.com/dginovker/Open-RotMG-Client',commit:'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e',preparedSha256:'486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
+    server:{repository:'https://github.com/OpenRotMG/Open-RotMG-Server',commit:'cbb6ebdd8959f4a3cdffae1fcfe921620f38543b',dataSha256:'e977c963746e287e861b36a060b2deab60f908113c1f950029c5a356940f9de9',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server'},
+    client:{repository:'https://github.com/dginovker/Open-RotMG-Client',commit:'a8fb8fa31335d0ad3e69c85c63f0094deceecca6',preparedSha256:'486c0bb640d3d398a443b598661dc1e5ad6ffe630159b8587258dee1aa6bbb71',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client'},
     ruffle:{version:'0.7.1-openrotmg.16',sourceCommit:'89a7049965f3090e706265670df309a5128233ac',bundleSha256:'579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435'},
   });
   assert.throws(()=>assertWindowsPackagedBuild({pins,receiptBytes:Buffer.from('{}')}),/Reviewed Windows source/);
