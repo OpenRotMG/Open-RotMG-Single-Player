@@ -11,13 +11,17 @@ Select a dispatch ref matching `installer_sha` (full reviewed Git SHA), and supp
 - `player data`: empty. Becomes the Electron userData: saves, backups, diagnostics and downloaded runtime generations. Moving it to a fresh extraction keeps everything.
 - `server data`: the Forge package (Electron, `resources/app.asar`, bundled runtime, licenses).
 
-The packaged app refuses to start without `--user-data-dir`, so opening the inner executable cannot silently use an OS profile. Targets: Ubuntu 22.04 x64, Windows x64 and Apple Silicon macOS. The macOS launcher is a plain binary, so Finder runs it in Terminal. Plain binaries avoid App Translocation, which would hide the sibling folders from an app bundle opened from a quarantined extraction.
+The packaged app refuses to start without `--user-data-dir`, so opening the inner executable cannot silently use an OS profile. Targets: Ubuntu 22.04 x64, Windows x64 and Apple Silicon macOS. The selected macOS launcher is a plain binary run in Terminal; downloaded quarantine behavior is not qualified.
 
 **Binaries are unsigned.** No Authenticode signing, notarization or quarantine removal is performed. Runtime manifest authentication is not an OS signature.
 
 Each Actions artifact contains the ZIP, `SHA256SUMS`, launcher corresponding source, exact pinned server/client source archives, licenses/notices, signed runtime metadata/signature, and `installer-receipt.json`. The existing game-art/audio/SWF rights caveat in `NOTICES.md` remains.
 
-The launcher uses the website's colors and typography, with separate Home, Settings and Server logs pages. Commit numbers are GitHub's reachable commit counts at each pinned SHA (server #2542, client #88); the renderer keeps these labels offline. Add a verified count when shipping a new source revision. An unknown revision is explicitly labeled unnumbered, never assigned a guessed version. Cryptographic checks still use the full signed hashes.
+Settings has independent **Server + client** and **Launcher** checks. Runtime checks use `releases/latest` and signed paired manifests, not moving source main. Launcher checks scan releases marked `LAUNCHER_VERSION=X.Y.Z` and offer the exact platform ZIP with manual replacement steps. The historical v0.1.0 package is explicitly recognized.
+
+Bump `package.json`/lock for each launcher release; create a new matching `vX.Y.Z` release, never replace a published version's ZIPs. Put `LAUNCHER_VERSION=X.Y.Z` on its own release-body line. A launcher-only release must use GitHub `make_latest:false` so old runtime-only checkers still resolve the latest signed runtime. A combined runtime/launcher release has both markers and all native-qualified signed runtime assets; only that release may become latest. Source changes alone are not published game updates.
+
+Commit labels are verified reachable counts at pinned SHAs, retained offline; add a count when updating source pins. They are display labels, not identities. Signatures and checks always use full hashes. Schema23 runtimes declare exact reads `[21,22,23]`, write23 and minimum launcher0.1.1. Native acknowledgements must match the selected runtime's authenticated capability notice; older signed schema22 runtimes remain supported.
 
 The browser game page is served on loopback port 47832 by the launcher. It supplies only presentation, forwarding the selected runtime's namespaced assets, ordinary account API and WebSocket to the existing server. Host and Origin must match the local game page; the upstream Origin stays the server's configured loopback origin. Runtime files, signatures, cache headers, save authority and server port 47831 are unchanged. Closing the launcher first drains the server, then closes the local game page listener. Port conflicts fail rather than selecting a hidden alternative.
 

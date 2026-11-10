@@ -94,7 +94,7 @@ test('save restore cancel has no pre-backup; confirmation uses staged full snaps
 });
 test('save missing/malformed/oversize input and unwritable backups do not report success',posix,async()=>{
  const f=await fixture();f.choose(join(f.root,'missing'));await assert.rejects(f.saves.beginImport(),/ENOENT/);
- f.choose(f.source);await f.control({fail:true});await assert.rejects(f.saves.beginImport(),/specific authority validation failure/);
+ f.choose(f.source);await f.control({fail:true});await assert.rejects(f.saves.beginImport(),error=>/local save was not changed/.test(error.message)&&/specific authority validation failure/.test(error.cause.cause.message));
  await f.control({});await writeFile(f.source,Buffer.alloc(32*1024*1024+1));await assert.rejects(f.saves.beginImport(),/exceeds/);
  await chmod(f.user,0o500);try{await assert.rejects(f.saves.makeBackup(),/EACCES/);}finally{await chmod(f.user,0o700);}
  assert.equal(f.runtime.view().status,'stopped');assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
@@ -124,7 +124,7 @@ test('save Close during authority preview does not deadlock on a later confirmat
 test('save staging cleanup preserves primary validation error and secondary cleanup failure',posix,async t=>{
  const f=await fixture();await f.control({fail:true});const original=fs.rm;
  t.mock.method(fs,'rm',async(path,...args)=>{if(String(path).includes('selected-'))throw new Error('injected cleanup denied');return original(path,...args);});
- await assert.rejects(f.saves.beginImport(),error=>/specific authority validation failure/.test(error.message)&&/cleanup failed.*injected cleanup denied/.test(error.message));
+ await assert.rejects(f.saves.beginImport(),error=>/specific authority validation failure/.test(error.cause.cause.cause.message)&&/cleanup failed.*injected cleanup denied/.test(error.message));
 });
 test('save Close refuses accurately when an owned operation fails instead of swallowing its error',posix,async()=>{
  const f=await fixture();let release;f.dialogs.choose=()=>new Promise(ok=>release=ok);

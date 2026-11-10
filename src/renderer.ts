@@ -1,9 +1,11 @@
 import type { View } from './runtime';
 import type { ImportPreview, SaveResult } from './saves';
 import type { UpdateView, RuntimeSummary } from './updates';
+import type { LauncherUpdateView } from './launcher-updates';
 declare global {
   interface Window { launcher: {
     status(): Promise<View>; start(): Promise<void>; startInstalled():Promise<void>; stop(): Promise<void>; client(): Promise<void>; help(): Promise<void>;
+    launcherUpdates():Promise<LauncherUpdateView>;checkLauncher():Promise<LauncherUpdateView>;downloadLauncher():Promise<void>;
     updates():Promise<UpdateView>;checkUpdates():Promise<UpdateView>;retryUpdate():Promise<UpdateView>;recoverRuntime():Promise<UpdateView>;releases():Promise<void>;updatesChanged(callback:(view:UpdateView)=>void):void;
     importPlayer(): Promise<ImportPreview | undefined>; confirmImport(expected: string, password: string, confirmation: string, replace: boolean): Promise<SaveResult | undefined>; cancelImport(): Promise<boolean>;
     makeBackup(): Promise<SaveResult>; openBackupFolder(): Promise<SaveResult>; restoreBackup(): Promise<SaveResult | undefined>;
@@ -15,7 +17,7 @@ const start = element<HTMLButtonElement>('start'), stop = element<HTMLButtonElem
 const password = element<HTMLInputElement>('password'), confirmation = element<HTMLInputElement>('confirmation');
 let preview: ImportPreview | undefined;
 let submitting = false;
-let runtimeView:View|undefined, updateView:UpdateView|undefined;
+let runtimeView:View|undefined, updateView:UpdateView|undefined,launcherView:LauncherUpdateView|undefined;
 function clearPasswords() { password.value = ''; confirmation.value = ''; }
 function render(view: View) {
   runtimeView=view;
@@ -34,6 +36,7 @@ function render(view: View) {
   client.disabled = busy || view.status !== 'ready';
   for (const id of ['import', 'backup', 'folder', 'restore']) element<HTMLButtonElement>(id).disabled = busy || !['stopped', 'ready'].includes(view.status);
   updateButtons();
+  if(launcherView)renderLauncher(launcherView);
 }
 function updateButtons(){
   const v=runtimeView,u=updateView,busy=!v||!!v.operation||v.closing||['starting','stopping'].includes(v.status);
@@ -52,7 +55,7 @@ function updateButtons(){
   element<HTMLButtonElement>('runtime-releases').disabled=!!v?.closing;
 }
 // Counts are pinned to the same source commits as the shipped runtime, so they remain available offline.
-const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88};
+const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88,'cbb6ebdd8959f4a3cdffae1fcfe921620f38543b':2602,'a8fb8fa31335d0ad3e69c85c63f0094deceecca6':88};
 const commitNumber=(sha:string)=>Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
 function runtimeSummary(value:RuntimeSummary){return `${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server)} · Client ${commitNumber(value.client)}`;}
 function renderUpdates(view:UpdateView){
@@ -61,6 +64,15 @@ function renderUpdates(view:UpdateView){
   element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'';
   element('update-message').textContent=`${view.phase.toUpperCase()}: ${view.message}`;
   element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
+}
+function renderLauncher(view:LauncherUpdateView){
+  launcherView=view;element('launcher-version').textContent=`Installed: ${view.installed}`;
+  element('launcher-update-message').textContent=view.message;
+  element('launcher-update-message').className=view.phase==='error'?'error':'hint';
+  element<HTMLButtonElement>('check-launcher').disabled=view.phase==='checking'||!!runtimeView?.closing;
+  element<HTMLButtonElement>('download-launcher').hidden=view.phase!=='available';
+  element<HTMLButtonElement>('download-launcher').disabled=!!runtimeView?.closing;
+  element('launcher-update-steps').hidden=view.phase!=='available';
 }
 const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { element('error').textContent = String(error); }); };
 function result(value: SaveResult | undefined) {
@@ -122,6 +134,11 @@ element('play-installed').onclick=()=>invoke(()=>window.launcher.startInstalled(
 element('retry-update').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.retryUpdate()));
 element('recover-runtime').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.recoverRuntime()));
 element('runtime-releases').onclick=()=>invoke(()=>window.launcher.releases());
+element('check-launcher').onclick=()=>invoke(async()=>{
+  renderLauncher({installed:launcherView!.installed,phase:'checking',message:'Checking launcher releases…'});
+  renderLauncher(await window.launcher.checkLauncher());
+});
+element('download-launcher').onclick=()=>invoke(()=>window.launcher.downloadLauncher());
 window.launcher.changed(render);
 window.launcher.updatesChanged(renderUpdates);
-invoke(async () => {render(await window.launcher.status());renderUpdates(await window.launcher.updates());});
+invoke(async () => {render(await window.launcher.status());renderUpdates(await window.launcher.updates());renderLauncher(await window.launcher.launcherUpdates());});

@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {constants} from 'node:fs';
 import type {AuthorityCompletion,Runtime} from './runtime';
 import {AuthorityUnchangedError,saveAuthority,SaveAuthorityRuntime,snapshotPreview} from './saves';
-import {boundedFile,demand,digest,exact,hashFile,integer,UpdateProblem,verifyRuntime} from './update-format';
+import {boundedFile,demand,digest,exact,hashFile,integer,UpdateProblem,verifyRuntime,runtimeSaveSchema} from './update-format';
 import {extractRuntime} from './update-archive';
 import {discover,downloadPayload} from './update-network';
 import {UpdatePolicy} from './update-policy';
@@ -87,7 +87,7 @@ export class RuntimeUpdates extends EventEmitter{
         const floor=Math.max(this.current.sequence,await this.store.authenticatedFloor(),...profile.attempts.map(a=>a.sequence));
         demand(m.sequence>=floor,'Authenticated release is older than installed/attempted runtime history; refusing rollback');
         const id=`release-${m.sequence}-${digest(discovered.bytes)}`;
-        if(m.sequence===this.current.sequence){demand(id===this.current.id,'Same positive runtime sequence has a different installed identity');this.staged=undefined;await this.recordRefusal();this.update('ready',`Installed ${this.current.version} matches the checked authenticated release.`);return this.view();}
+        if(m.sequence===this.current.sequence){demand(id===this.current.id,'Same positive runtime sequence has a different installed identity');this.staged=undefined;await this.recordRefusal();this.update('ready','Matches the published server + client release.');return this.view();}
         if(await exists(join(this.store.generations,id)))this.staged=await this.loadId(id);
         else{
           this.update('downloading',`Downloading and verifying paired runtime ${m.version}…`);stage=await this.store.stage();
@@ -192,7 +192,7 @@ export class RuntimeUpdates extends EventEmitter{
     this.runtime.selectResources(this.store.root(selected.id));
     if(selected.startupBackup===0){
       demand(!this.transaction&&selected.kind==='source','Legacy runtime is not an eligible protected update');
-      if(await exists(join(this.runtime.runtimePaths().state,'game.db'))){const metadata=snapshotPreview(await saveAuthority(this.authority(selected),'verify-snapshot',[join(this.runtime.runtimePaths().state,'game.db'),join(this.store.root(selected.id),'data')]));demand(metadata.schema===22,'Legacy source runtime cannot safely migrate this save; use a guarded-start capable runtime');}
+      if(await exists(join(this.runtime.runtimePaths().state,'game.db'))){const metadata=snapshotPreview(await saveAuthority(this.authority(selected),'verify-snapshot',[join(this.runtime.runtimePaths().state,'game.db'),join(this.store.root(selected.id),'data')]));demand(metadata.schema===await runtimeSaveSchema(this.store.root(selected.id)),'Legacy source runtime cannot safely migrate this save; use a guarded-start capable runtime');}
       return;
     }
     if(!this.transaction){const id=randomUUID();await mkdir(join(this.runtime.userData,'backups'),{recursive:true,mode:0o700});await this.writePending({format:1,id,kind:'start',phase:'selected',from:select(selected),to:select(selected),preBackup:null,noDatabase:!await exists(join(this.runtime.runtimePaths().state,'game.db')),migrationName:fileName('pre-start',id),pid:null,nativeAck:null,readiness:null,failureSha256:null,recovery:null});}
@@ -252,7 +252,7 @@ export class RuntimeUpdates extends EventEmitter{
     if(this.bookkeepingTask)await this.bookkeepingTask.catch(()=>undefined);
     if(this.serverActivity){const activity=await this.fence.activity();demand(activity&&activity.id===this.serverActivity.id&&(activity.proof as {pid?:number})?.pid===result.pid,'Stopped native PID differs from active fence');await this.fence.clean(activity,{...result,closed:true,selected:activity.selected});this.serverActivity=undefined;}
     if(this.transaction&&this.transaction.phase==='starting')this.update('recovery','Server closed cleanly before update readiness bookkeeping completed. Startup intent is retained; no update success is claimed.');
-    else if(!this.transaction)this.update(this.failure?.kind??'ready',`${this.failure?this.failure.message+'; ':''}Installed ${this.current!.version} retained. This owned server closed cleanly; earlier failure evidence, if any, remains unchanged.`);
+    else if(!this.transaction)this.update(this.failure?.kind??'ready',this.failure?this.failure.message:'Server stopped.');
   }
   async beforeSave(){
     await this.initialized();demand(this.current&&!this.transaction,'Save operations are blocked while guarded startup/update recovery is pending');await this.fence.requireClean(select(this.current));
@@ -410,7 +410,7 @@ export class RuntimeUpdates extends EventEmitter{
       demand(interrupted.kind==='start'&&interrupted.phase==='starting'&&interrupted.recovery===null&&interrupted.readiness===null&&old.kind==='server'&&old.pendingId===interrupted.id&&equal(old.from,select(selected))&&equal(interrupted.from,select(selected))&&equal(interrupted.to,select(selected))&&(interrupted.failureSha256===null||interrupted.failureSha256===markerSha),'Pending work is not the exact interrupted ordinary same-generation startup');
       demand(selected.startupBackup===1&&selected.clientNamespace===1,'Interrupted current-save recovery requires the exact authorized capable runtime');
     }else demand(!await exists(this.store.path('runtime-pending.json')),'Pending migration/recovery forbids current-save recovery');
-    if(!await this.confirm({kind:'verify-current',message:'Validate and back up the current local save?',detail:`The previous operation outcome remains UNKNOWN. This does not rerun it or restore ancient progress. The exact selected Rust authority must acquire StateLock and create and independently verify a fresh full snapshot.${interrupted?' The interrupted same-generation Start can only be settled if the current captured save is fully valid target schema22; this does NOT prove the old Start, migration or shutdown succeeded.':''}`})||this.runtime.view().closing)return;
+    if(!await this.confirm({kind:'verify-current',message:'Validate and back up the current local save?',detail:`The previous operation outcome remains UNKNOWN. This does not rerun it or restore ancient progress. The exact selected Rust authority must acquire StateLock and create and independently verify a fresh full snapshot.${interrupted?' The interrupted same-generation Start can only be settled if the current captured save is fully valid target schema; this does NOT prove the old Start, migration or shutdown succeeded.':''}`})||this.runtime.view().closing)return;
     demand(equal(await this.fence.pointer(),pointer)&&equal(selection(await record(this.store.path('runtime-selection.json'))),select(selected))&&await this.fence.markerSha256()===markerSha&&this.failureSerial===failureSerial,'Recovery authorization/selection/failure changed during confirmation');
     const oldBytes=await boundedFile(this.store.path('runtime-activity.json'));demand(equal(JSON.parse(oldBytes.toString('utf8')),old),'Unknown activity changed during recovery confirmation');
     const oldSha=await this.fence.rememberBytes(oldBytes);
@@ -420,7 +420,7 @@ export class RuntimeUpdates extends EventEmitter{
     const intent:Pending={format:1,id,kind:'start',phase:'recovering',from:select(selected),to:select(selected),preBackup:null,noDatabase:false,migrationName:name,pid:null,nativeAck:null,readiness:null,failureSha256:markerSha,recovery:{kind:'current',oldActivitySha256:oldSha,previousSha256:auth.sha256,repairActivityId:activityId,interruptedStartup}};await this.writePending(intent);
     await this.fence.active('authority',select(selected),id,auth,activityId);this.recoveryEpoch=failureSerial;
     let snapshot:{backup:Backup;ack:unknown};
-    try{snapshot=await this.snapshot(selected,name);if(interrupted)demand(snapshot.backup.metadata.schema===22,'Interrupted same-generation startup remains UNKNOWN: current snapshot is not fully verified target schema22');}
+    try{snapshot=await this.snapshot(selected,name);if(interrupted)demand(snapshot.backup.metadata.schema===await runtimeSaveSchema(this.store.root(selected.id)),'Interrupted same-generation startup remains UNKNOWN: current snapshot is not fully verified target schema');}
     catch(error){
       const completion=this.recoveryAuthority;
       if(error instanceof AuthorityUnchangedError&&completion?.command==='snapshot'&&completion.outcome==='unchanged'&&completion.code!==0&&await this.fence.markerSha256()===markerSha&&this.failureSerial===failureSerial){

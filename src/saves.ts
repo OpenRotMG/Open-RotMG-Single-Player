@@ -22,7 +22,7 @@ export function importPreview(value: unknown): ImportPreview {
 }
 export function snapshotPreview(value: unknown): SnapshotPreview {
   const p = value as SnapshotPreview;
-  if (!p || Object.keys(p).length !== 5 || p.verified !== true || ![21, 22].includes(p.schema) || p.scope !== 'all-local-accounts' || !count(p.account_count) || !count(p.character_count)) throw new Error('Invalid authority snapshot metadata; expected verified schema/scope/account/character counts');
+  if (!p || Object.keys(p).length !== 5 || p.verified !== true || ![21, 22, 23].includes(p.schema) || p.scope !== 'all-local-accounts' || !count(p.account_count) || !count(p.character_count)) throw new Error('Invalid authority snapshot metadata; expected verified schema/scope/account/character counts');
   return p;
 }
 export function checkedPassword(value: unknown, confirmation: unknown): string {
@@ -30,7 +30,7 @@ export function checkedPassword(value: unknown, confirmation: unknown): string {
   return value;
 }
 
-export class AuthorityUnchangedError extends Error { constructor(message:string) { super(message);this.name='AuthorityUnchangedError'; } }
+export class AuthorityUnchangedError extends Error { constructor(message:string,options?:ErrorOptions) { super(message,options);this.name='AuthorityUnchangedError'; } }
 
 /** Only server-owned named save commands are reachable here; paths never come from IPC. */
 export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'blockAmbiguousSave'|'authorityStarting'|'authorityClosed'>;
@@ -157,10 +157,10 @@ export class SaveControls {
       outcome = await action(join(directory, 'input'), modified);
       completed = true;
       return outcome;
-    } catch (error) { primary = new Error(`Selected save ${source}: ${String(error)}`); throw primary; }
+    } catch (error) { primary = new Error(`Selected save ${source}: ${String(error)}`,{cause:error}); throw primary; }
     finally {
       try { await rm(directory, {recursive: true}); }
-      catch (cleanup) { throw new Error(`${completed ? `Operation completed: ${JSON.stringify(outcome)}. ` : `Primary error: ${String(primary)}. `}Save staging cleanup failed at ${directory}: ${String(cleanup)}. Do not repeat a possibly completed operation without inspecting its outcome.`); }
+      catch (cleanup) { throw new Error(`${completed ? `Operation completed: ${JSON.stringify(outcome)}. ` : `Primary error: ${String(primary)}. `}Save staging cleanup failed at ${directory}: ${String(cleanup)}. Do not repeat a possibly completed operation without inspecting its outcome.`,{cause:primary}); }
     }
   }
   beginImport(): Promise<ImportPreview | undefined> {
@@ -171,7 +171,9 @@ export class SaveControls {
       if (!source) return undefined;
       return this.staged(source, 'account', async path => {
         const { state, data } = this.runtime.runtimePaths();
-        const metadata = importPreview(await saveAuthority(this.runtime, 'preview', [state, data, path]));
+        let metadata:ImportPreview;
+        try{metadata=importPreview(await saveAuthority(this.runtime, 'preview', [state, data, path]));}
+        catch(error){if(error instanceof AuthorityUnchangedError)throw new AuthorityUnchangedError('The installed server could not read this save. Check Server + client updates, then choose the file again. Your local save was not changed.',{cause:error});throw error;}
         if (this.runtime.view().closing) return undefined;
         const confirmation = new Promise<Confirmation | undefined>(accept => { this.pending = {preview: metadata, accept, outcome}; });
         deliver(metadata);

@@ -1,8 +1,8 @@
 {
   "name": "openrotmg-single-player",
   "productName": "Open RotMG Single Player",
-  "version": "0.1.0",
-  "description": "Offline Open RotMG desktop launcher — source preview",
+  "version": "0.1.1",
+  "description": "Offline Open RotMG desktop launcher",
   "private": true,
   "license": "AGPL-3.0-only",
   "author": "OpenRotMG contributors",

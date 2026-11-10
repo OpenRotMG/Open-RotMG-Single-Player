@@ -6,7 +6,8 @@ import { Runtime } from './runtime';
 import { SaveControls } from './saves';
 import { RuntimeUpdates } from './updates';
 import { createUpdatePolicy } from './update-policy';
-import { RELEASES_PAGE } from './update-format';
+import { LauncherUpdates } from './launcher-updates';
+import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
 
 app.setName('Open RotMG Single Player');
@@ -22,6 +23,7 @@ else {
   let runtime: Runtime;
   let saves: SaveControls;
   let updates: RuntimeUpdates;
+  let launcherUpdates: LauncherUpdates;
   let site: Awaited<ReturnType<typeof gameSite>>;
   const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
@@ -31,6 +33,7 @@ else {
     const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
     runtime = new Runtime(policy.baseline.root, userData);
     site = await gameSite(runtime);
+    launcherUpdates = new LauncherUpdates(app.getVersion(),targetName());
     window = new BrowserWindow({ width: 900, height: 700, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -65,6 +68,9 @@ else {
       if(!updates.view().canPlayInstalled)throw new Error('Explicit installed-version play requires a rejected/unavailable check, verified stopped selection and no pending ambiguity');
       return runtime.start(true);
     });
+    checked('launcher:status', () => launcherUpdates.view());
+    checked('launcher:check', () => launcherUpdates.check());
+    checked('launcher:download', () => shell.openExternal(launcherUpdates.download()));
     checked('update:status', () => updates.view());
     checked('update:check', () => updates.check());
     checked('update:retry', () => updates.retry());
@@ -91,6 +97,7 @@ else {
   async function close() {
     if (closing) return;
     closing = true;
+    launcherUpdates.abort();
     try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
     catch (error) {
       if (runtime.view().status !== 'failed') {

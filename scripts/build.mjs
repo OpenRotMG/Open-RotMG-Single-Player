@@ -2,7 +2,7 @@ import {cp,mkdir,mkdtemp,readFile,writeFile,rm,rename,stat} from 'node:fs/promis
 import {isAbsolute,join,resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import {assembleRuntime} from './runtime-payload.mjs';
-import {boundedFile,exact,hashFile,integer,targetName,verifyManifest,verifyRuntime} from '../dist/update-format.js';
+import {boundedFile,exact,hashFile,integer,targetName,verifyManifest,verifyRuntime,saveCompatibility} from '../dist/update-format.js';
 import {extractRuntime} from '../dist/update-archive.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 
@@ -26,8 +26,8 @@ if(input.runtimeRelease!==undefined){
  const pins=JSON.parse(await readFile('source-pins.json','utf8')),capabilities=JSON.parse(await readFile('runtime-capabilities.json','utf8'));
  exact(capabilities,Object.hasOwn(capabilities,'desktopMetadata')?'format,server,clientNamespace,save,desktopMetadata':'format,server,clientNamespace,save','explicit source runtime capabilities');
  if(Object.hasOwn(capabilities,'desktopMetadata'))assert([0,1].includes(capabilities.desktopMetadata),'Invalid bundled metadata declaration');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
- assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&JSON.stringify(capabilities.save.read)==='[21,22]'&&capabilities.save.write===22&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
- const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace,desktopMetadata:capabilities.desktopMetadata});
+ assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&saveCompatibility(capabilities.save)&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
+ const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace,desktopMetadata:capabilities.desktopMetadata,save:capabilities.save});
  baseline={format:1,mode:'source',identitySha256:prepared.identitySha256,startupBackup:prepared.startupBackup,clientNamespace:prepared.clientNamespace};
 }
 await writeFile('dist/runtime-baseline.json',JSON.stringify(baseline,null,2)+'\n');
