@@ -28,7 +28,7 @@ export class Runtime extends EventEmitter {
   private diskError?: Error;
   private lines: string[] = [];
   private status: Status = 'stopped';
-  private message = 'Server is stopped. Saves stay outside the installation.';
+  private message = 'Server is stopped.';
   private listenerSeen = false;
   private expectedStop = false;
   private closed?: Promise<{ code: number | null; signal: string | null }>;

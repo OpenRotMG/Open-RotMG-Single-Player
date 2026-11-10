@@ -20,13 +20,13 @@ function clearPasswords() { password.value = ''; confirmation.value = ''; }
 function render(view: View) {
   runtimeView=view;
   element('status').textContent = view.status.toUpperCase();
-  element('message').textContent = view.operation ? `${view.operation} — ${view.message}` : view.message;
+  element('message').textContent = view.operation ? `${view.operation}: ${view.message}` : view.status==='ready'?'Your server is ready.':view.message;
   element('diagnostics').textContent = `Detailed logs: ${view.diagnostics}`;
   element('logs').textContent = view.logs.join('\n');
   const link=element<HTMLAnchorElement>('client-url');
   link.hidden=view.status!=='ready'||!view.clientURL;
-  link.textContent=view.clientURL ?? '';
-  link.href=view.clientURL ?? '';
+  link.textContent=view.clientURL?new URL(view.clientURL).origin+'/':'';
+  link.href=link.textContent;
   const busy = !!view.operation || view.closing;
   if (view.closing || (submitting && !view.operation)) hidePreview();
   start.disabled = busy || view.status !== 'stopped';
@@ -59,7 +59,7 @@ function renderUpdates(view:UpdateView){
   updateView=view;
   element('update-installed').textContent=view.installed?`Installed: ${runtimeSummary(view.installed)}`:'Installed: checking…';
   element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'';
-  element('update-message').textContent=`${view.phase.toUpperCase()} — ${view.message}`;
+  element('update-message').textContent=`${view.phase.toUpperCase()}: ${view.message}`;
   element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
 }
 const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { element('error').textContent = String(error); }); };

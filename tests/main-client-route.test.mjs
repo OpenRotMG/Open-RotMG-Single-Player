@@ -37,7 +37,7 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     runInNewContext(await source('src/preload.ts'),{exports:{},require:id=>{assert.equal(id,'electron');return {ipcRenderer,contextBridge:{exposeInMainWorld:(key,value)=>{assert.equal(key,'launcher');launcher=value;}}};}});
     assert(Object.isFrozen(launcher));
     const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false});return elements.get(id);}};
-    runInNewContext(await source('src/renderer.ts'),{exports:{},window:{launcher,addEventListener(){}},document});
+    runInNewContext(await source('src/renderer.ts'),{exports:{},URL,window:{launcher,addEventListener(){}},document});
     await new Promise(ok=>setImmediate(ok));
     for(status of ['stopped','starting','stopping','failed','ready']){changed(view());assert.equal(elements.get('client').disabled,status!=='ready');}
     elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.match(elements.get('error').textContent,/actual shell rejection/);

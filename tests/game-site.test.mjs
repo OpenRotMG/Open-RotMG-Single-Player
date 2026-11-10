@@ -16,7 +16,7 @@ test('local game shell preserves runtime assets, API, WS and cache behavior behi
  try{
   site=await gameSite({origin,clientURL:()=>origin+namespace,view:()=>({status})},0);const url=site.url(),front=new URL(url).origin;
   assert.equal((await fetch(url)).status,503);status='ready';
-  const page=await fetch(url),html=await page.text();assert.equal(page.status,200);assert.match(html,/Singleplayer/);assert(!html.includes('Pixel editor'));assert.match(html,/src="launcher.js"/);assert.equal(page.headers.get('cache-control'),'no-store');assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);
+  const page=await fetch(url),html=await page.text();assert.equal(page.status,200);assert.match(html,/Singleplayer/);assert(!html.includes('Pixel editor'));assert.match(html,/src="launcher.js"/);assert.equal(page.headers.get('cache-control'),'no-store');assert.match(page.headers.get('content-security-policy'),/frame-ancestors 'none'/);assert.match(page.headers.get('content-security-policy'),/style-src 'self' 'unsafe-inline'/);
   assert.match(await(await fetch(front+'/singleplayer.css')).text(),/#cb8585|#c3c3b9/);
   assert.equal((await fetch(front+'/',{redirect:'manual'})).headers.get('location'),namespace);
   assert.equal((await fetch(url,{headers:{origin:'https://evil.invalid'}})).status,403);

@@ -90,7 +90,7 @@ async function journey(){
   await page.screenshot({path:join(out,'launcher-settings.png')});
   await choose(portable);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});const login=await page.locator('#local-login').inputValue();await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');
   let view=await start();
-  assert.equal(await page.locator('#client-url').getAttribute('href'),view.clientURL);
+  assert.equal(await page.locator('#client-url').getAttribute('href'),new URL(view.clientURL).origin+'/');
   await page.screenshot({path:join(out,'launcher-ready.png')});
   game=await nativeGame({out,origin:new URL(view.clientURL).origin,clientURL:view.clientURL,env,check,report,normalCache:true,credentials:{guid:login,password:secret}});await game.mutate();await stop();await game.close();
   check('Installed native game import, real progress transaction and durable Stop verified',true);
