@@ -109,7 +109,8 @@ export class SaveControls {
   readonly backups: string;
   private pending?: PendingImport;
   constructor(private runtime: Runtime, private dialogs: SaveDialogs) { this.backups = join(runtime.userData, 'backups'); }
-  private backupPath(reason: string) { return join(this.backups, `${new Date().toISOString().replaceAll(':', '-')}-${reason}-${randomUUID()}.sqlite`); }
+  // SQLite adds journal and native staging suffixes, so keep names compact inside the portable folder.
+  private backupPath(reason: string) { return join(this.backups, `${Date.now()}-${reason}-${randomUUID()}.sqlite`); }
   private async backupDirectory() { await mkdir(this.backups, { recursive: true, mode: 0o700 }); }
   private async snapshotWithoutWal(source: string) {
     // A live SQLite checkpoint can validate while silently omitting committed progress still in its WAL.

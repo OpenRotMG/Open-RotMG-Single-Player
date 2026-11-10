@@ -39,7 +39,7 @@ async function journey(){
   lease=await acquireQaPortLease();display=await updateTestDisplay(out);report.display=display.proof;
   const env=await consumerEnvironment(display.env,out),installation=join(out,'extracted Open RotMG é 日本');let paths,profile,resources,executable,runtime;
   const use=root=>{paths=installedPaths(root);({player:profile,resources,executable}=paths);runtime=join(resources,'runtime');};
-  report.installations=[await installArtifact(artifact,installation,out)];use(installation);
+  report.installations=[await installArtifact(artifact,installation,out)];use(report.installations[0].path);
   const launcherVersion=JSON.parse(await readFile('package.json','utf8')).version,binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
   const config=JSON.parse(extractFile(join(resources,'app.asar'),'dist/runtime-baseline.json').toString());assert.equal(config.mode,'release');
   const manifest=verifyManifest(Buffer.from(config.manifest,'base64'),Buffer.from(config.signature,'base64'),MANIFEST_PUBLIC_KEY,receipt.releaseId,receipt.tag,targetName(),launcherVersion,'https://github.com');
@@ -50,7 +50,7 @@ async function journey(){
    const proof=await assertWindowsInstallerWriteDenied(paths.server,runtime,out,phase);(report.windowsWriteProbes??=[]).push(proof);
   };
   restoreProtection=await protectInstallation(paths.server);await assertProtected('install');
-  check('Extracted ZIP has exactly the launcher, README.txt, empty player data and server data, and its signed runtime baseline matches the delivery archive and pins',true);
+  check('ZIP extracts into one OpenRotMG Singleplayer folder containing the launcher, README.txt, empty player data and server data; its signed runtime baseline matches the delivery archive and pins',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   const secret=randomBytes(24).toString('base64url');let userData;
@@ -67,7 +67,9 @@ async function journey(){
   };
   const choose=async(path,confirm)=>app.evaluate((_electron,{path,confirm})=>{const f=globalThis.runtimeUpdateTest;f.allowedFiles.push(path);f.choices.push(path);if(confirm!==undefined)f.confirms.push(confirm);},{path,confirm});
   const start=async()=>{
-   await page.locator('#play-installed').click();await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'actual installed child readiness',650000);
+   await page.locator('#show-settings').click();
+   await page.locator('#play-installed').click();
+   await page.locator('#show-home').click();await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'actual installed child readiness',650000);
    const view=await page.evaluate(()=>window.launcher.status()),health=await(await fetch(view.origin+'/health')).json();serverPid=view.pid;assert.equal(health.process,serverPid);
    const selection=JSON.parse(await readFile(join(profile,'runtime-selection.json'),'utf8')),selected=join(profile,'runtimes',selection.id,'runtime');await verifyRuntime(selected,targetName(),manifest);
    const image=process.platform==='linux'?await readlink(`/proc/${serverPid}/exe`):process.platform==='win32'?windowsProcessIdentity(serverPid).executable:execFileSync('ps',['-p',String(serverPid),'-o','comm='],{encoding:'utf8'}).trim();
@@ -77,23 +79,40 @@ async function journey(){
   };
   const stop=async()=>{const pid=serverPid;await page.locator('#stop').click();await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='stopped','durable Stop',650000);assert(!alive(pid));serverPid=undefined;const logs=(await readdir(join(profile,'diagnostics'))).sort();assert((await readFile(join(profile,'diagnostics',logs.at(-1)),'utf8')).includes('shutdown persistence complete'));};
   const close=async()=>{const pid=serverPid,main=app.process().pid,result=await app.close();assert.equal(result.code,0);assert(!alive(main));if(pid)assert(!alive(pid));app=undefined;serverPid=undefined;};
-  await launch();await choose(portable);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});const login=await page.locator('#local-login').inputValue();await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');
-  let view=await start();game=await nativeGame({out,origin:view.origin,env,check,report,normalCache:true,credentials:{guid:login,password:secret}});await game.mutate();await stop();await game.close();
+  await launch();
+  check('Home starts with settings and logs on separate pages and a top-right gear',await page.locator('#home-page').isVisible()&&await page.locator('#settings-page').isHidden()&&await page.locator('#logs-page').isHidden()&&await page.locator('#show-settings').getAttribute('aria-label')==='Settings');
+  await page.screenshot({path:join(out,'launcher-home.png')});
+  await page.locator('#show-logs').click();
+  check('Detailed log path lives only on the Server logs page',await page.locator('#logs-page').isVisible()&&await page.locator('#diagnostics').innerText()==='Detailed logs: '+join(profile,'diagnostics'));
+  await page.screenshot({path:join(out,'launcher-logs.png')});
+  await page.locator('#show-settings').click();
+  check('Settings shows numbered source commits instead of full hashes',/Server commit #2542 · Client commit #88/.test(await page.locator('#update-installed').innerText()));
+  await page.screenshot({path:join(out,'launcher-settings.png')});
+  await choose(portable);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});const login=await page.locator('#local-login').inputValue();await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');
+  let view=await start();
+  assert.equal(await page.locator('#client-url').getAttribute('href'),new URL(view.clientURL).origin+'/');
+  await page.screenshot({path:join(out,'launcher-ready.png')});
+  game=await nativeGame({out,origin:new URL(view.clientURL).origin,clientURL:view.clientURL,env,check,report,normalCache:true,credentials:{guid:login,password:secret}});await game.mutate();await stop();await game.close();
   check('Installed native game import, real progress transaction and durable Stop verified',true);
-  await page.locator('#backup').click();await wait(async()=>/Verified full local backup/.test(await page.locator('#save-result').innerText()),'full backup');
+  const saveResult=async(pattern,label)=>wait(async()=>{const error=await page.locator('#error').innerText();if(error)throw Error(`${label}: ${error}`);return pattern.test(await page.locator('#save-result').innerText());},label);
+  await page.locator('#show-settings').click();
+  await page.locator('#backup').click();await saveResult(/Verified full local backup/,'full backup');
   const backups=join(profile,'backups'),names=(await readdir(backups)).filter(n=>n.includes('-manual-')&&n.endsWith('.sqlite'));assert.equal(names.length,1);const backup=join(backups,names[0]);
   report.backup={path:backup,sha256:await hashFile(backup),bytes:(await stat(backup)).size};
-  await choose(backup,1);await page.locator('#restore').click();await wait(async()=>/Full local save restored/.test(await page.locator('#save-result').innerText()),'full restore');
+  await choose(backup,1);await page.locator('#restore').click();await saveResult(/Full local save restored/,'full restore');
   await close();await launch();await start();await game.verify(true);await close();await game.close();
   check('Full backup/restore, cold reopen and active-game Close preserve progress without orphan processes',true);
   const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;
   const replacement=join(out,'new copy Open RotMG é 日本');report.installations.push(await installArtifact(artifact,replacement,out));
-  await rmdir(join(replacement,'player data'));await rename(profile,join(replacement,'player data'));use(replacement);
+  const replacementRoot=report.installations.at(-1).path;
+  await rmdir(join(replacementRoot,'player data'));await rename(profile,join(replacementRoot,'player data'));use(replacementRoot);
   assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
   restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
   report.status='passed';
- }catch(error){if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
+ }catch(error){
+  if(page&&!page.isClosed())try{report.failureView=await page.evaluate(async()=>({runtime:await window.launcher.status(),updates:await window.launcher.updates(),error:document.getElementById('error').textContent}));await page.screenshot({path:join(out,'launcher-failure.png')});}catch(capture){report.errors.push('Failure capture: '+String(capture));}
+  if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
   for(const [name,cleanup] of [['browser',()=>game?.close()],['launcher',()=>app?.close()],['install protection',()=>restoreProtection?.()],['display',()=>display?.close()],['port lease',()=>lease?.release()]])try{await cleanup();}catch(error){report.errors.push(`${name}: ${error.stack??error}`);}
   if(serverPid&&alive(serverPid))report.errors.push(`Owned server ${serverPid} remains alive; NOT force-killed, no save success claimed`);
