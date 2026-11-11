@@ -11,15 +11,18 @@ import {runtimeFixture} from '../scripts/runtime-update-fixture.mjs';
 import {directory,unitRuntime,manifestFor} from './update-fixture.mjs';
 
 // Synthetic nonexecutable runtime bodies exercise coordinator/network/lifecycle hashing, not native gameplay or migrations.
-async function setup(t){
- const out=await directory('update-coordinator'),base=join(out,'baseline'),candidate=join(out,'candidate');await unitRuntime(base);await unitRuntime(candidate,{serverCommit:'8'.repeat(40),data:'different synthetic domain data'});
+async function setup(t,schema=22){
+ const out=await directory('update-coordinator'),base=join(out,'baseline'),candidate=join(out,'candidate');await unitRuntime(base);await unitRuntime(candidate,{serverCommit:'8'.repeat(40),data:'different synthetic domain data',schema});
  const archive=join(out,'candidate.tar.gz'),m=await manifestFor(candidate,archive),fixture=await runtimeFixture({out,runtime:candidate,archive,target:'linux-x64',archiveInfo:{target:'linux-x64',pins:m.pins,startupBackup:1,clientNamespace:1,payload:m.payload}});t.after(()=>fixture.close());
- const policy={...fixture.policy({root:base,mode:'source',startupBackup:1,clientNamespace:1,identitySha256:digest(await readFile(join(base,'build-identity.json')))}),launcher:'0.1.0'},runtime=new Runtime(base,join(out,'profile')),updates=new RuntimeUpdates(runtime,policy,async()=>false);return{out,base,candidate,fixture,policy,runtime,updates};
+ const policy={...fixture.policy({root:base,mode:'source',startupBackup:1,clientNamespace:1,identitySha256:digest(await readFile(join(base,'build-identity.json')))}),launcher:'0.1.1'},runtime=new Runtime(base,join(out,'profile')),updates=new RuntimeUpdates(runtime,policy,async()=>false);return{out,base,candidate,fixture,policy,runtime,updates};
 }
 async function wait(action){for(let n=0;n<200;n++){if(await action())return;await delay(10);}throw Error('Coordinator test condition did not settle');}
 test('update-coordinator coalesces automatic/manual requests and selects one verified pair without claiming native readiness',async t=>{
  const f=await setup(t);f.fixture.set('good');f.fixture.hold();const automatic=f.updates.startup(),manual=f.updates.check();assert.equal(automatic,manual);await wait(()=>f.fixture.held()===1);assert.equal(f.updates.check(),manual);f.fixture.release();await automatic;
  assert.equal(f.fixture.requests.filter(r=>r.path.endsWith('/latest')).length,1);assert.equal(f.fixture.requests.filter(r=>r.path.endsWith('.tar.gz')).length,1);assert.equal(f.fixture.errors.length,0);assert.equal(f.updates.view().phase,'staged');assert.equal(f.updates.view().installed.server,'1'.repeat(40));assert.equal(f.updates.view().available.server,'8'.repeat(40));assert.equal(f.runtime.view().pid,undefined);const pending=JSON.parse(await readFile(join(f.runtime.userData,'runtime-pending.json')));assert.equal(pending.phase,'selected');assert.equal(pending.pid,null);assert.equal(pending.readiness,null);assert.equal(pending.noDatabase,true);await f.runtime.close();
+});
+test('negative capability fixture cannot contaminate later valid checks or authenticated source counts',async t=>{
+ const f=await setup(t,23);f.fixture.set('legacy-capability');assert.equal(f.fixture.current().save.startupBackup,0);f.fixture.set('good');assert.equal(f.fixture.current().save.startupBackup,1);await f.updates.startup();assert.equal(f.updates.view().phase,'staged');assert.equal(f.updates.view().available.serverCount,10);assert.equal(f.updates.view().available.clientCount,20);await f.runtime.close();
 });
 test('update-coordinator discovers/stages during an existing lifecycle reservation, never drains it, and activates only on idle',async t=>{
  const f=await setup(t);await f.updates.startup();const original=await readFile(join(f.runtime.userData,'runtime-selection.json'));let release,entered;const inside=new Promise(ok=>entered=ok),hold=new Promise(ok=>release=ok),operation=f.runtime.idleOperation('Unit held lifecycle',async()=>{entered();await hold;});await inside;f.fixture.set('good');await f.updates.check();

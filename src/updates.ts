@@ -17,7 +17,7 @@ export type RuntimeSummary={version:string;sequence:number;server:string;client:
 export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean};
 export type UpdateConfirmation={kind:'restore-update'|'verify-current'|'retry-update';message:string;detail:string};
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
-const summary=(g:Generation):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,...(g.pins.server.commitCount!==undefined?{serverCount:g.pins.server.commitCount}:{}),...(g.pins.client.commitCount!==undefined?{clientCount:g.pins.client.commitCount}:{}),ruffle:g.pins.ruffle.version,kind:g.kind});
+const summary=(g:Pick<Generation,'version'|'sequence'|'pins'|'kind'>):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,...(g.pins.server.commitCount!==undefined?{serverCount:g.pins.server.commitCount}:{}),...(g.pins.client.commitCount!==undefined?{clientCount:g.pins.client.commitCount}:{}),ruffle:g.pins.ruffle.version,kind:g.kind});
 // Leave room for native acknowledgement staging suffixes under Windows' path limit in a portable extraction.
 const fileName=(reason:string,id=randomUUID())=>`${Date.now()}-${reason}-${id}.sqlite`;
 export class RuntimeUpdates extends EventEmitter{
@@ -82,7 +82,7 @@ export class RuntimeUpdates extends EventEmitter{
         }
         this.failure=undefined;this.update('checking','Checking the trusted release generation…');
         const discovered=await discover(this.policy,controller.signal,(bytes,signature,sequence)=>this.store.remember(bytes,signature,{sequence})),m=discovered.manifest;
-        this.available={version:m.version,sequence:m.sequence,server:m.pins.server.commit,client:m.pins.client.commit,ruffle:m.pins.ruffle.version,kind:'release'};
+        this.available=summary({version:m.version,sequence:m.sequence,pins:m.pins,kind:'release'});
         demand(this.current,'Installed runtime was not initialized');const profile=await this.store.profile();
         const floor=Math.max(this.current.sequence,await this.store.authenticatedFloor(),...profile.attempts.map(a=>a.sequence));
         demand(m.sequence>=floor,'Authenticated release is older than installed/attempted runtime history; refusing rollback');

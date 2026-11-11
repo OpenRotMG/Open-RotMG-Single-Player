@@ -67,7 +67,6 @@ jobs:
             .qa/runtime-updates/run-*/*.log
             .qa/runtime-updates/run-*/*.xml
             .qa/runtime-updates/run-*/paired-profile/*.json
-            .qa/runtime-updates/run-*/paired-profile/diagnostics/**
+            .qa/runtime-updates/run-*/**/diagnostics/**
             .qa/runtime-updates/run-*/migration-profile/*.json
-            .qa/runtime-updates/run-*/migration-profile/diagnostics/**
             .qa/runtime-updates/run-*/migration-profile/runtime-recovery-history/**
