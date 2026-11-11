@@ -51,12 +51,12 @@ export async function launchUpdateTest({executablePath,electronPath=executablePa
     globalThis.runtimeUpdateTest={beforeMain:true,pid:process.pid,allowedFiles:[],choices:[],confirms:[],external:[],dialogs:[]};
     const electron=require('electron'),originalOpen=electron.dialog.showOpenDialog,originalMessage=electron.dialog.showMessageBox;
     electron.dialog.showOpenDialog=async(window,options)=>{
-      if(!['Import player — choose exported account','Restore full local backup'].includes(options.title))return originalOpen(window,options);
+      if(!['Import player — choose exported account','Import player: choose your exported account file','Restore full local backup'].includes(options.title))return originalOpen(window,options);
       const state=globalThis.runtimeUpdateTest,chosen=state.choices.shift();if(chosen===undefined)throw Error('No declared chooser fixture');
       if(chosen===null)return{canceled:true,filePaths:[]};if(!state.allowedFiles.includes(chosen))throw Error('Undeclared chooser path');return{canceled:false,filePaths:[chosen]};
     };
     electron.dialog.showMessageBox=async(window,options)=>{
-      if(!['Local runtime recovery/update','Replace the full local save?'].includes(options.title))return originalMessage(window,options);
+      if(!['Local runtime recovery/update','Game update or save recovery','Replace the full local save?'].includes(options.title))return originalMessage(window,options);
       const state=globalThis.runtimeUpdateTest,response=state.confirms.shift();if(![0,1].includes(response))throw Error('No declared native confirmation');state.dialogs.push({title:options.title,message:options.message,detail:options.detail,response});return{response};
     };
     electron.dialog.showErrorBox=(title,detail)=>globalThis.runtimeUpdateTest.dialogs.push({kind:'error',title,detail});

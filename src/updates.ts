@@ -12,9 +12,10 @@ import {UpdatePolicy} from './update-policy';
 import {exists,generation,Generation,record,RuntimeStore,select,Selection,selection} from './update-store';
 import {Backup,backup,backupName,backupPath,NativeStartupAck,Pending,pending,readNativeAck,readPending,uuid} from './update-journal';
 import {Activity,Authorization,ReadyProof,Receipt,RecoveredRuntimeFence} from './update-recovery';
+import {UserMessage} from './user-message';
 
 export type RuntimeSummary={version:string;sequence:number;server:string;client:string;serverCount?:number;clientCount?:number;ruffle:string;kind:'source'|'release'};
-export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean};
+export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean;canManageSaves:boolean;needsStart:boolean};
 export type UpdateConfirmation={kind:'restore-update'|'verify-current'|'retry-update';message:string;detail:string};
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const summary=(g:Pick<Generation,'version'|'sequence'|'pins'|'kind'>):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,...(g.pins.server.commitCount!==undefined?{serverCount:g.pins.server.commitCount}:{}),...(g.pins.client.commitCount!==undefined?{clientCount:g.pins.client.commitCount}:{}),ruffle:g.pins.ruffle.version,kind:g.kind});
@@ -38,7 +39,7 @@ export class RuntimeUpdates extends EventEmitter{
   }
   prepareDiagnostics(){return this.store.container(this.runtime.diagnostics);}
   view():UpdateView{
-    return{phase:this.phase,message:this.message,installed:this.committed?summary(this.committed):undefined,available:this.available,canPlayInstalled:!!this.current&&this.runtime.isIdle()&&!this.transaction&&!!this.failure&&this.failure.kind!=='recovery',canRecover:this.phase==='recovery',canRetry:!!this.staged&&!this.transaction&&this.phase==='rejected'};
+    return{phase:this.phase,message:this.message,canManageSaves:!!this.current&&!this.transaction&&!['initializing','recovery'].includes(this.phase),needsStart:this.transaction?.phase==='selected'&&this.transaction.failureSha256===null,installed:this.committed?summary(this.committed):undefined,available:this.available,canPlayInstalled:!!this.current&&this.runtime.isIdle()&&!this.transaction&&!!this.failure&&this.failure.kind!=='recovery',canRecover:this.phase==='recovery',canRetry:!!this.staged&&!this.transaction&&this.phase==='rejected'};
   }
   private update(phase:UpdateView['phase'],message:string){this.phase=phase;this.message=message;this.emit('change',this.view());}
   private problem(error:unknown){
@@ -61,7 +62,7 @@ export class RuntimeUpdates extends EventEmitter{
     this.runtime.selectResources(this.store.root(value.selected.id));
     if(this.transaction&&this.transaction.phase!=='selected')throw new UpdateProblem('recovery','Interrupted startup/update is pending. No automatic migration replay, prior-runtime fallback or restore is permitted; use explicit recovery.');
     if(!this.transaction)await this.fence.requireClean(select(value.selected));
-    this.update('ready',`Installed ${value.selected.version}; an update check has not yet completed.`);
+    this.update('ready',`Game version ${value.selected.version} is installed. Updates have not been checked yet.`);
   }
   private async recordRefusal(error?:UpdateProblem){
     const path=this.store.path('runtime-check-refusal.json');
@@ -240,8 +241,8 @@ export class RuntimeUpdates extends EventEmitter{
   }
   exposedReady(){
     this.startingPending=undefined;
-    if(this.failure)this.update(this.failure.kind,`${this.failure.message}; playing verified installed ${this.current!.version}. No latest-version claim.`);
-    else this.update('ready',`Installed ${this.current!.version} is running; owned readiness verified${this.current!.startupBackup===1?' with fresh under-lock backup':' (legacy source runtime has no guarded-start capability)'}. Previous failure evidence, if any, remains retained.`);
+    if(this.failure)this.update(this.failure.kind,`Playing installed game version ${this.current!.version}. The update check did not finish successfully.`);
+    else this.update('ready',`Game version ${this.current!.version} is running.`);
   }
   async startFailed(error:unknown):Promise<boolean>{
     if(this.startingPending){if(!this.transaction)await this.writePending(this.startingPending);this.problem(new UpdateProblem('recovery',`Guarded startup was not completed: ${String(error)}. Preserve fresh startup backup/ack and use explicit recovery.`));return true;}
@@ -255,7 +256,10 @@ export class RuntimeUpdates extends EventEmitter{
     else if(!this.transaction)this.update(this.failure?.kind??'ready',this.failure?this.failure.message:'Server stopped.');
   }
   async beforeSave(){
-    await this.initialized();demand(this.current&&!this.transaction,'Save operations are blocked while guarded startup/update recovery is pending');await this.fence.requireClean(select(this.current));
+    await this.initialized();
+    if(!this.current)throw new UserMessage('The game is still loading. Please wait before importing or making backups.');
+    if(this.transaction)throw new UserMessage(this.view().needsStart?'Click Start Server to finish preparing the game before importing or making backups.':'Your save needs to be checked first. Open Settings and choose Review recovery.');
+    await this.fence.requireClean(select(this.current));
   }
   async authorityStarting(_command:string,binary:string){
     demand(this.runtime.view().operation||this.runtime.view().status==='starting','Save authority requires the existing Runtime reservation');
@@ -294,7 +298,7 @@ export class RuntimeUpdates extends EventEmitter{
   async retry():Promise<UpdateView>{
     return this.runtime.idleOperation('Explicitly retry quarantined runtime',async()=>{
       demand(this.staged&&!this.transaction,'No exact quarantined candidate is available');const g=await this.store.load(select(this.staged));
-      if(!await this.confirm({kind:'retry-update',message:`Retry the exact failed runtime ${g.version}?`,detail:'This is an explicit retry, not an automatic replay. A new independent pre-update backup and fresh under-lock startup backup are required. No running game will be stopped.'})||this.runtime.view().closing)return this.view();
+      if(!await this.confirm({kind:'retry-update',message:`Try installing game update ${g.version} again?`,detail:'The previous attempt failed. Your current save will be backed up before the update can finish. A running game will not be stopped.'})||this.runtime.view().closing)return this.view();
       this.failure=undefined;this.quarantined=false;await this.activateOwned(g,true);return this.view();
     });
   }
@@ -358,7 +362,7 @@ export class RuntimeUpdates extends EventEmitter{
     };
     let staged:{stage:string;path:string}|undefined,receipt:Receipt|undefined,receiptSha:string|undefined,actualRestore:unknown,primary:unknown,writeBoundary=false;
     try{
-      if(!await this.confirm({kind:'restore-update',message:'Restore the freshest protected startup backup?',detail:`${inputPath}\nNative acknowledgement schema ${ack.source_schema}; SHA256 ${ack.sha256}.\nRust must verify this full snapshot and exact prior runtime ${from.version} compatibility before mutation. All current progress/credentials will be replaced ONLY after an independent verified pre-restore snapshot. Original failure/activity/pending evidence stays retained.`})||this.runtime.view().closing){await unchangedAttempt('canceled-before-authority');return;}
+      if(!await this.confirm({kind:'restore-update',message:'Restore the backup from before the game failed to start?',detail:`This replaces all local progress and passwords with the backup below and returns the game to version ${from.version}. Any progress made after that backup will not be in the restored save. Your current save must be backed up first.\n\n${inputPath}`})||this.runtime.view().closing){await unchangedAttempt('canceled-before-authority');return;}
       await stillOwned();const input=await this.verifiedBackup(candidate,p.migrationName);demand(input.sha256===ack.sha256&&input.metadata.schema===ack.source_schema,'Fresh native recovery backup schema/digest changed');staged=await this.stageRecoveryInput(input);
       const compatible=snapshotPreview(await saveAuthority(this.authority(from),'verify-snapshot',[staged.path,join(this.store.root(from.id),'data')]));demand(compatible.schema===input.metadata.schema,'Prior runtime cannot read freshest startup backup');
       await stillOwned();demand(await hashFile(staged.path)===input.sha256,'Privately verified restore input changed before mutation');writeBoundary=true;await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,writeBoundary:true}});
@@ -368,7 +372,7 @@ export class RuntimeUpdates extends EventEmitter{
       receiptSha=await this.fence.remember(receipt);await this.fence.lineage(receiptSha);await this.writePending({...this.transaction!,recovery:{...this.transaction!.recovery,receiptSha256:receiptSha}});
     }catch(error){primary=error;if(!writeBoundary&&error instanceof AuthorityUnchangedError&&this.recoveryStarted===this.recoveryCompletions.length&&this.recoveryCompletions.every(c=>c.outcome==='unchanged'&&c.code>0))await unchangedAttempt('strict-unchanged-before-write');throw new UpdateProblem('recovery',`${actualRestore===undefined?'':`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; `}${String(error)}. No restore replay is permitted.`);}
     finally{if(staged)await this.store.cleanup(staged.stage,actualRestore===undefined?primary:`Restore actual close0/strict acknowledgement=${JSON.stringify(actualRestore)}; follow-up=${String(primary)}`);}
-    demand(receipt&&receiptSha,'Recovery has no complete verified restore proof');await this.finishRecovery(receipt,receiptSha,from,p.kind==='update'?candidate:undefined);this.update('ready',`Recovered ${from.version} from freshest verified native backup. Original failure/activity/intent retained; failed candidate requires explicit retry or a newer release.`);
+    demand(receipt&&receiptSha,'Recovery has no complete verified restore proof');await this.finishRecovery(receipt,receiptSha,from,p.kind==='update'?candidate:undefined);this.update('ready',`Game version ${from.version} and your earlier save have been restored from the backup. Your other backups have been kept.`);
   }
   private async finalizeRecordedRecovery(p:Pending){
     const sha=p.recovery?.receiptSha256;demand(typeof sha==='string','Recovery has no exact completion receipt');
@@ -381,9 +385,9 @@ export class RuntimeUpdates extends EventEmitter{
     if(activity?.receiptSha256===sha){demand(activity.kind==='recovery'&&['active','clean'].includes(activity.state)&&activity.id===r.fenceId&&equal(activity.selected,r.to)&&equal(activity.proof,{receipt:sha}),'Recorded recovery fence was replaced by later work');}
     else if(r.kind==='restore')demand(activity?.kind==='recovery'&&activity.state==='active'&&activity.id===r.fenceId&&activity.pendingId===p.id&&activity.receiptSha256===r.previousSha256&&equal(activity.selected,p.to)&&equal(activity.proof,{intent:r.proof.intentSha256})&&p.recovery?.intentSha256===r.proof.intentSha256,'Recorded restore lost its exact ACTIVE recovery intent');
     else demand(activity?.receiptSha256===r.previousSha256&&activity.kind==='authority'&&activity.state==='active'&&activity.id===r.fenceId&&activity.pendingId===p.id&&p.recovery?.repairActivityId===r.fenceId&&equal(activity.selected,r.to),'Current-save recovery repair activity changed');
-    if(!await this.confirm({kind:'verify-current',message:'Finalize the recorded completed recovery?',detail:'The exact Rust completion receipt is already durable. This only settles selection/authorization bookkeeping; it does NOT rerun restore or any unknown operation. Original failure and current/pre-restore backups remain retained.'})||this.runtime.view().closing)return;
+    if(!await this.confirm({kind:'verify-current',message:'Finish the completed save recovery?',detail:'Your save was already recovered. This finishes that step without restoring it again. Your backups will be kept.'})||this.runtime.view().closing)return;
     const selected=await this.store.load(r.to);await this.finishRecovery(r,sha,selected,r.kind==='restore'&&p.kind==='update'?await this.store.load(p.to):undefined);
-    this.update('ready','Recorded recovery finalized without replay. Previous operation/failure evidence remains retained.');
+    this.update('ready','Save recovery is finished. Your save was not restored a second time. Your backups have been kept.');
   }
   private async finalizeRecordedReady(p:Pending){
     demand(p.readiness&&p.nativeAck&&p.failureSha256===null&&equal(selection(await record(this.store.path('runtime-selection.json'))),p.to),'Recorded ready startup has mismatched selection/proof');
@@ -391,14 +395,14 @@ export class RuntimeUpdates extends EventEmitter{
     const pointer=await this.fence.pointer(),auth=pointer?await this.fence.authorization():undefined,activity=await this.fence.activity();
     if(pointer)demand(auth&&activity&&activity.kind==='server'&&activity.state==='active'&&activity.pendingId===p.id&&equal(activity.selected,p.to),'Interrupted transition has no exact active recovery fence');
     else demand(!activity&&!await exists(this.store.path('shutdown-failed.json')),'Unrelated failure cannot be blessed by recorded readiness');
-    if(!await this.confirm({kind:'verify-current',message:'Keep the exact runtime that already reached verified readiness?',detail:'Recorded native backup and owned readiness prove startup completed before interruption. No migration or restore will be repeated. Previous server shutdown outcome remains unknown; recovered profiles must next validate and back up current progress before play.'})||this.runtime.view().closing)return;
+    if(!await this.confirm({kind:'verify-current',message:'Keep the game version that finished starting?',detail:'The game finished starting before the interruption. This will keep that version without restoring an older save. Your current save must still be checked and backed up before you play.'})||this.runtime.view().closing)return;
     if(auth&&!equal(auth.receipt.to,p.to)){
       demand(equal(auth.receipt.to,p.from)&&activity?.receiptSha256===auth.sha256,'Transition predecessor differs from the recorded prior runtime');
       const r:Receipt={format:1,id:randomUUID(),kind:'transition',markerSha256:auth.receipt.markerSha256,previousSha256:auth.sha256,from:p.from,to:p.to,pendingId:p.id,fenceId:activity!.id,proof:{pending:p,nativeAck:p.nativeAck,readiness:p.readiness}};await this.fence.publish(r,'active',activity);
     }else if(auth&&!equal(p.from,p.to))demand(auth.receipt.kind==='transition'&&auth.receipt.pendingId===p.id,'Current transition receipt belongs to another startup');
     await this.archivePending(p);this.current=selected;this.committed=selected;this.runtime.selectResources(this.store.root(selected.id));this.initialization=Promise.resolve();
     if(auth){this.failure=new UpdateProblem('recovery','Recorded transition finalized; previous server lifetime remains unknown. Validate and back up current save explicitly; do not replay startup or restore ancient progress.');this.update('recovery',this.failure.message);}
-    else{this.failure=undefined;this.update('ready','Exact runtime readiness was recorded before interruption. Previous shutdown outcome remains unknown; next Start still requires a fresh under-lock backup.');}
+    else{this.failure=undefined;this.update('ready','The game finished starting before the interruption. We could not confirm it closed safely. Your save will be checked and backed up the next time you click Start Server.');}
   }
   private async verifyCurrent(interrupted?:Pending){
     const failureSerial=this.failureSerial,pointer=await this.fence.pointer(),old=await this.fence.activity();demand(pointer&&old&&old.state==='active'&&pointer.sha256===old.receiptSha256,'No recovered-profile unknown activity is eligible for current-save verification');
@@ -410,7 +414,7 @@ export class RuntimeUpdates extends EventEmitter{
       demand(interrupted.kind==='start'&&interrupted.phase==='starting'&&interrupted.recovery===null&&interrupted.readiness===null&&old.kind==='server'&&old.pendingId===interrupted.id&&equal(old.from,select(selected))&&equal(interrupted.from,select(selected))&&equal(interrupted.to,select(selected))&&(interrupted.failureSha256===null||interrupted.failureSha256===markerSha),'Pending work is not the exact interrupted ordinary same-generation startup');
       demand(selected.startupBackup===1&&selected.clientNamespace===1,'Interrupted current-save recovery requires the exact authorized capable runtime');
     }else demand(!await exists(this.store.path('runtime-pending.json')),'Pending migration/recovery forbids current-save recovery');
-    if(!await this.confirm({kind:'verify-current',message:'Validate and back up the current local save?',detail:`The previous operation outcome remains UNKNOWN. This does not rerun it or restore ancient progress. The exact selected Rust authority must acquire StateLock and create and independently verify a fresh full snapshot.${interrupted?' The interrupted same-generation Start can only be settled if the current captured save is fully valid target schema; this does NOT prove the old Start, migration or shutdown succeeded.':''}`})||this.runtime.view().closing)return;
+    if(!await this.confirm({kind:'verify-current',message:'Check your current save and make a backup?',detail:'The previous action did not finish normally, so we cannot confirm its result. This checks your current save and makes a new backup. It will not repeat that action or replace your progress with an older save.'})||this.runtime.view().closing)return;
     demand(equal(await this.fence.pointer(),pointer)&&equal(selection(await record(this.store.path('runtime-selection.json'))),select(selected))&&await this.fence.markerSha256()===markerSha&&this.failureSerial===failureSerial,'Recovery authorization/selection/failure changed during confirmation');
     const oldBytes=await boundedFile(this.store.path('runtime-activity.json'));demand(equal(JSON.parse(oldBytes.toString('utf8')),old),'Unknown activity changed during recovery confirmation');
     const oldSha=await this.fence.rememberBytes(oldBytes);
@@ -433,7 +437,7 @@ export class RuntimeUpdates extends EventEmitter{
     const receipt:Receipt={format:1,id:randomUUID(),kind:'current',markerSha256:markerSha,previousSha256:auth.sha256,from:select(selected),to:select(selected),pendingId:id,fenceId:activityId,proof:{oldActivitySha256:oldSha,interruptedStartup,snapshot:snapshot.backup,snapshotAck:snapshot.ack,verification:{operation:'verify-snapshot',ack:snapshot.backup.metadata,sha256:snapshot.backup.sha256,close:{code:0,signal:null}},authority:select(selected),close:{code:0,signal:null}}};
     await this.runtime.verifyFailureGate();demand(await this.fence.markerSha256()===markerSha&&(await readPending(this.store)).failureSha256===markerSha,'Current-save validation was superseded by a new failure; no old authorization can mask it');
     const sha=await this.fence.remember(receipt);await this.fence.lineage(sha);await this.writePending({...intent,recovery:{...intent.recovery,receiptSha256:sha}});await this.finishRecovery(receipt,sha,selected);
-    this.update('ready','Current save verified and independently backed up. Previous operation/start/migration/shutdown outcome remains UNKNOWN; no replay or rollback occurred. All current progress, interrupted intent and original failure/predecessor evidence remain retained.');
+    this.update('ready','Your current save has been checked and backed up. The interrupted action was not repeated, and no older progress was restored.');
   }
   async verifyRecoveryComplete(sha:string){
     demand(!await exists(this.store.path('runtime-pending.json')),'Recovery bookkeeping remains pending');const selected=selection(await record(this.store.path('runtime-selection.json'))),auth=await this.fence.requireClean(selected);demand(auth?.sha256===sha,'Recovery acknowledgement does not match current marker/selection/fence');

@@ -72,6 +72,7 @@ export class Runtime extends EventEmitter {
     this.lines = this.lines.slice(-MAX_LOG);
     this.emit('change', this.view());
   }
+  reportProblem(error:unknown){console.error(error);this.line(error instanceof Error?error.stack??error.message:String(error));}
   private fail(error: unknown) {
     this.unsafe = true;
     this.line(String(error));

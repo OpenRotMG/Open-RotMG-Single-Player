@@ -18,13 +18,23 @@ const password = element<HTMLInputElement>('password'), confirmation = element<H
 let preview: ImportPreview | undefined;
 let submitting = false;
 let runtimeView:View|undefined, updateView:UpdateView|undefined,launcherView:LauncherUpdateView|undefined;
+let actionError='';
+const finishSetup='Click Start Server to finish preparing the game. Import and backups will be available when it finishes.';
+function renderDetails(){
+  element('logs').textContent=[runtimeView?.message,updateView?.message,launcherView?.message,...(runtimeView?.logs??[]),actionError].filter(Boolean).join('\n');
+}
+function renderMessage(){
+  const v=runtimeView;if(!v)return;
+  const messages:Record<View['status'],string>={stopped:'Server stopped.',starting:'Preparing the game and checking your save. Please wait…',ready:'Your server is ready.',stopping:'Saving your progress and stopping the server…',failed:'Your save needs to be checked. Open Settings and choose Review recovery.'};
+  element('message').textContent=v.closing?'Saving your progress and closing…':v.operation?'Please wait while the current action finishes.':updateView?.phase==='recovery'?'Your save needs to be checked. Open Settings and choose Review recovery.':v.status==='stopped'&&updateView?.needsStart?finishSetup:messages[v.status];
+}
 function clearPasswords() { password.value = ''; confirmation.value = ''; }
 function render(view: View) {
   runtimeView=view;
   element('status').textContent = view.status.toUpperCase();
-  element('message').textContent = view.operation ? `${view.operation}: ${view.message}` : view.status==='ready'?'Your server is ready.':view.message;
+  renderMessage();
   element('diagnostics').textContent = `Detailed logs: ${view.diagnostics}`;
-  element('logs').textContent = view.logs.join('\n');
+  renderDetails();
   const link=element<HTMLAnchorElement>('client-url');
   link.hidden=view.status!=='ready'||!view.clientURL;
   link.textContent=view.clientURL?new URL(view.clientURL).origin+'/':'';
@@ -42,8 +52,10 @@ function updateButtons(){
   const v=runtimeView,u=updateView,busy=!v||!!v.operation||v.closing||['starting','stopping'].includes(v.status);
   if(v){
     const recovery=u?.phase==='recovery'||u?.phase==='initializing';start.disabled=busy||v.status!=='stopped'||recovery;
-    for(const id of ['import','backup','folder','restore'])element<HTMLButtonElement>(id).disabled=busy||!['stopped','ready'].includes(v.status)||recovery;
+    for(const id of ['import','backup','folder','restore'])element<HTMLButtonElement>(id).disabled=busy||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
   }
+  element<HTMLButtonElement>('finish-update').hidden=!u?.needsStart;
+  element<HTMLButtonElement>('finish-update').disabled=busy||v?.status!=='stopped';
   element<HTMLButtonElement>('check-updates').disabled=busy||!u||['initializing','checking','downloading','activating'].includes(u.phase);
   element<HTMLButtonElement>('play-installed').hidden=!u?.canPlayInstalled;
   element<HTMLButtonElement>('play-installed').disabled=busy||v?.status!=='stopped';
@@ -62,19 +74,22 @@ function renderUpdates(view:UpdateView){
   updateView=view;
   element('update-installed').textContent=view.installed?`Installed: ${runtimeSummary(view.installed)}`:'Installed: checking…';
   element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'';
-  element('update-message').textContent=`${view.phase.toUpperCase()}: ${view.message}`;
+  const messages:Record<UpdateView['phase'],string>={initializing:'Preparing your game…',checking:'Checking for game updates…',downloading:'Downloading and checking the game update…',staged:'The update is downloaded. It will be installed after the current action finishes.',activating:'Backing up your save and preparing the game…',ready:view.message,unavailable:'Could not connect to check for game updates. You can choose Play installed version if it is available.',service:'Could not check for game updates. Try later, or choose Play installed version if it is available.',rejected:'This update could not be checked safely. You can choose Play installed version if it is available. Error details are in Server logs.',launcher:'This game update needs a newer launcher. Click Launcher downloads to get it.',recovery:'Your save needs to be checked before you continue. Click Review recovery. Keep your player data folder.',canceled:'Startup canceled. Click Start Server when you are ready.'};
+  element('update-message').textContent=view.needsStart?finishSetup:messages[view.phase];
+  renderMessage();renderDetails();
   element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
 }
 function renderLauncher(view:LauncherUpdateView){
   launcherView=view;element('launcher-version').textContent=`Installed: ${view.installed}`;
-  element('launcher-update-message').textContent=view.message;
+  element('launcher-update-message').textContent=view.phase==='error'?'Could not check for launcher updates. Check your internet connection and try again.':view.message;
+  renderDetails();
   element('launcher-update-message').className=view.phase==='error'?'error':'hint';
   element<HTMLButtonElement>('check-launcher').disabled=view.phase==='checking'||!!runtimeView?.closing;
   element<HTMLButtonElement>('download-launcher').hidden=view.phase!=='available';
   element<HTMLButtonElement>('download-launcher').disabled=!!runtimeView?.closing;
   element('launcher-update-steps').hidden=view.phase!=='available';
 }
-const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { element('error').textContent = String(error); }); };
+const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { actionError=String(error);renderDetails();element('error').textContent = error instanceof Error?error.message:String(error); }); };
 function result(value: SaveResult | undefined) {
   if (value) element('save-result').textContent = [value.message, value.disclosure, value.path].filter(Boolean).join('\n');
 }
@@ -88,6 +103,7 @@ element('show-settings').onclick=()=>showPage('settings');
 element('show-logs').onclick=()=>showPage('logs');
 element('client-url').onclick=event=>{event.preventDefault();invoke(()=>window.launcher.client());};
 start.onclick = () => invoke(() => window.launcher.start());
+element('finish-update').onclick=()=>{showPage('home');invoke(()=>window.launcher.start());};
 stop.onclick = () => invoke(() => window.launcher.stop());
 client.onclick = () => invoke(() => window.launcher.client());
 element('help').onclick = () => invoke(() => window.launcher.help());
@@ -96,7 +112,7 @@ element('import').onclick = () => invoke(async () => {
   const selected = await window.launcher.importPlayer();
   if (!selected) return;
   preview = selected; clearPasswords();
-  element('import-summary').textContent = `${selected.name} · exported ${new Date(selected.exported_at * 1000).toISOString()} · ${selected.character_count} owned characters (including dead/deleted)\n${selected.disclosure}`;
+  element('import-summary').textContent = `${selected.name} · exported ${new Date(selected.exported_at * 1000).toLocaleString()} · ${selected.character_count} characters (including past characters)\n${selected.disclosure}`;
   element<HTMLInputElement>('local-login').value = selected.login;
   element('replace-warning').hidden = !selected.replaced;
   element('import-confirm').textContent = selected.replaced ? 'Back up and replace this player' : 'Import player';
