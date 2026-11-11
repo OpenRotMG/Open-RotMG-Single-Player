@@ -51,7 +51,10 @@ jobs:
           node-version: 22.23.2
           cache: npm
       - if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb xauth dbus-x11 unzip zip
+        run: |
+          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth dbus-x11 unzip zip
       - name: Install locked launcher/maker tools and test without building any runtime
         run: npm ci && npm test
       - name: Consume only exact parent-promoted signed assets (read-only token)
