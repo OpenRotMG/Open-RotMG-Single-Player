@@ -11,6 +11,12 @@ export function observeRuntimeAssets({session,assets,errors,bodyTasks,origin}){
   }
   state.eventOrder.push({event,order:++order});return state;
  };
+ const body=(requestId,state)=>{
+  if(!state?.item||!state.finished||state.reading)return;state.reading=true;const item=state.item;
+  bodyTasks.push(session.send('Network.getResponseBody',{requestId}).then(value=>{
+   record(requestId,'bodyResolved');item.sha256=createHash('sha256').update(Buffer.from(value.body,value.base64Encoded?'base64':'utf8')).digest('hex');item.body='received';
+  },error=>{record(requestId,'bodyRejected');item.body='unavailable';errors.push('Observed asset body unavailable: '+String(error));}));
+ };
  session.on('Network.requestServedFromCache',event=>{
   const state=record(event.requestId,'requestServedFromCache');if(!state)return;state.servedFromCache=true;if(state.item)state.item.servedFromCache=true;
  });
@@ -21,12 +27,8 @@ export function observeRuntimeAssets({session,assets,errors,bodyTasks,origin}){
   const response=event.response,u=new URL(response.url);if(u.origin!==origin||u.pathname.startsWith('/legacy-api')||u.pathname==='/health'||!/\.(js|wasm|swf)$/.test(u.pathname))return;
   const state=record(event.requestId,'responseReceived');if(!state)return;
   state.item={requestId:event.requestId,url:u.href,status:response.status,fromDiskCache:!!response.fromDiskCache,servedFromCache:state.servedFromCache,wireStatus:state.wireStatus,hasExtraInfo:typeof event.hasExtraInfo==='boolean'?event.hasExtraInfo:null,extraInfo:state.wireStatus!==null?'received':event.hasExtraInfo===true?'pending':event.hasExtraInfo===false?'not-expected':'unknown',eventOrder:state.eventOrder,body:'pending',lastModified:response.headers['Last-Modified']??response.headers['last-modified']??null,fromServiceWorker:!!response.fromServiceWorker,cacheControl:response.headers['Cache-Control']??response.headers['cache-control']??null};
+  // Keep incomplete observations visible; only a received body hash qualifies the resource.
+  assets.push(state.item);body(event.requestId,state);
  });
- session.on('Network.loadingFinished',event=>{
-  const state=requests.get(event.requestId);if(!state?.item)return;record(event.requestId,'loadingFinished');const item=state.item;
-  // CDP cache/ExtraInfo events can outlive body retrieval; keep the same report reference for this bounded session.
-  bodyTasks.push(session.send('Network.getResponseBody',{requestId:event.requestId}).then(body=>{
-   record(event.requestId,'bodyResolved');item.sha256=createHash('sha256').update(Buffer.from(body.body,body.base64Encoded?'base64':'utf8')).digest('hex');item.body='received';assets.push(item);
-  },error=>{record(event.requestId,'bodyRejected');item.body='unavailable';errors.push('Observed asset body unavailable: '+String(error));}));
- });
+ session.on('Network.loadingFinished',event=>{const state=record(event.requestId,'loadingFinished');if(state){state.finished=true;body(event.requestId,state);}});
 }

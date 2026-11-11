@@ -8,6 +8,20 @@ import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
 import {openNativeEdge,openNativeOwnedEdge} from './native-edge.mjs';
 
+export function accountResponses(page,{origin,normalCache,onNavigation,onVerify,onCharacters,onError}){
+ let generation=0,expectedURL;const requests=new WeakMap(),paths=['/legacy-api/account/verify','/legacy-api/char/list'];
+ const relevant=url=>{const u=new URL(url);return u.origin===origin&&paths.includes(u.pathname);};
+ page.on('framenavigated',frame=>{if(frame!==page.mainFrame())return;generation++;if(frame.url()!==expectedURL){onError('Unplanned main-frame navigation during account verification');return;}expectedURL=undefined;onNavigation();});
+ // A previous document's response may arrive or lose its body after the next navigation commits.
+ page.on('request',request=>{if(relevant(request.url()))requests.set(request,generation);});
+ page.on('response',async response=>{
+  if(!relevant(response.url()))return;const receivedIn=requests.get(response.request());if(receivedIn===undefined){onError('Account response has no observed request generation');return;}
+  try{const error=await response.finished();if(receivedIn!==generation)return;if(error)onError(String(error));else if(new URL(response.url()).pathname.endsWith('/verify'))onVerify();else{const hasCharacter=normalCache?/<Char id="1">/.test(await response.text()):false;if(receivedIn===generation)onCharacters(hasCharacter);}}
+  catch(error){if(receivedIn===generation)onError(String(error));}
+ });
+ return{async navigate(url){assert.equal(expectedURL,undefined,'Native account navigation overlaps');expectedURL=new URL(url).href;try{await page.goto(url);assert.equal(expectedURL,undefined,'Owned client navigation did not commit');}finally{expectedURL=undefined;}}};
+}
+
 const fixtureCredentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
 export async function nativeGame({out,origin,env,check,report,ownedEdge,credentials = fixtureCredentials,normalCache = false,clientURL = origin,onPage}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
@@ -71,13 +85,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
     let verified=0,charLists=0,playGeneration=0,currentAccountHasFixtureCharacter=false;
-    const responseErrors=[];
-    page.on('response',response=>{
-      const path=new URL(response.url()).pathname;
-      if(!['/legacy-api/account/verify','/legacy-api/char/list'].includes(path))return;
-      const receivedIn=playGeneration;
-      void response.finished().then(async error=>{if(receivedIn!==playGeneration)return;if(error)responseErrors.push(String(error));else if(path.endsWith('/verify'))verified++;else{const hasCharacter=normalCache?/<Char id="1">/.test(await response.text()):false;if(receivedIn===playGeneration){currentAccountHasFixtureCharacter=hasCharacter;charLists++;}}}).catch(error=>{if(receivedIn===playGeneration)responseErrors.push(String(error));});
-    });
+    const responseErrors=[],accountEvidence=accountResponses(page,{origin,normalCache,onNavigation:()=>{playGeneration++;verified=0;charLists=0;frames=0;currentAccountHasFixtureCharacter=false;responseErrors.length=0;consoleLog.length=0;},onVerify:()=>verified++,onCharacters:hasCharacter=>{currentAccountHasFixtureCharacter=hasCharacter;charLists++;},onError:error=>responseErrors.push(error)});
     const settled=async(predicate,label)=>{const deadline=Date.now()+30000;while(!predicate()&&Date.now()<deadline)await delay(100);assert(predicate(),label);assert.deepEqual(responseErrors,[]);await delay(500);await page.evaluate(()=>new Promise(ok=>requestAnimationFrame(()=>requestAnimationFrame(ok))));};
     let frames=0;page.on('websocket',socket=>{const receivedIn=playGeneration;if(socket.url()===origin.replace('http:','ws:')+'/game')socket.on('framereceived',()=>{if(receivedIn===playGeneration)frames++;});});
     const close=async()=>{
@@ -92,10 +100,9 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       if(failures.length)throw new AggregateError(failures,failures.map(error=>String(error.stack??error)).join('\n'));
     };
     const play=async(name)=>{
-    playGeneration++;verified=0;charLists=0;frames=0;currentAccountHasFixtureCharacter=false;responseErrors.length=0;consoleLog.length=0;
     try {
       assert.equal(new URL(entryURL).origin,origin,'Native client entry must stay on the fixed owned loopback server');
-      await page.goto(entryURL);
+      await accountEvidence.navigate(entryURL);
       await page.waitForFunction(()=>document.querySelector('ruffle-player')?.ruffle().isPlaying===true,{},{timeout:60000});
       await delay(3000);
       await page.evaluate(()=>{const modal=document.querySelector('ruffle-player').shadowRoot.querySelector('#hardware-acceleration-modal');if(modal&&!modal.classList.contains('hidden'))modal.querySelector('.close-modal').click();});
@@ -127,6 +134,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
         return {webgl2:true,lost:gl.isContextLost(),renderer:gl.getParameter(gl.RENDERER),unmaskedRenderer:extension?gl.getParameter(extension.UNMASKED_RENDERER_WEBGL):null};
       });
       check(`${name}: live WebGL2 context is not lost`,graphics.webgl2&&!graphics.lost);
+      assert.deepEqual(responseErrors,[]);
       (report.nativeSessions??=[]).push({name,frames,verified,charLists,graphics,entryURL:page.url(),browserPid:report.browsers.at(-1).pid,normalCache});
       const shot=join(out,`${name}-native-game.png`);await page.screenshot({path:shot});report.screenshots.push(shot);
       return {page,rect,close};

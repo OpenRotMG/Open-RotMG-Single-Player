@@ -22,6 +22,12 @@ for(const timing of ['before response','after response','after loadingFinished',
  const names=item.eventOrder.map(e=>e.event),event=fact==='wire304'?'responseReceivedExtraInfo':'requestServedFromCache';assert.equal(names.filter(n=>n===event).length,1);if(timing==='after loadingFinished')assert(names.indexOf(event)>names.indexOf('loadingFinished'));if(timing==='after body resolution')assert(names.indexOf(event)>names.indexOf('bodyResolved'));assert.deepEqual(item.eventOrder.map(e=>e.order),item.eventOrder.map((_,i)=>i+1));
 });
 
+test('runtime-update-cache-observer joins completion arriving before response metadata without dropping the body',async()=>{
+ const f=fixture();f.finish();f.response();assert.equal(f.assets[0].body,'pending');await f.body();assert.equal(f.assets[0].body,'received');assert.equal(f.calls.length,1);assert.equal(f.assets[0].eventOrder[0].event,'loadingFinished');
+});
+test('runtime-update-cache-observer keeps pending resources visible until actual completion and bytes',async()=>{
+ const f=fixture();f.response();assert.equal(f.assets[0].body,'pending');assert.equal(f.assets[0].sha256,undefined);assert.deepEqual(f.calls,[]);f.finish();f.finish();await f.body();assert.equal(f.assets[0].body,'received');assert.equal(f.calls.length,1);
+});
 test('runtime-update-cache-observer preserves disk-cache and service-worker flags without fabricating wire status',async()=>{
  const f=fixture();f.response({fromDiskCache:true,fromServiceWorker:true});f.finish();await f.body();assert.equal(f.assets[0].fromDiskCache,true);assert.equal(f.assets[0].fromServiceWorker,true);assert.equal(f.assets[0].wireStatus,null);assert.equal(f.assets[0].servedFromCache,false);
 });
@@ -39,7 +45,7 @@ test('runtime-update-cache-observer follows the actual presentation origin, not 
  const f=fixture('http://127.0.0.1:47832');f.response({url:'http://127.0.0.1:47831/launcher.js'});f.finish();assert.deepEqual(f.calls,[]);f.response({url:'http://127.0.0.1:47832/launcher.js'});f.finish();await f.body();assert.equal(f.assets.length,1);assert.equal(f.assets[0].url,'http://127.0.0.1:47832/launcher.js');assert.deepEqual(f.errors,[]);
 });
 test('runtime-update-cache-observer keeps unavailable body an explicit failure, not a successful asset',async()=>{
- const f=fixture();f.response();f.finish();f.bodies.get('warm').reject(Error('body unavailable'));await Promise.all(f.bodyTasks);assert.deepEqual(f.assets,[]);assert.deepEqual(f.errors,['Observed asset body unavailable: Error: body unavailable']);
+ const f=fixture();f.response();f.finish();f.bodies.get('warm').reject(Error('body unavailable'));await Promise.all(f.bodyTasks);assert.equal(f.assets.length,1);assert.equal(f.assets[0].body,'unavailable');assert.equal(f.assets[0].sha256,undefined);assert.deepEqual(f.errors,['Observed asset body unavailable: Error: body unavailable']);
 });
 test('runtime-update-cache-observer ignores unrelated bodies and bounds retained requests with an explicit failure',()=>{
  const f=fixture();for(const url of ['http://example.invalid/launcher.js','http://127.0.0.1:47831/health','http://127.0.0.1:47831/legacy-api/char/list']){f.response({url});f.finish();}assert.deepEqual(f.calls,[]);
