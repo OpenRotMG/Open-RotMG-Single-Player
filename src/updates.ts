@@ -13,11 +13,11 @@ import {exists,generation,Generation,record,RuntimeStore,select,Selection,select
 import {Backup,backup,backupName,backupPath,NativeStartupAck,Pending,pending,readNativeAck,readPending,uuid} from './update-journal';
 import {Activity,Authorization,ReadyProof,Receipt,RecoveredRuntimeFence} from './update-recovery';
 
-export type RuntimeSummary={version:string;sequence:number;server:string;client:string;ruffle:string;kind:'source'|'release'};
+export type RuntimeSummary={version:string;sequence:number;server:string;client:string;serverCount?:number;clientCount?:number;ruffle:string;kind:'source'|'release'};
 export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean};
 export type UpdateConfirmation={kind:'restore-update'|'verify-current'|'retry-update';message:string;detail:string};
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
-const summary=(g:Generation):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,ruffle:g.pins.ruffle.version,kind:g.kind});
+const summary=(g:Generation):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,...(g.pins.server.commitCount!==undefined?{serverCount:g.pins.server.commitCount}:{}),...(g.pins.client.commitCount!==undefined?{clientCount:g.pins.client.commitCount}:{}),ruffle:g.pins.ruffle.version,kind:g.kind});
 // Leave room for native acknowledgement staging suffixes under Windows' path limit in a portable extraction.
 const fileName=(reason:string,id=randomUUID())=>`${Date.now()}-${reason}-${id}.sqlite`;
 export class RuntimeUpdates extends EventEmitter{

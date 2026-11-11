@@ -6,7 +6,7 @@ import {generateKeyPairSync,sign} from 'node:crypto';
 import {gzipSync} from 'node:zlib';
 import {Header} from 'tar';
 import assert from 'node:assert/strict';
-import {digest,hashFile,REPOSITORY,targetName,verifyCapabilities,verifyRuntime} from '../dist/update-format.js';
+import {digest,hashFile,REPOSITORY,targetName,verifyCapabilities,verifyRuntime,minimumRuntimeLauncher} from '../dist/update-format.js';
 import {archiveRuntime} from './runtime-payload.mjs';
 
 // These intentionally malicious bytes are only fixture inputs, never qualified upstream artifacts.
@@ -33,7 +33,7 @@ export async function runtimeFixture({out,runtime,archive,archiveInfo,target=tar
   let synthetic;
   if(mode==='wrong-digest')payload.sha256='0'.repeat(64);
   if(mode==='unsafe-path'||mode==='symlink'){synthetic=unsafeArchive(mode==='unsafe-path'?'path':'symlink');payload.bytes=synthetic.length;payload.sha256=digest(synthetic);payload.expandedBytes=14;}
-  const manifest={format:1,releaseId:10000+sequence,tag,version:`fixture-${identity.pins.server.commit.slice(0,12)}-${sequence}`,sequence,target,minLauncher:save.write===23?'0.1.1':'0.1.0',clientNamespace:1,save,pins:identity.pins,payload};
+  const manifest={format:1,releaseId:10000+sequence,tag,version:`fixture-${identity.pins.server.commit.slice(0,12)}-${sequence}`,sequence,target,minLauncher:minimumRuntimeLauncher(save,identity.pins),clientNamespace:1,save,pins:identity.pins,payload};
   if(mode==='future')manifest.format=2;if(mode==='wrong-target')manifest.target=target==='linux-x64'?'win32-x64':'linux-x64';if(mode==='minimum-launcher')manifest.minLauncher='999.0.0';if(mode==='future-key')manifest.keyId='untrusted-future-key';if(mode==='legacy-capability')manifest.save.startupBackup=0;
   let bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n');if(mode==='malformed')bytes=Buffer.from('{not valid JSON');if(mode==='invalid-utf8')bytes=Buffer.from([255]);
   const signature=mode==='signature'?Buffer.alloc(64):sign(null,bytes,mode==='wrong-key'?foreignKeys.privateKey:keys.privateKey);return{manifest,bytes,signature,synthetic};

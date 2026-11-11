@@ -12,8 +12,9 @@ export async function assembleRuntime(input,pins,destination,{startupBackup,clie
  assert(save&&save.cli===1&&saveCompatibility(save)&&save.startupBackup===startupBackup,'Explicit compatible save protocol/schema required');
  for(const key of ['serverSource','serverBinary','clientSource','preparedClient','serverBuildReceipt'])assert(isAbsolute(input[key]),`Absolute ${key} required`);
  assert(isAbsolute(destination)&&isAbsolute(noticesRoot),'Absolute producer output/notices roots required');
- for(const[path,expected]of[[input.serverSource,pins.server.commit],[input.clientSource,pins.client.commit]]){
-  const git=(...args)=>execFileSync('git',['-C',path,...args],{encoding:'utf8'}).trim();assert.equal(git('rev-parse','HEAD'),expected,'Source HEAD differs from frozen pin');assert.equal(git('status','--porcelain','--untracked-files=no'),'','Tracked source must be clean');
+ for(const[path,pin]of[[input.serverSource,pins.server],[input.clientSource,pins.client]]){
+  const git=(...args)=>execFileSync('git',['-C',path,...args],{encoding:'utf8'}).trim();assert.equal(git('rev-parse','HEAD'),pin.commit,'Source HEAD differs from frozen pin');assert.equal(git('status','--porcelain','--untracked-files=no'),'','Tracked source must be clean');
+  if(save.write===23||pin.commitCount!==undefined)assert.equal(Number(git('rev-list','--count',pin.commit)),pin.commitCount,'Source commit count differs from its full Git history');
  }
  assert.equal(input.platform,process.platform,'Build input must be native platform');assert.equal(input.arch,process.arch,'Build input must be native architecture');
  assert(/^[0-9a-f]{64}$/.test(input.serverBinarySha256),'Explicit binary SHA256 required');assert(!(await lstat(input.serverBinary)).isSymbolicLink(),'Binary must be regular, not symlink');assert.equal(sha256(await readFile(input.serverBinary)),input.serverBinarySha256,'Compiled binary identity mismatch');

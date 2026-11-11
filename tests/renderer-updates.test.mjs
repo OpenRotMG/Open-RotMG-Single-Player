@@ -20,6 +20,7 @@ test('renderer-updates shows exact installed/available pair and specific service
  f.update({phase:'service',message:'Runtime service HTTP 503; not offline',canPlayInstalled:true});assert.match(f.element('update-message').textContent,/HTTP 503/);assert.equal(f.element('play-installed').hidden,false);
  f.element('play-installed').onclick();await tick();assert.deepEqual(f.calls,[['installed']]);
  f.update({available:{...f.installed,kind:'release',sequence:2,version:'fixture-C',server:'c'.repeat(40),client:'d'.repeat(40)}});assert.match(f.element('update-available').textContent,/fixture-C/);assert.match(f.element('update-available').textContent,/Server commit number unavailable · Client commit number unavailable/);assert(!f.element('update-available').textContent.includes('c'.repeat(40)));
+ f.update({available:{...f.installed,kind:'release',sequence:3,version:'future',server:'e'.repeat(40),client:'f'.repeat(40),serverCount:3000,clientCount:90}});assert.match(f.element('update-available').textContent,/Server commit #3000 · Client commit #90/);
 });
 test('renderer-updates permits checks during play but disables conflicting lifecycle/recovery actions',async()=>{
  const f=await fixture();f.change({status:'ready',pid:123});assert.equal(f.element('check-updates').disabled,false);f.element('check-updates').onclick();await tick();assert.deepEqual(f.calls,[['check']]);

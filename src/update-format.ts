@@ -9,8 +9,8 @@ export const TARGETS = ['linux-x64', 'win32-x64', 'darwin-arm64'] as const;
 export type Target = typeof TARGETS[number];
 export const MAX_METADATA = 64 * 1024, MAX_PAYLOAD = 512 * 1024 * 1024, MAX_EXPANDED = 2 * 1024 * 1024 * 1024, MAX_FILES = 10_000;
 export type Pins = {
-  server: {repository: string; commit: string; dataSha256: string; upstream: string};
-  client: {repository: string; commit: string; preparedSha256: string; upstream: string};
+  server: {repository: string; commit: string; dataSha256: string; upstream: string; commitCount?:number};
+  client: {repository: string; commit: string; preparedSha256: string; upstream: string; commitCount?:number};
   ruffle: {version: string; sourceCommit: string; bundleSha256: string};
 };
 export type BuildIdentity = {pins: Pins; platform: string; arch: string; binarySha256: string; buildReceiptSha256: string; assetsSha256: string};
@@ -39,10 +39,11 @@ export function decodeJson(bytes: Uint8Array, maximum = MAX_METADATA): unknown {
 }
 export function validatePins(value: unknown): Pins {
   exact(value, 'server,client,ruffle', 'runtime pins');
-  exact(value.server, 'repository,commit,dataSha256,upstream', 'server pins');
-  exact(value.client, 'repository,commit,preparedSha256,upstream', 'client pins');
+  exact(value.server, value.server!==null&&typeof value.server==='object'&&Object.hasOwn(value.server,'commitCount')?'repository,commit,dataSha256,upstream,commitCount':'repository,commit,dataSha256,upstream', 'server pins');
+  exact(value.client, value.client!==null&&typeof value.client==='object'&&Object.hasOwn(value.client,'commitCount')?'repository,commit,preparedSha256,upstream,commitCount':'repository,commit,preparedSha256,upstream', 'client pins');
   exact(value.ruffle, 'version,sourceCommit,bundleSha256', 'Ruffle pins');
   const {server, client, ruffle} = value;
+  for(const pin of [server,client])if(Object.hasOwn(pin,'commitCount'))demand(integer(pin.commitCount,1),'Invalid source commit count');
   demand(['https://github.com/OpenRotMG/Open-RotMG-Server', 'https://github.com/dginovker/Open-RotMG-Server'].includes(String(server.repository)) && server.upstream === 'https://github.com/OpenRotMG/Open-RotMG-Server', 'Untrusted server source repository');
   demand(['https://github.com/OpenRotMG/Open-RotMG-Client','https://github.com/dginovker/Open-RotMG-Client'].includes(String(client.repository)) && client.upstream === 'https://github.com/OpenRotMG/Open-RotMG-Client', 'Untrusted client source repository');
   demand(hex(server.commit, 40) && hex(client.commit, 40) && hex(ruffle.sourceCommit, 40) && hex(server.dataSha256) && hex(client.preparedSha256) && hex(ruffle.bundleSha256) && label(ruffle.version), 'Invalid immutable component identities');
@@ -80,13 +81,14 @@ export function verifyManifest(bytes: Uint8Array, signature: Uint8Array, key: st
   demand(value.clientNamespace===1,'Unsupported generation-qualified client namespace capability');
   exact(value.save, 'cli,read,write,startupBackup', 'save compatibility');
   demand(value.save.cli === 1 && value.save.startupBackup === 1 && saveCompatibility(value.save), 'Unsupported runtime CLI/save compatibility');
-  validatePins(value.pins);
+  const pins=validatePins(value.pins);
+  if(value.save.write===23)demand(integer(pins.server.commitCount,1)&&integer(pins.client.commitCount,1),'Schema23 runtime must carry verified source commit counts');
   exact(value.payload, 'id,name,url,bytes,sha256,expandedBytes,assetsSha256,identitySha256,binarySha256', 'runtime payload');
   const p = value.payload;
   demand(integer(p.id, 1) && p.name === `runtime-${target}.tar.gz` && typeof p.url === 'string' && integer(p.bytes, 1, MAX_PAYLOAD) && integer(p.expandedBytes, 1, MAX_EXPANDED) && [p.sha256,p.assetsSha256,p.identitySha256,p.binarySha256].every(v => hex(v)), 'Invalid bounded payload identity');
   demand(p.url===`${assetOrigin}/${REPOSITORY}/releases/download/${value.tag}/${p.name}`,'Signed payload URL is not the fixed trusted repository/generation asset');
   launcherVersion(value.minLauncher);
-  demand(value.save.write!==23||versionAtLeast(String(value.minLauncher),'0.1.1'),'Schema23 requires minimum launcher 0.1.1');
+  const minimum=minimumRuntimeLauncher(value.save,pins);demand(versionAtLeast(String(value.minLauncher),minimum),`Runtime metadata requires minimum launcher ${minimum}`);
   if (!versionAtLeast(launcher, String(value.minLauncher))) throw new UpdateProblem('launcher', `Runtime requires launcher ${value.minLauncher}; install it manually from ${RELEASES_PAGE}`);
   return value as unknown as Manifest;
 }
@@ -128,6 +130,7 @@ export async function verifyBinary(path: string, target: Target) {
   } finally { await handle.close(); }
 }
 export function saveCompatibility(value:Record<string,unknown>){return (value.write===22&&JSON.stringify(value.read)==='[21,22]')||(value.write===23&&JSON.stringify(value.read)==='[21,22,23]');}
+export function minimumRuntimeLauncher(save:Record<string,unknown>,pins:Pins){demand(saveCompatibility(save),'Unsupported save compatibility');return save.write===23||pins.server.commitCount!==undefined||pins.client.commitCount!==undefined?'0.1.1':'0.1.0';}
 export async function runtimeSaveSchema(root:string):Promise<22|23>{
   const value=decodeJson(await boundedFile(join(root,'notices/runtime-capabilities.json'))) as {save:Record<string,unknown>};
   demand(value?.save&&saveCompatibility(value.save),'Runtime save schema is unsupported');return value.save.write as 22|23;

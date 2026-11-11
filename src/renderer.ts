@@ -54,10 +54,10 @@ function updateButtons(){
   element<HTMLButtonElement>('runtime-releases').hidden=u?.phase!=='launcher';
   element<HTMLButtonElement>('runtime-releases').disabled=!!v?.closing;
 }
-// Counts are pinned to the same source commits as the shipped runtime, so they remain available offline.
-const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88,'cbb6ebdd8959f4a3cdffae1fcfe921620f38543b':2602,'a8fb8fa31335d0ad3e69c85c63f0094deceecca6':88};
-const commitNumber=(sha:string)=>Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
-function runtimeSummary(value:RuntimeSummary){return `${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server)} · Client ${commitNumber(value.client)}`;}
+// The historical release omitted counts; retain its verified labels without an online lookup.
+const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88};
+const commitNumber=(sha:string,count?:number)=>count!==undefined?`commit #${count}`:Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
+function runtimeSummary(value:RuntimeSummary){return `${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server,value.serverCount)} · Client ${commitNumber(value.client,value.clientCount)}`;}
 function renderUpdates(view:UpdateView){
   updateView=view;
   element('update-installed').textContent=view.installed?`Installed: ${runtimeSummary(view.installed)}`:'Installed: checking…';

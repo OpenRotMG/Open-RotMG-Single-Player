@@ -4,13 +4,13 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile,readdir,lstat} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {extractRuntime} from '../dist/update-archive.js';
-import {digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities} from '../dist/update-format.js';
+import {digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities,minimumRuntimeLauncher} from '../dist/update-format.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 import {requireAvailableRuntimeSequence,requirePromotionSource,requireNativePromotionRun,requireUnsignedResume,requireFirstUnsignedResume,requireRuntimeDraftReservation,requireUnsignedRuntimeDraft,requireRuntimeAssetBytes,runtimeDraftBody} from './runtime-release-history.mjs';
 
 assert.equal(process.env.GITHUB_ACTIONS,'true','Promotion is restricted to the trusted-main hosted workflow');
 const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();assert.equal(process.env.GITHUB_REF,'refs/heads/main');assert.equal(process.env.GITHUB_SHA,head);assert.equal(execFileSync('git',['status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim(),'');
-const pins=JSON.parse(await readFile('source-pins.json')),launcher=JSON.parse(await readFile('package.json')).version,save=JSON.parse(await readFile('runtime-capabilities.json')).save;
+const pins=JSON.parse(await readFile('source-pins.json')),launcher=JSON.parse(await readFile('package.json')).version,save=JSON.parse(await readFile('runtime-capabilities.json')).save,minimum=minimumRuntimeLauncher(save,pins);
 const json=async path=>JSON.parse(await readFile(path,'utf8'));
 async function files(root){const result=[];async function walk(path){const info=await lstat(path);assert(!info.isSymbolicLink(),'Artifact links are not trusted');if(info.isDirectory())for(const name of await readdir(path))await walk(join(path,name));else{assert(info.isFile());result.push(path);assert(result.length<=10000);}}await walk(root);return result;}
 const api=(...args)=>execFileSync('gh',['api',...args],{maxBuffer:1024*1024});
@@ -57,7 +57,7 @@ if(mode==='validate'){
  assert.equal(extra.length,3,'sign VALIDATED_JSON OUTPUT RELEASE_JSON TAG SEQUENCE');const[releaseFile,tag,sequenceText]=extra,snapshot=await json(releaseFile),validated=await json(input),sequence=Number(sequenceText);assert(/^[1-9][0-9]*$/.test(sequenceText)&&Number.isSafeInteger(sequence));assert(/^v[0-9]+\.[0-9]+\.[0-9]+$/.test(tag));assert.equal(validated.tag,tag);assert.equal(validated.sequence,sequence);await requireValidatedController(validated);const release=await checkedDraft(validated,snapshot.id);assert.deepEqual(release.assets.map(a=>[a.id,a.name,a.size,a.digest]).sort(),snapshot.assets.map(a=>[a.id,a.name,a.size,a.digest]).sort(),'Unsigned archive checkpoint changed before signing');
  let key;try{key=createPrivateKey(process.env.RUNTIME_MANIFEST_SIGNING_KEY);assert.equal(key.asymmetricKeyType,'ed25519');assert.equal(createPublicKey(key).export({type:'spki',format:'pem'}),MANIFEST_PUBLIC_KEY);}catch{throw Error('Configured release signing key must be the matching Ed25519 private key');}delete process.env.RUNTIME_MANIFEST_SIGNING_KEY;
  for(const entry of validated.targets){assert.deepEqual(entry.pins,pins);assert.equal(await hashFile(entry.archive),entry.payload.sha256);const assets=release.assets.filter(asset=>asset.name===`runtime-${entry.target}.tar.gz`);assert.equal(assets.length,1);const asset=assets[0],url=`https://github.com/${REPOSITORY}/releases/download/${tag}/${asset.name}`;assert.equal(asset.size,entry.payload.bytes);assert(Number.isSafeInteger(asset.id)&&asset.id>0);
-  const manifest={format:1,releaseId:release.id,tag,version:tag.slice(1),sequence,target:entry.target,minLauncher:launcher,clientNamespace:1,save,pins,payload:{...entry.payload,id:asset.id,url}},bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n'),signature=sign(null,bytes,key);verifyManifest(bytes,signature,MANIFEST_PUBLIC_KEY,release.id,tag,entry.target,launcher,'https://github.com');await writeFile(join(output,`runtime-${entry.target}.json`),bytes,{flag:'wx'});await writeFile(join(output,`runtime-${entry.target}.json.sig`),signature,{flag:'wx'});
+  const manifest={format:1,releaseId:release.id,tag,version:tag.slice(1),sequence,target:entry.target,minLauncher:minimum,clientNamespace:1,save,pins,payload:{...entry.payload,id:asset.id,url}},bytes=Buffer.from(JSON.stringify(manifest,null,2)+'\n'),signature=sign(null,bytes,key);verifyManifest(bytes,signature,MANIFEST_PUBLIC_KEY,release.id,tag,entry.target,launcher,'https://github.com');await writeFile(join(output,`runtime-${entry.target}.json`),bytes,{flag:'wx'});await writeFile(join(output,`runtime-${entry.target}.json.sig`),signature,{flag:'wx'});
  }
  console.log('Signed exact validated payload metadata for the existing draft; no release was published');
 }

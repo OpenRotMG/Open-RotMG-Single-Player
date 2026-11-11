@@ -5,10 +5,10 @@ import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {observeRuntimeAssets} from '../scripts/runtime-update-cache-observer.mjs';
 
-function fixture(){
+function fixture(origin='http://127.0.0.1:47831'){
  const session=new EventEmitter(),assets=[],errors=[],bodyTasks=[],bodies=new Map(),calls=[];
  session.send=(method,{requestId})=>{calls.push({method,requestId});return new Promise((resolve,reject)=>bodies.set(requestId,{resolve,reject}));};
- observeRuntimeAssets({session,assets,errors,bodyTasks});
+ observeRuntimeAssets({session,assets,errors,bodyTasks,origin});
  const emit=(name,data={})=>session.emit('Network.'+name,{requestId:'warm',...data});
  const response=(fields={})=>emit('responseReceived',{hasExtraInfo:true,response:{url:'http://127.0.0.1:47831/launcher.js',status:200,headers:{'Last-Modified':'Thu, 05 Nov 2026 12:05:16 GMT'},...fields}});
  const finish=()=>emit('loadingFinished');
@@ -34,6 +34,9 @@ test('runtime-update-cache-observer never treats absent facts, empty/matching bo
  const driver=await readFile('scripts/runtime-updates-test.mjs','utf8'),expression="report.assets.some(r=>!r.url.includes('/_runtime/')&&(r.fromDiskCache||r.servedFromCache||r.wireStatus===304))";assert(driver.includes("check('Warm A resource cache was genuinely observed before C',"+expression+")"));const proof=new Function('report','return '+expression);
  assert.equal(proof({assets:[]}),false);for(const bytes of ['', 'old-A']){const f=fixture();f.response();f.finish();f.bodies.get('warm').resolve({body:bytes,base64Encoded:false});await Promise.all(f.bodyTasks);assert.equal(proof({assets:f.assets}),false);f.emit('responseReceivedExtraInfo',{statusCode:200});assert.equal(proof({assets:f.assets}),false);f.emit('responseReceivedExtraInfo',{statusCode:304});assert.equal(proof({assets:f.assets}),true);}
  assert.equal(proof({assets:[{url:'http://127.0.0.1:47831/_runtime/C/launcher.js',wireStatus:304}]}),false);
+});
+test('runtime-update-cache-observer follows the actual presentation origin, not a backend-only URL',async()=>{
+ const f=fixture('http://127.0.0.1:47832');f.response({url:'http://127.0.0.1:47831/launcher.js'});f.finish();assert.deepEqual(f.calls,[]);f.response({url:'http://127.0.0.1:47832/launcher.js'});f.finish();await f.body();assert.equal(f.assets.length,1);assert.equal(f.assets[0].url,'http://127.0.0.1:47832/launcher.js');assert.deepEqual(f.errors,[]);
 });
 test('runtime-update-cache-observer keeps unavailable body an explicit failure, not a successful asset',async()=>{
  const f=fixture();f.response();f.finish();f.bodies.get('warm').reject(Error('body unavailable'));await Promise.all(f.bodyTasks);assert.deepEqual(f.assets,[]);assert.deepEqual(f.errors,['Observed asset body unavailable: Error: body unavailable']);

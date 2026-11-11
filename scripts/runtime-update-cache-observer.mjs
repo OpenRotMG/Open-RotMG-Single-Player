@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 
-export function observeRuntimeAssets({session,assets,errors,bodyTasks}){
+export function observeRuntimeAssets({session,assets,errors,bodyTasks,origin}){
+ if(new URL(origin).origin!==origin)throw Error('Asset observer requires an explicit origin');
  const requests=new Map();let order=0,overflow=false;
  const record=(requestId,event)=>{
   let state=requests.get(requestId);
@@ -17,7 +18,7 @@ export function observeRuntimeAssets({session,assets,errors,bodyTasks}){
   const state=record(event.requestId,'responseReceivedExtraInfo');if(!state)return;state.wireStatus=event.statusCode;if(state.item){state.item.wireStatus=event.statusCode;state.item.extraInfo='received';}
  });
  session.on('Network.responseReceived',event=>{
-  const response=event.response,u=new URL(response.url);if(u.origin!=='http://127.0.0.1:47831'||u.pathname.startsWith('/legacy-api')||u.pathname==='/health'||!/\.(js|wasm|swf)$/.test(u.pathname))return;
+  const response=event.response,u=new URL(response.url);if(u.origin!==origin||u.pathname.startsWith('/legacy-api')||u.pathname==='/health'||!/\.(js|wasm|swf)$/.test(u.pathname))return;
   const state=record(event.requestId,'responseReceived');if(!state)return;
   state.item={requestId:event.requestId,url:u.href,status:response.status,fromDiskCache:!!response.fromDiskCache,servedFromCache:state.servedFromCache,wireStatus:state.wireStatus,hasExtraInfo:typeof event.hasExtraInfo==='boolean'?event.hasExtraInfo:null,extraInfo:state.wireStatus!==null?'received':event.hasExtraInfo===true?'pending':event.hasExtraInfo===false?'not-expected':'unknown',eventOrder:state.eventOrder,body:'pending',lastModified:response.headers['Last-Modified']??response.headers['last-modified']??null,fromServiceWorker:!!response.fromServiceWorker,cacheControl:response.headers['Cache-Control']??response.headers['cache-control']??null};
  });

@@ -18,6 +18,7 @@ export async function unitRuntime(root,{serverCommit='1'.repeat(40),clientCommit
  await write('client/vendor/unit.wasm',Buffer.from([0,97,115,109]));
  const header=Buffer.alloc(64);header.set([127,69,76,70,2,1]);header.writeUInt16LE(62,18);await write('openrotmg',header);
  const pins={server:{repository:'https://github.com/dginovker/Open-RotMG-Server',upstream:'https://github.com/OpenRotMG/Open-RotMG-Server',commit:serverCommit,dataSha256:(await tree(root,['data'])).sha256},client:{repository:'https://github.com/OpenRotMG/Open-RotMG-Client',upstream:'https://github.com/OpenRotMG/Open-RotMG-Client',commit:clientCommit,preparedSha256:(await tree(join(root,'client'),clientFiles)).sha256},ruffle:{version:'unit.1',sourceCommit:'3'.repeat(40),bundleSha256:'4'.repeat(64)}};
+ if(schema===23){pins.server.commitCount=10;pins.client.commitCount=20;}
  await write('REVISION',pins.server.commit+'\n');await write('notices/ruffle-lock.json',JSON.stringify(pins.ruffle));
  await write('notices/runtime-capabilities.json',JSON.stringify({format:1,server:pins.server.commit,clientNamespace:legacy?0:1,...(desktopMetadata===undefined?{}:{desktopMetadata}),save:{cli:1,read:schema===23?[21,22,23]:[21,22],write:schema,startupBackup:legacy?0:1}}));
  const inventory=await tree(root,['data','client','notices','openrotmg','REVISION']);

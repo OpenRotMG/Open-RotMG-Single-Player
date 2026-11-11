@@ -15,12 +15,13 @@ export async function gameSite(runtime:{origin:string;clientURL():string;view():
     if(!trusted(req)){res.writeHead(403);res.end('Unapproved local game origin');return;}
     if(runtime.view().status!=='ready'){res.writeHead(503,{'content-type':'text/plain'});res.end('Server is stopped. Start it in OpenRotMG Singleplayer.');return;}
     const url=new URL(req.url!,origin),path=url.pathname,base=prefix();
-    if(req.method==='GET'&&path==='/'){res.writeHead(302,{location:base});res.end();return;}
+    if(req.method==='GET'&&path==='/'&&base!=='/'){ res.writeHead(302,{location:base});res.end();return;}
     if(req.method==='GET'&&(path===base||path==='/singleplayer.css')){
       res.writeHead(200,{'content-type':path===base?'text/html; charset=utf-8':'text/css; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff','content-security-policy':"default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"});
       res.end(path===base?html:css);return;
     }
-    if(!['GET','HEAD','POST'].includes(req.method!)||!(path.startsWith(base)&&path!==base+'index.html'||path.startsWith('/legacy-api/'))){res.writeHead(404);res.end();return;}
+    const asset=base==='/'?['/launcher.js','/client.swf'].includes(path)||path.startsWith('/vendor/')||path.startsWith('/sfx/'):path.startsWith(base)&&path!==base+'index.html';
+    if(!['GET','HEAD','POST'].includes(req.method!)||!(asset||path.startsWith('/legacy-api/'))){res.writeHead(404);res.end();return;}
     const proxy=request({hostname:target.hostname,port:target.port,path:req.url,method:req.method,headers:headers(req)},upstream=>{
       res.writeHead(upstream.statusCode!,upstream.headers);upstream.pipe(res);
       upstream.on('error',error=>res.destroy(error));
