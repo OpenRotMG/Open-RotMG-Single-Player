@@ -1,27 +1,33 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { View } from './runtime';
 import type { UpdateView } from './updates';
+async function invoke(channel:string,...args:unknown[]){
+  const reply=await ipcRenderer.invoke(channel,...args);
+  if(!reply||typeof reply!=='object'||Object.keys(reply).length!==2||typeof reply.ok!=='boolean'||(reply.ok?!Object.hasOwn(reply,'value'):typeof reply.error!=='string'))throw new Error('The launcher returned an invalid reply. Please report this problem.');
+  if(!reply.ok)throw new Error(reply.error);
+  return reply.value;
+}
 contextBridge.exposeInMainWorld('launcher', Object.freeze({
-  status: () => ipcRenderer.invoke('runtime:status'),
-  start: () => ipcRenderer.invoke('runtime:start'),
-  startInstalled: () => ipcRenderer.invoke('runtime:start-installed'),
-  launcherUpdates: () => ipcRenderer.invoke('launcher:status'),
-  checkLauncher: () => ipcRenderer.invoke('launcher:check'),
-  downloadLauncher: () => ipcRenderer.invoke('launcher:download'),
-  updates: () => ipcRenderer.invoke('update:status'),
-  checkUpdates: () => ipcRenderer.invoke('update:check'),
-  retryUpdate: () => ipcRenderer.invoke('update:retry'),
-  recoverRuntime: () => ipcRenderer.invoke('update:recover'),
-  releases: () => ipcRenderer.invoke('update:releases'),
-  stop: () => ipcRenderer.invoke('runtime:stop'),
-  client: () => ipcRenderer.invoke('runtime:client'),
-  help: () => ipcRenderer.invoke('runtime:help'),
-  importPlayer: () => ipcRenderer.invoke('save:import'),
-  confirmImport: (expected: string, password: string, confirmation: string, replace: boolean) => ipcRenderer.invoke('save:confirm-import', expected, password, confirmation, replace),
-  cancelImport: () => ipcRenderer.invoke('save:cancel-import'),
-  makeBackup: () => ipcRenderer.invoke('save:backup'),
-  openBackupFolder: () => ipcRenderer.invoke('save:folder'),
-  restoreBackup: () => ipcRenderer.invoke('save:restore'),
+  status: () => invoke('runtime:status'),
+  start: () => invoke('runtime:start'),
+  startInstalled: () => invoke('runtime:start-installed'),
+  launcherUpdates: () => invoke('launcher:status'),
+  checkLauncher: () => invoke('launcher:check'),
+  downloadLauncher: () => invoke('launcher:download'),
+  updates: () => invoke('update:status'),
+  checkUpdates: () => invoke('update:check'),
+  retryUpdate: () => invoke('update:retry'),
+  recoverRuntime: () => invoke('update:recover'),
+  releases: () => invoke('update:releases'),
+  stop: () => invoke('runtime:stop'),
+  client: () => invoke('runtime:client'),
+  help: () => invoke('runtime:help'),
+  importPlayer: () => invoke('save:import'),
+  confirmImport: (expected: string, password: string, confirmation: string, replace: boolean) => invoke('save:confirm-import', expected, password, confirmation, replace),
+  cancelImport: () => invoke('save:cancel-import'),
+  makeBackup: () => invoke('save:backup'),
+  openBackupFolder: () => invoke('save:folder'),
+  restoreBackup: () => invoke('save:restore'),
   updatesChanged: (callback:(view:UpdateView)=>void) => {
     ipcRenderer.on('update:changed',(_event,view:UpdateView)=>callback(view));
   },

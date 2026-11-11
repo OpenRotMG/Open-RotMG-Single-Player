@@ -24,7 +24,7 @@ if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
 }else await journey();
 async function journey(){
  await mkdir('.qa/installer-tests',{recursive:true});const out=await mkdtemp(resolve('.qa/installer-tests/run-'));
- const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned binaries; no Authenticode/notarization. The ZIP is extracted without downloaded quarantine or Mark-of-the-Web, so Gatekeeper/SmartScreen prompts are not qualified','Normal-cache browser requests are uncontrolled; only update availability is controlled (HTTP 503); NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
+ const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned binaries; no Authenticode/notarization. The ZIP is extracted without downloaded quarantine or Mark-of-the-Web, so Gatekeeper/SmartScreen prompts are not qualified','Normal-cache browser requests are uncontrolled; update availability is controlled (HTTP 503), and a pre-spawn pause prepares a real selected startup on synthetic data; NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
  const check=(name,value)=>{assert(value,name);report.assertions.push(name);console.log('PASS '+name);};
  const persist=()=>writeFile(join(out,'installer-result.json'),JSON.stringify(report,null,2)+'\n');
  const alive=pid=>{try{process.kill(pid,0);return true;}catch(error){if(error.code==='ESRCH')return false;throw error;}};
@@ -58,6 +58,8 @@ async function journey(){
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
    ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:`module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});
+    const coordinator=require(process.resourcesPath+'/app.asar/dist/updates.js'),Coordinator=coordinator.RuntimeUpdates;
+    coordinator.RuntimeUpdates=class extends Coordinator{constructor(...args){super(...args);globalThis.setupUpdates=this;globalThis.setupRuntime=args[0];}};
     const appUpdates=require(process.resourcesPath+'/app.asar/dist/launcher-updates.js'),Original=appUpdates.LauncherUpdates;
     appUpdates.LauncherUpdates=class extends Original{constructor(version,target){const parts=version.split('.').map(Number);parts[2]++;const next=parts.join('.'),repository='OpenRotMG/Open-RotMG-Single-Player';super(version,target,async()=>new Response(JSON.stringify([{id:123,tag_name:'v'+next,url:'https://api.github.com/repos/'+repository+'/releases/123',draft:false,prerelease:false,body:'LAUNCHER_VERSION='+next,assets:[{name:'openrotmg-singleplayer-'+next+'-'+target+'.zip',size:1,browser_download_url:'https://github.com/'+repository+'/releases/download/v'+next+'/openrotmg-singleplayer-'+next+'-'+target+'.zip'}]}])));}};`}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.evaluate(()=>window.launcher.updates())).phase==='service','controlled update service refusal');
@@ -91,13 +93,22 @@ async function journey(){
   await page.locator('#show-settings').click();
   check('Settings shows numbered source commits instead of full hashes',/Server commit #\d+ · Client commit #\d+/.test(await page.locator('#update-installed').innerText()));
   await page.locator('#check-launcher').click();await wait(async()=>(await page.locator('#download-launcher').isVisible()),'separate launcher update availability');
-  check('Launcher update availability and manual replacement steps do not claim the server/client update succeeded',await page.locator('#launcher-update-steps').isVisible()&&/HTTP 503/.test(await page.locator('#update-message').innerText()));
+  check('Launcher update availability and manual replacement steps do not claim the server/client update succeeded',await page.locator('#launcher-update-steps').isVisible()&&/Could not check for game updates/.test(await page.locator('#update-message').innerText())&&/HTTP 503/.test(await page.locator('#logs').textContent()));
   await app.evaluate(({shell})=>{globalThis.savedOpenExternal=shell.openExternal;shell.openExternal=async url=>{globalThis.launcherDownloadURL=url;};});
   await page.locator('#download-launcher').click();await wait(async()=>!!await app.evaluate(()=>globalThis.launcherDownloadURL),'named launcher download');
   assert.match(await app.evaluate(()=>globalThis.launcherDownloadURL),/^https:\/\/github.com\/OpenRotMG\/Open-RotMG-Single-Player\/releases\/download\/v[0-9.]+\/openrotmg-singleplayer-[0-9.]+-(linux-x64|win32-x64|darwin-arm64)\.zip$/);
   await app.evaluate(({shell})=>{shell.openExternal=globalThis.savedOpenExternal;});
   check('Launcher update invokes only the exact official platform ZIP URL; export is explicitly labeled',await page.locator('#help').innerText()==='Export live account');
   await page.screenshot({path:join(out,'launcher-settings.png')});
+  await app.evaluate(async()=>{await globalThis.setupRuntime.idleOperation('Prepare test startup before spawn',()=>globalThis.setupUpdates.beforeStart(true));await globalThis.setupUpdates.check();});
+  await wait(async()=>await page.locator('#import').isDisabled(),'import blocked before first protected startup');
+  check('A selected but unstarted game disables imports and backups, explains Start Server in plain language, and offers one finish button',await page.locator('#backup').isDisabled()&&await page.locator('#restore').isDisabled()&&await page.locator('#finish-update').isVisible()&&/Click Start Server/.test(await page.locator('#update-message').innerText())&&!/STAGED|Authenticated|guarded|runtime/.test(await page.locator('#update-message').innerText()));
+  const refused=await page.evaluate(async()=>{try{await window.launcher.importPlayer();throw Error('Unexpected import allowed');}catch(error){return error.message;}});
+  check('Direct import is still safely refused before readiness with a readable next step, not a stack or IPC error',/Click Start Server/.test(refused)&&!/UpdateProblem|save:import|guarded|IPC/.test(refused)&&(await page.evaluate(()=>window.launcher.status())).pid===undefined);
+  await page.screenshot({path:join(out,'finish-update.png')});
+  await page.locator('#finish-update').click();await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'finish button real guarded startup',650000);
+  check('The finish button completes real protected startup and enables import only after readiness',!(await page.locator('#import').isDisabled())&&(await page.locator('#finish-update').isHidden())&&(await page.evaluate(()=>window.launcher.updates())).canManageSaves);
+  await page.locator('#show-settings').click();
   await choose(portable);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});const login=await page.locator('#local-login').inputValue();await page.locator('#password').fill(secret);await page.locator('#confirmation').fill(secret);await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});assert.equal(await page.locator('#error').innerText(),'');
   let view=await start();
   assert.equal(await page.locator('#client-url').getAttribute('href'),new URL(view.clientURL).origin+'/');
@@ -106,7 +117,7 @@ async function journey(){
   check('Installed native game import, real progress transaction and durable Stop verified',true);
   const saveResult=async(pattern,label)=>wait(async()=>{const error=await page.locator('#error').innerText();if(error)throw Error(`${label}: ${error}`);return pattern.test(await page.locator('#save-result').innerText());},label);
   await page.locator('#show-settings').click();
-  await page.locator('#backup').click();await saveResult(/Verified full local backup/,'full backup');
+  await page.locator('#backup').click();await saveResult(/Backup saved/,'full backup');
   const backups=join(profile,'backups'),names=(await readdir(backups)).filter(n=>n.includes('-manual-')&&n.endsWith('.sqlite'));assert.equal(names.length,1);const backup=join(backups,names[0]);
   report.backup={path:backup,sha256:await hashFile(backup),bytes:(await stat(backup)).size};
   await choose(backup,1);await page.locator('#restore').click();await saveResult(/Full local save restored/,'full restore');

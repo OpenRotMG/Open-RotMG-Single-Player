@@ -21,6 +21,12 @@ test('update-coordinator coalesces automatic/manual requests and selects one ver
  const f=await setup(t);f.fixture.set('good');f.fixture.hold();const automatic=f.updates.startup(),manual=f.updates.check();assert.equal(automatic,manual);await wait(()=>f.fixture.held()===1);assert.equal(f.updates.check(),manual);f.fixture.release();await automatic;
  assert.equal(f.fixture.requests.filter(r=>r.path.endsWith('/latest')).length,1);assert.equal(f.fixture.requests.filter(r=>r.path.endsWith('.tar.gz')).length,1);assert.equal(f.fixture.errors.length,0);assert.equal(f.updates.view().phase,'staged');assert.equal(f.updates.view().installed.server,'1'.repeat(40));assert.equal(f.updates.view().available.server,'8'.repeat(40));assert.equal(f.runtime.view().pid,undefined);const pending=JSON.parse(await readFile(join(f.runtime.userData,'runtime-pending.json')));assert.equal(pending.phase,'selected');assert.equal(pending.pid,null);assert.equal(pending.readiness,null);assert.equal(pending.noDatabase,true);await f.runtime.close();
 });
+test('selected startup blocks import before the chooser, preserves pending evidence and explains the missing Start',async t=>{
+ const f=await setup(t);f.fixture.set('good');await f.updates.startup();const path=join(f.runtime.userData,'runtime-pending.json'),before=await readFile(path);let chosen=false;
+ assert.equal(f.updates.view().canManageSaves,false);assert.equal(f.updates.view().needsStart,true);
+ await assert.rejects(f.runtime.stoppedOperation('Import player',async()=>{chosen=true;}),/Click Start Server/);
+ assert.equal(chosen,false);assert.deepEqual(await readFile(path),before);assert.equal(f.runtime.view().pid,undefined);assert.equal(f.runtime.view().status,'stopped');await f.runtime.close();
+});
 test('negative capability fixture cannot contaminate later valid checks or authenticated source counts',async t=>{
  const f=await setup(t,23);f.fixture.set('legacy-capability');assert.equal(f.fixture.current().save.startupBackup,0);f.fixture.set('good');assert.equal(f.fixture.current().save.startupBackup,1);await f.updates.startup();assert.equal(f.updates.view().phase,'staged');assert.equal(f.updates.view().available.serverCount,10);assert.equal(f.updates.view().available.clientCount,20);await f.runtime.close();
 });

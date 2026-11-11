@@ -13,6 +13,7 @@
 <div id="settings-page" hidden>
 <h2>Settings</h2>
 <section><h3>Players and backups</h3>
+<button id="finish-update" hidden>Finish preparing game</button>
 <nav class="actions"><button id="import" disabled>Import player</button><button id="help" title="https://openrotmg.org/export/">Export live account</button><button id="backup" disabled>Make backup</button><button id="folder" disabled>Open backup folder</button><button id="restore" disabled>Restore backup</button></nav>
 <section id="import-preview" hidden aria-label="Import preview"><h3>Import player</h3><p id="import-summary"></p><label>Local login (select to copy)<input id="local-login" readonly autocomplete="off"></label><p id="replace-warning" role="alert" hidden>This player was imported before. Replacing it overwrites that player's local progress and password. Other local accounts stay intact. A full backup is made first.</p><label>New local password<input id="password" type="password" autocomplete="new-password" maxlength="128"></label><label>Confirm new password<input id="confirmation" type="password" autocomplete="new-password" maxlength="128"></label><p class="hint">Use this login and your new password in the local game. Your live account credentials do not transfer.</p><nav><button id="import-cancel">Cancel</button><button id="import-confirm">Import player</button></nav></section>
 <p id="save-result" role="status"></p></section>

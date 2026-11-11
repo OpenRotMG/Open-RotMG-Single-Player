@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Runtime } from './runtime';
 
+import {UserMessage} from './user-message';
+
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
 export type SaveResult = { message: string; path?: string; login?: string; disclosure?: string };
@@ -26,7 +28,7 @@ export function snapshotPreview(value: unknown): SnapshotPreview {
   return p;
 }
 export function checkedPassword(value: unknown, confirmation: unknown): string {
-  if (typeof value !== 'string' || typeof confirmation !== 'string' || value !== confirmation || Buffer.from(value, 'utf8').toString('utf8') !== value || Buffer.byteLength(value) < 5 || Buffer.byteLength(value) > 128 || /\p{Cc}/u.test(value)) throw new Error('New passwords must match and contain 5–128 UTF-8 bytes without control characters');
+  if (typeof value !== 'string' || typeof confirmation !== 'string' || value !== confirmation || Buffer.from(value, 'utf8').toString('utf8') !== value || Buffer.byteLength(value) < 5 || Buffer.byteLength(value) > 128 || /\p{Cc}/u.test(value)) throw new UserMessage(value!==confirmation?'The passwords do not match. Enter the same password in both boxes.':'Choose a different password. Try at least five ordinary letters or numbers, without line breaks.');
   return value;
 }
 
@@ -220,7 +222,7 @@ export class SaveControls {
       const result = await saveAuthority(this.runtime, 'snapshot', [state, data, path]) as {snapshot: string; verified: boolean};
       if (result?.snapshot !== path || result.verified !== true) throw new Error(`Unverified snapshot outcome at ${path}; no backup success claimed`);
       const preview = snapshotPreview(await saveAuthority(this.runtime, 'verify-snapshot', [path, data]));
-      return {message: `Verified full local backup · ${new Date().toISOString()} · ${preview.account_count} accounts, ${preview.character_count} characters · includes original local credentials (schema ${preview.schema}).`, path};
+      return {message: `Backup saved · ${new Date().toLocaleString()} · ${preview.account_count} accounts, ${preview.character_count} characters. Includes your local passwords.`, path};
     });
   }
   restoreBackup(): Promise<SaveResult | undefined> {

@@ -9,6 +9,7 @@ import { createUpdatePolicy } from './update-policy';
 import { LauncherUpdates } from './launcher-updates';
 import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
+import {UserMessage} from './user-message';
 
 app.setName('Open RotMG Single Player');
 // The portable launcher names the save folder; starting this file directly would silently use an unrelated OS profile.
@@ -42,25 +43,28 @@ else {
     window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== index && !details.url.startsWith(pathToFileURL(__dirname + '/').href) }));
     saves = new SaveControls(runtime, {
       choose: async (kind, directory) => {
-        const result = await dialog.showOpenDialog(window!, { title: kind === 'account' ? 'Import player — choose exported account' : 'Restore full local backup', defaultPath: kind === 'snapshot' ? directory : undefined, properties: ['openFile'], filters: kind === 'account' ? [{name: 'Portable account', extensions: ['json']}] : [{name: 'Full local backup', extensions: ['sqlite', 'db']}] });
+        const result = await dialog.showOpenDialog(window!, { title: kind === 'account' ? 'Import player: choose your exported account file' : 'Restore full local backup', defaultPath: kind === 'snapshot' ? directory : undefined, properties: ['openFile'], filters: kind === 'account' ? [{name: 'Portable account', extensions: ['json']}] : [{name: 'Full local backup', extensions: ['sqlite', 'db']}] });
         if (result.canceled) return undefined;
         if (result.filePaths.length !== 1) throw new Error('Native save chooser did not return exactly one file');
         return result.filePaths[0];
       },
       confirmRestore: async (preview, path, modified) => (await dialog.showMessageBox(window!, {
         type: 'warning', title: 'Replace the full local save?', message: 'Restore all local accounts and original passwords?',
-        detail: `${path}\nFile modified: ${modified}\nSchema ${preview.schema} · ${preview.account_count} accounts · ${preview.character_count} characters\nAll current local progress and credentials will be replaced. A separate verified pre-restore backup must succeed first.`,
+        detail: `${path}\nFile modified: ${modified}\n${preview.account_count} accounts · ${preview.character_count} characters\nAll current local progress and passwords will be replaced. A backup of your current save must be made and checked first.`,
         buttons: ['Cancel', 'Restore full local save'], defaultId: 0, cancelId: 0, noLink: true,
       })).response === 1,
       openFolder: path => shell.openPath(path),
     });
     updates = new RuntimeUpdates(runtime, policy, async prompt => (await dialog.showMessageBox(window!, {
-      type:'warning',title:'Local runtime recovery/update',message:prompt.message,detail:prompt.detail,
-      buttons:['Cancel',prompt.kind==='restore-update'?'Back up current save and restore':prompt.kind==='retry-update'?'Retry exact runtime':'Verify and continue'],defaultId:0,cancelId:0,noLink:true,
+      type:'warning',title:'Game update or save recovery',message:prompt.message,detail:prompt.detail,
+      buttons:['Cancel',prompt.kind==='restore-update'?'Back up current save and restore':prompt.kind==='retry-update'?'Retry update':'Verify and continue'],defaultId:0,cancelId:0,noLink:true,
     })).response===1);
     const checked = (channel: string, action: (...args: unknown[]) => unknown, valid: (args: unknown[]) => boolean = args => args.length === 0) => ipcMain.handle(channel, (event, ...args: unknown[]) => {
       if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
-      return action(...args);
+      return (async()=>{
+        try{return{ok:true,value:await action(...args)};}
+        catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish as expected. Open Server logs for the error details.'};}
+      })();
     });
     checked('runtime:status', view);
     checked('runtime:start', () => runtime.start());
@@ -93,7 +97,7 @@ else {
     void updates.startup();
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
     void window.loadURL(index);
-  }).catch(error => { dialog.showErrorBox('Launcher startup failed', String(error)); app.exit(1); });
+  }).catch(error => { console.error(error);dialog.showErrorBox('The game could not open', 'Keep your player data folder. Please report this problem with the error details from the terminal.'); app.exit(1); });
   async function close() {
     if (closing) return;
     closing = true;
@@ -101,16 +105,16 @@ else {
     try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
     catch (error) {
       if (runtime.view().status !== 'failed') {
-        dialog.showErrorBox('Close canceled', `${String(error)}\nThe launcher remains open. No save success is claimed. Inspect the operation error before closing or trying again.`);
+        runtime.reportProblem(error);dialog.showErrorBox('The game could not close normally', 'The launcher will stay open. Check Server logs before trying again. Your save has not been confirmed.');
         return;
       }
       try { await runtime.verifyFailureGate(); }
       catch (persistenceError) {
-        dialog.showErrorBox('Failure gate was NOT recorded', `${String(persistenceError)}\nThe launcher will remain open and retain ownership. Preserve the save and diagnostics; no durable failure gate or save success is claimed.`);
+        runtime.reportProblem(persistenceError);dialog.showErrorBox('Please keep the launcher open', 'We could not record the save problem safely. Keep your player data folder and report the details in Server logs.');
         return;
       }
       // Keep the app and ownership alive while an unverified child may still be draining.
-      dialog.showErrorBox('An operation was not verified', `${String(error)}\nNo process was force-killed. Inspect ${runtime.diagnostics} and shutdown-failed.json. Save mutations are blocked. You may quit after the server exits, but no save success is claimed.`);
+      runtime.reportProblem(error);dialog.showErrorBox('Your save needs to be checked', 'We could not confirm that the last action finished safely. Keep your player data folder. Open Settings and choose Review recovery before playing again. Error details are in Server logs.');
       if (!runtime.view().pid) { quitting = true; app.exit(1); }
     } finally { closing = false; }
   }

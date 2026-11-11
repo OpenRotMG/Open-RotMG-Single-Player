@@ -71,7 +71,8 @@ test('verify-installer explicitly selects nativeGame normal cache without browse
  assert.equal(calls.length,1);const options=calls[0].arguments[0];assert(ts.isObjectLiteralExpression(options));
  const normalCache=options.properties.filter(p=>ts.isPropertyAssignment(p)&&p.name.getText(file)==='normalCache');assert.equal(normalCache.length,1);assert.equal(normalCache[0].initializer.kind,ts.SyntaxKind.TrueKeyword);
  assert(!/\.\s*(?:route|routeFromHAR|setRequestInterception)\s*\(|Network\.(?:setCacheDisabled|setRequestInterception|setBlockedURLs)|Fetch\.enable/.test(source));
- assert(source.includes('Normal-cache browser requests are uncontrolled; only update availability is controlled (HTTP 503)'));
+ assert(source.includes('Normal-cache browser requests are uncontrolled; update availability is controlled (HTTP 503)'));
+ assert(source.includes('a pre-spawn pause prepares a real selected startup on synthetic data'));
 });
 test('offline installer workflow is manual, native-only, read-only and never signs/publishes or rebuilds runtime',async()=>{
  const workflow=await readFile('.github/workflows/offline-installers.yml','utf8'),producer=await readFile('scripts/installer-inputs.mjs','utf8'),verifier=await readFile('scripts/verify-installer.mjs','utf8');

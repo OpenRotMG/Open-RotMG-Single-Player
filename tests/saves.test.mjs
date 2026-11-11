@@ -48,7 +48,7 @@ const posix={skip:process.platform==='win32'};
 test('save preview and snapshot metadata are required, not invented',()=>{
  assert.throws(()=>importPreview({account:1,login:'player-1@local.invalid',replaced:false,disclosure:'x'}),/metadata/);
  assert.throws(()=>snapshotPreview({verified:true}),/metadata/);
- for(const [value,confirmation] of [['short','other'],['abcd','abcd'],['12345\n','12345\n'],['é'.repeat(65),'é'.repeat(65)],['abc\ud800','abc\ud800']])assert.throws(()=>checkedPassword(value,confirmation),/passwords/);
+ for(const [value,confirmation] of [['short','other'],['abcd','abcd'],['12345\n','12345\n'],['é'.repeat(65),'é'.repeat(65)],['abc\ud800','abc\ud800']])assert.throws(()=>checkedPassword(value,confirmation),/password/);
  assert.equal(checkedPassword('é'.repeat(64),'é'.repeat(64)),'é'.repeat(64));
 });
 test('save native chooser cancellation changes no save or backups',posix,async()=>{
@@ -67,7 +67,7 @@ test('save privately staged input is bound through confirmation, passwords absen
 test('save confirmation rejects changed token/password/replace arguments without consuming valid preview',posix,async()=>{
  const f=await fixture();const preview=await f.saves.beginImport();
  await assert.rejects(f.saves.finishImport('f'.repeat(64),'abcde','abcde',false),/does not match/);
- await assert.rejects(f.saves.finishImport(preview.expected,'abcde','wrong',false),/passwords/);
+ await assert.rejects(f.saves.finishImport(preview.expected,'abcde','wrong',false),/password/);
  await assert.rejects(f.saves.finishImport(preview.expected,'abcde','abcde',true),/does not match/);
  await f.saves.cancelImport();assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
  assert(!await readFile(join(f.resources,'calls.jsonl'),'utf8').then(x=>x.includes('"import"')));
@@ -149,7 +149,7 @@ test('save restore refuses copying a live SQLite checkpoint with committed WAL b
 });
 test('save structured unchanged failure is safely retryable after the prerequisite is fixed',posix,async()=>{
  const f=await fixture();await f.control({fail:true});await assert.rejects(f.saves.makeBackup(),/Destination game save unchanged; output\/backup files may exist/);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- await f.control({});assert.match((await f.saves.makeBackup()).message,/Verified full local backup/);
+ await f.control({});assert.match((await f.saves.makeBackup()).message,/Backup saved/);
 });
 test('save unknown/malformed/missing/mismatched failure envelopes durably block replay without stderr guessing',posix,async()=>{
  for(const control of [{unknown:true},{noAck:true},{invalidUtf8:true},{fail:true,failureEnvelope:{protocol:2}},{fail:true,failureEnvelope:{operation:'restore'}},{fail:true,failureEnvelope:{outcome:'rolled-back'}},{fail:true,failureEnvelope:{error:''}},{fail:true,failureEnvelope:{extra:'unexpected'}}]){
@@ -160,7 +160,7 @@ test('save early stdin EPIPE is retryable only after real close and a valid unch
  const f=await fixture();await f.control({fail:true});const original=processes.spawn;let closed=false;
  t.mock.method(processes,'spawn',(...args)=>{const child=original(...args),end=child.stdin.end.bind(child.stdin);child.once('close',()=>closed=true);child.stdin.end=(...values)=>{process.nextTick(()=>child.stdin.emit('error',Object.assign(Error('early refusal EPIPE'),{code:'EPIPE'})));return end(...values);};return child;});
  await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/Destination game save unchanged/);assert(closed);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- t.mock.restoreAll();await f.control({});assert.match((await f.saves.makeBackup()).message,/Verified full local backup/);
+ t.mock.restoreAll();await f.control({});assert.match((await f.saves.makeBackup()).message,/Backup saved/);
 });
 test('save non-EPIPE stdin failure cannot be rescued by an unchanged acknowledgement',posix,async t=>{
  const f=await fixture();await f.control({fail:true});const original=processes.spawn;
