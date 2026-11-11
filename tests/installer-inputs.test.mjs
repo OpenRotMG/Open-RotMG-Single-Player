@@ -79,7 +79,7 @@ test('offline installer workflow is manual, native-only, read-only and never sig
  assert(workflow.includes('workflow_dispatch:'));assert(workflow.includes('[ubuntu-22.04, windows-2022, macos-15]'));assert(workflow.includes('contents: read'));assert(workflow.includes('actions: read'));assert(workflow.includes('persist-credentials: false'));
  for(const text of [workflow,producer])assert(!/RUNTIME_MANIFEST_SIGNING_KEY|secrets\.|contents: write|release upload|release create|cargo |ci-inputs\.mjs|ci-runtime-inputs\.mjs|releases\/latest/.test(text));
  assert(workflow.includes('actions/upload-artifact@'));assert(workflow.includes('npm run verify:release'));
- assert(workflow.includes("'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt"));assert(!/allow-unauthenticated|AllowInsecureRepositories|Verify-Peer=false/.test(workflow));
+ assert(workflow.includes('for tool in Xvfb xauth dbus-run-session unzip zip; do command -v "$tool"; done'));assert(workflow.includes('playwright install chromium'));assert(!/apt-get|--with-deps|allow-unauthenticated|AllowInsecureRepositories|Verify-Peer=false/.test(workflow));
  assert(producer.includes('runtimeRelease:{manifest,signature,archive}'));assert(producer.includes('MANIFEST_PUBLIC_KEY'));
  assert(producer.includes('promotion/draft.json'));assert(!producer.includes('/releases/'));assert(!producer.includes('`releases/'));assert(producer.includes('prepareInstallerInputs'));assert(producer.includes('runtime-inputs/C/'));assert(producer.includes('runtimePromotionHead:validated.promotionHead'));
  assert(verifier.includes("'installer-result.json'"));assert(!verifier.includes("'result.json'"));assert(!verifier.includes('out/Open RotMG'));

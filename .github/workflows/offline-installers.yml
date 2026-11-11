@@ -50,11 +50,9 @@ jobs:
         with:
           node-version: 22.23.2
           cache: npm
-      - if: runner.os == 'Linux'
-        run: |
-          printf '%s\n' 'https://archive.ubuntu.com/ubuntu/' | sudo tee /etc/apt/apt-mirrors.txt
-          sudo apt-get update
-          sudo apt-get install -y xvfb xauth dbus-x11 unzip zip
+      - name: Require the hosted Linux runner's display and archive tools
+        if: runner.os == 'Linux'
+        run: for tool in Xvfb xauth dbus-run-session unzip zip; do command -v "$tool"; done
       - name: Install locked launcher/maker tools and test without building any runtime
         run: npm ci && npm test
       - name: Consume only exact parent-promoted signed assets (read-only token)
@@ -68,7 +66,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/installer-inputs.mjs collect
       - name: Install only CI browser/display test tools (not consumer dependencies)
-        run: npm exec -- playwright install --with-deps chromium
+        run: npm exec -- playwright install chromium
       - name: Verify the extracted ZIP through its launcher, saves and a fresh copy with moved player data
         shell: bash
         run: |
