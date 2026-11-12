@@ -8,6 +8,7 @@ import {digest,hashFile,targetName,verifyRuntime,runtimeSaveSchema} from '../dis
 import {runtimeFixture} from './runtime-update-fixture.mjs';
 import {updateTestDisplay} from './runtime-update-test-display.mjs';
 import {launchUpdateTest} from './runtime-update-test-launch.mjs';
+import {runtimeTestPortable} from './runtime-update-test-portable.mjs';
 import {nativeGame} from './native-game.mjs';
 import {observeRuntimeAssets} from './runtime-update-cache-observer.mjs';
 import {consumerEnvironment,windowsProcessIdentity,suspendServer,windowsPowerShellExecutable} from './native-boundaries.mjs';
@@ -62,7 +63,7 @@ async function journey(){
  const view=()=>page.evaluate(()=>window.launcher.status()),updates=()=>page.evaluate(()=>window.launcher.updates());
  const confirm=()=>app.evaluate(()=>globalThis.runtimeUpdateTest.confirms.push(1));
  const launch=async(settle=true)=>{
-  const value=await launchUpdateTest({executablePath:report.executable,profile,env:consumerEnv,policy:fixture.policy(baseline),setupMain:`(${observeStartupCheck.toString()})();(${observeFailureGate.toString()})();${setupMain}`});app=value.app;value.proof.startupSettleRequired=settle;report.launches??=[];report.launches.push(value.proof);page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);
+  const portable=await runtimeTestPortable(report.executable,profile);const value=await launchUpdateTest({...portable,env:consumerEnv,policy:fixture.policy(baseline),setupMain:`(${observeStartupCheck.toString()})();(${observeFailureGate.toString()})();${setupMain}`});app=value.app;value.proof.startupSettleRequired=settle;report.launches??=[];report.launches.push(value.proof);page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);
   launchObservation=async()=>{value.proof.startupCheck=await app.evaluate(()=>globalThis.runtimeUpdateTest.startupCheck);value.proof.lastKnownPhase=(await updates()).phase;value.proof.lastKnownOperation=(await view()).operation??null;value.proof.failureGate=await app.evaluate(()=>globalThis.runtimeUpdateTest.failureGate);return value.proof;};
   if(settle)await wait(async()=>{const proof=await launchObservation();if(['rejected','threw'].includes(proof.startupCheck.state))throw Error('Owned startup check failed: '+proof.startupCheck.error);return proof.startupCheck.state==='fulfilled'&&!['initializing','checking','downloading','activating'].includes(proof.lastKnownPhase)&&!proof.lastKnownOperation;},'startup check and lifecycle settlement');else await launchObservation();
   const preferences=await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].webContents.getLastWebPreferences());check('Packaged renderer keeps sandbox/context isolation/web security',preferences.sandbox&&preferences.contextIsolation&&preferences.webSecurity&&!preferences.nodeIntegration);
