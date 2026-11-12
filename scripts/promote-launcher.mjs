@@ -3,7 +3,7 @@ import {execFileSync} from 'node:child_process';
 import {readFile,writeFile,readdir,lstat,mkdir,mkdtemp,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {createPrivateKey,createPublicKey,sign} from 'node:crypto';
-import {hashFile,REPOSITORY,TARGETS} from '../dist/update-format.js';
+import {hashFile,REPOSITORY} from '../dist/update-format.js';
 import {LAUNCHER_PUBLIC_KEY} from '../dist/update-policy.js';
 import {extractLauncher,validateLauncherManifest,authenticateLauncher,LAUNCHER_DOMAIN,LAUNCHER_METADATA_LIMIT} from '../dist/launcher-package.js';
 let material=process.env.RUNTIME_MANIFEST_SIGNING_KEY;delete process.env.RUNTIME_MANIFEST_SIGNING_KEY;

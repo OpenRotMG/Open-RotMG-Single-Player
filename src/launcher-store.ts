@@ -1,5 +1,5 @@
 import {readFile,lstat,readdir,realpath,mkdir,mkdtemp,open,writeFile,statfs,rm,copyFile} from 'node:fs/promises';
-import {join,relative,dirname,basename,resolve} from 'node:path';
+import {join,relative,dirname,resolve} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {randomUUID} from 'node:crypto';
