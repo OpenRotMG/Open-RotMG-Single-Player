@@ -53,7 +53,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       let output='';chrome.stdout.on('data',bytes=>output+=bytes);chrome.stderr.on('data',bytes=>errors+=bytes);
       const deadline=Date.now()+30000;while(!output.includes('\n')&&Date.now()<deadline)await delay(100);
       assert(output.includes('\n'),`Managed browser receipt missing: ${errors}`);
-      const receipt=JSON.parse(output.split('\n')[0]);assert(receipt.owner===owner&&receipt.pid===chrome.pid&&receipt.target,'Managed browser identity mismatch');
+      const receipt=JSON.parse(output.split('\n')[0]);assert(receipt.owner===owner&&receipt.pid===chrome.pid&&receipt.target,'Managed browser identity mismatch: '+JSON.stringify(receipt)+'; '+errors);
       const argv = await processArgv(receipt.pid);
       check(`${name}: managed browser argv has no sandbox or unsafe software-renderer bypass`, !/--no-sandbox|--disable-setuid-sandbox|--enable-unsafe-swiftshader|--disable-web-security|--disable-gpu-driver-bug-workarounds/.test(argv));
       (report.browsers??=[]).push({...receipt,argv});
