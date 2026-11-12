@@ -60,6 +60,6 @@ export async function extractLauncher(archive:string,destination:string,m:Launch
  unpack.on('meta',()=>unpack.abort(Error('Launcher archive changed after inspection')));unpack.on('ignoredEntry',()=>unpack.abort(Error('Special launcher extraction entry rejected')));
  try{await run(unpack);}catch(error){writeError??=error;for(const entry of active)entry.destroy();throw error;}finally{await Promise.all(writes);}if(writeError)throw writeError;demand(seen.size===expected.size&&expanded===expectedBytes,'Launcher archive changed after inspection');
  for(const e of m.files)if(e.type!=='symlink'){await chmod(join(destination,e.path),e.mode);if(e.type==='file'){const f=await open(join(destination,e.path),'r+');try{await f.sync();}finally{await f.close();}}}
- if(process.platform!=='win32')for(const e of [...m.files].reverse().filter(e=>e.type==='directory')){const f=await open(join(destination,e.path),'r');try{await f.sync();}finally{await f.close();}}
+ if(process.platform!=='win32')for(const path of [...m.files].reverse().filter(e=>e.type==='directory').map(e=>join(destination,e.path)).concat(destination)){const f=await open(path,'r');try{await f.sync();}finally{await f.close();}}
  await verifyLauncherTree(destination,m);
 }
