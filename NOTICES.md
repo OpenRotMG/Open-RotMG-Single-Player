@@ -1,6 +1,6 @@
 # Runtime notices
 
-This preview launcher is AGPL-3.0-only; see LICENSE. Bundled OpenRotMG server source is AGPL-3.0 and the client repository is GPL-3.0. Exact corresponding source revisions and Ruffle identity are recorded in source-pins.json and runtime/build-identity.json. Packaging does not download updates at runtime.
+This launcher is AGPL-3.0-only; see LICENSE. Bundled OpenRotMG server source is AGPL-3.0 and the client repository is GPL-3.0. Exact corresponding source revisions and Ruffle identity are recorded in source-pins.json and runtime/build-identity.json. Launcher and game updates are independently authenticated. Native entry-point dependency notices accompany the application's resources in THIRD-PARTY-NOTICES.txt.
 
 - Server: https://github.com/OpenRotMG/Open-RotMG-Server
 - Client: https://github.com/OpenRotMG/Open-RotMG-Client

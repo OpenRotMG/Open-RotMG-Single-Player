@@ -50,13 +50,13 @@ test('installer-inputs validates historical protected draft snapshot URLs withou
 });
 test('Forge only packages; no installer makers or OS signing are configured',()=>{
  const require=createRequire(import.meta.url),forge=require('../forge.config.js');
- assert.deepEqual(forge.makers,[]);assert.deepEqual(forge.packagerConfig.extraResource,['runtime']);assert(!forge.packagerConfig.osxSign&&!forge.packagerConfig.osxNotarize&&!forge.packagerConfig.windowsSign);
+ assert.deepEqual(forge.makers,[]);assert.deepEqual(forge.packagerConfig.extraResource,['runtime','launcher/THIRD-PARTY-NOTICES.txt']);assert(!forge.packagerConfig.osxSign&&!forge.packagerConfig.osxNotarize&&!forge.packagerConfig.windowsSign);
 });
 test('installedPaths puts the packaged app in server data and the profile in player data beside the launcher',()=>{
- assert.equal(installedPaths('/owned é','win32').executable,join('/owned é','server data/openrotmg-single-player.exe'));
+ assert.equal(installedPaths('/owned é','win32').executable,join('/owned é','server data/baseline/openrotmg-single-player.exe'));
  assert.equal(installedPaths('/owned é','win32').launcher,join('/owned é','OpenRotMG Singleplayer.exe'));
- assert.equal(installedPaths('/owned é','darwin').resources,join('/owned é','server data/Open RotMG Single Player.app/Contents/Resources'));
- assert.equal(installedPaths('/owned é','linux').resources,join('/owned é','server data/resources'));
+ assert.equal(installedPaths('/owned é','darwin').resources,join('/owned é','server data/baseline/Open RotMG Single Player.app/Contents/Resources'));
+ assert.equal(installedPaths('/owned é','linux').resources,join('/owned é','server data/baseline/resources'));
  assert.equal(installedPaths('/owned é','linux').player,join('/owned é','player data'));
 });
 test('installer maker precheck refuses a source preview or unsigned release metadata, without a production-key fixture',async()=>{
@@ -76,8 +76,9 @@ test('verify-installer explicitly selects nativeGame normal cache without browse
 });
 test('offline installer workflow is manual, native-only, read-only and never signs/publishes or rebuilds runtime',async()=>{
  const workflow=await readFile('.github/workflows/offline-installers.yml','utf8'),producer=await readFile('scripts/installer-inputs.mjs','utf8'),verifier=await readFile('scripts/verify-installer.mjs','utf8');
- assert(workflow.includes('workflow_dispatch:'));assert(workflow.includes('[ubuntu-22.04, windows-2022, macos-15]'));assert(workflow.includes('contents: read'));assert(workflow.includes('actions: read'));assert(workflow.includes('persist-credentials: false'));
- for(const text of [workflow,producer])assert(!/RUNTIME_MANIFEST_SIGNING_KEY|secrets\.|contents: write|release upload|release create|cargo |ci-inputs\.mjs|ci-runtime-inputs\.mjs|releases\/latest/.test(text));
+ assert(workflow.includes('workflow_dispatch:'));assert(workflow.includes('[ubuntu-22.04, windows-2022, macos-26]'));assert(workflow.includes('contents: read'));assert(workflow.includes('actions: read'));assert(workflow.includes('persist-credentials: false'));
+ const nativeTests='cargo test --locked --manifest-path launcher/Cargo.toml';assert.equal(workflow.split(nativeTests).length,2);
+ for(const text of [workflow.replace(nativeTests,''),producer])assert(!/RUNTIME_MANIFEST_SIGNING_KEY|secrets\.|contents: write|release upload|release create|cargo |ci-inputs\.mjs|ci-runtime-inputs\.mjs|releases\/latest/.test(text));
  assert(workflow.includes('actions/upload-artifact@'));assert(workflow.includes('npm run verify:release'));
  assert(workflow.includes('for tool in Xvfb xauth dbus-run-session unzip zip; do command -v "$tool"; done'));assert(workflow.includes('playwright install chromium'));assert(!/apt-get|--with-deps|allow-unauthenticated|AllowInsecureRepositories|Verify-Peer=false/.test(workflow));
  assert(producer.includes('runtimeRelease:{manifest,signature,archive}'));assert(producer.includes('MANIFEST_PUBLIC_KEY'));

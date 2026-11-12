@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,rm,readdir} from 'node:fs/promises';
+import {mkdir,mkdtemp,rm,readdir,writeFile,stat,chmod} from 'node:fs/promises';
 import {resolve,join} from 'node:path';
-import {consumerEnvironment,protectWindowsInstallation,windowsProcessIdentity} from '../scripts/native-boundaries.mjs';
+import {consumerEnvironment,protectInstallation,protectWindowsInstallation,windowsProcessIdentity} from '../scripts/native-boundaries.mjs';
 
 test('native-boundaries consumer PATH is empty and cannot inherit developer search paths',async()=>{
   await mkdir('.qa/unit',{recursive:true});
@@ -24,6 +24,8 @@ test('native-boundaries Windows process identity preserves actual PID/start/argv
     assert.throws(()=>windowsProcessIdentity('123; injected'),/Positive Windows process PID required/);assert.equal(calls.length,1);
   }finally{if(old===undefined)delete process.env.ProgramFiles;else process.env.ProgramFiles=old;}
 });
+
+test('Unix installation protection restores exact original file and directory modes',{skip:process.platform==='win32'},async()=>{await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/protected-')),dir=join(root,'nested'),file=join(dir,'program');await mkdir(dir);await writeFile(file,'code');await chmod(root,0o750);await chmod(dir,0o700);await chmod(file,0o640);const restore=await protectInstallation(root);try{for(const path of [root,dir,file])assert.equal((await stat(path)).mode&0o222,0);}finally{await restore();}assert.deepEqual(await Promise.all([root,dir,file].map(async p=>(await stat(p)).mode&0o777)),[0o750,0o700,0o640]);await rm(root,{recursive:true});});
 
 const paths=['owned-install/nested/file','owned-install/nested','owned-install'];
 test('native-boundaries Windows ACL uses a PS7 mutation-only .NET deny batch with exact mask readback',()=>{

@@ -10,6 +10,7 @@ import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 import {launchUpdateTest} from './runtime-update-test-launch.mjs';
 import {updateTestDisplay} from './runtime-update-test-display.mjs';
 import {consumerEnvironment,protectInstallation,assertInstallationProtected,runtimeLinkage,windowsProcessIdentity} from './native-boundaries.mjs';
+import {verifyLauncherUpdate} from './verify-launcher-update.mjs';
 import {nativeGame} from './native-game.mjs';
 import {processArgv} from './process-argv.mjs';
 import {acquireQaPortLease} from './qa-port.mjs';
@@ -20,7 +21,7 @@ import {assertWindowsInstallerWriteDenied} from './installer-write-probe.mjs';
 assert.equal(process.argv.length,3,'npm run verify:release -- ARTIFACT (with adjacent installer-receipt.json)');
 if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
  const child=spawn('dbus-run-session',[process.execPath,...process.argv.slice(1)],{stdio:'inherit',env:{...process.env,OPENROTMG_PRIVATE_INSTALLER_TEST:'1'}});child.on('exit',code=>process.exitCode=code??1);
-}else await journey();
+}else{await journey();if(process.exitCode)process.exit(process.exitCode);}
 async function journey(){
  await mkdir('.qa/installer-tests',{recursive:true});const out=await mkdtemp(resolve('.qa/installer-tests/run-'));
  const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned binaries; no Authenticode/notarization. The ZIP is extracted without downloaded quarantine or Mark-of-the-Web, so Gatekeeper/SmartScreen prompts are not qualified','Normal-cache browser requests are uncontrolled; update availability is controlled (HTTP 503), and a pre-spawn pause prepares a real selected startup on synthetic data; NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
@@ -57,10 +58,11 @@ async function journey(){
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
    ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:`module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});
+    const productionLauncherPolicy=module.createLauncherPolicy;module.createLauncherPolicy=(resources,launcher)=>({...productionLauncherPolicy(resources,launcher),request:async()=>new Response('',{status:503})});
     const coordinator=require(process.resourcesPath+'/app.asar/dist/updates.js'),Coordinator=coordinator.RuntimeUpdates;
     coordinator.RuntimeUpdates=class extends Coordinator{constructor(...args){super(...args);globalThis.setupUpdates=this;globalThis.setupRuntime=args[0];}};
     const appUpdates=require(process.resourcesPath+'/app.asar/dist/launcher-updates.js'),Original=appUpdates.LauncherUpdates;
-    appUpdates.LauncherUpdates=class extends Original{constructor(version,target){const parts=version.split('.').map(Number);parts[2]++;const next=parts.join('.'),repository='OpenRotMG/Open-RotMG-Single-Player';super(version,target,async()=>new Response(JSON.stringify([{id:123,tag_name:'v'+next,url:'https://api.github.com/repos/'+repository+'/releases/123',draft:false,prerelease:false,body:'LAUNCHER_VERSION='+next,assets:[{name:'openrotmg-singleplayer-'+next+'-'+target+'.zip',size:1,browser_download_url:'https://github.com/'+repository+'/releases/download/v'+next+'/openrotmg-singleplayer-'+next+'-'+target+'.zip'}]}])));}};`}));
+    appUpdates.LauncherUpdates=class extends Original{constructor(version,target,request,store){const parts=version.split('.').map(Number);parts[2]++;const next=parts.join('.'),repository='OpenRotMG/Open-RotMG-Single-Player';super(version,target,async()=>new Response(JSON.stringify([{id:123,tag_name:'v'+next,url:'https://api.github.com/repos/'+repository+'/releases/123',draft:false,prerelease:false,body:'LAUNCHER_VERSION='+next,assets:[{name:'openrotmg-singleplayer-'+next+'-'+target+'.zip',size:1,browser_download_url:'https://github.com/'+repository+'/releases/download/v'+next+'/openrotmg-singleplayer-'+next+'-'+target+'.zip'}]}])),store);}};`}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.evaluate(()=>window.launcher.updates())).phase==='service','controlled update service refusal');
    userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,profile);report.userData=userData;
    assert.equal(await app.evaluate(()=>process.resourcesPath),resources);assert.equal(await app.evaluate(()=>process.execPath),executable);
@@ -92,12 +94,10 @@ async function journey(){
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
   check('Settings shows numbered source commits instead of full hashes',/Server commit #\d+ · Client commit #\d+/.test(await page.locator('#update-installed').textContent()));
   await page.locator('#check-launcher').click();await wait(async()=>await page.locator('#download-launcher').isVisible(),'separate launcher update availability');
-  check('Launcher update availability and manual replacement steps do not claim a game update succeeded',await page.locator('#launcher-update-steps').isVisible()&&/Could not check/.test(await page.locator('#update-message').innerText())&&/HTTP 503/.test(await page.locator('#logs').textContent()));
-  await app.evaluate(({shell})=>{globalThis.savedOpenExternal=shell.openExternal;shell.openExternal=async url=>{globalThis.launcherDownloadURL=url;};});
-  await page.locator('#download-launcher').click();await wait(async()=>!!await app.evaluate(()=>globalThis.launcherDownloadURL),'named launcher download');
-  assert.match(await app.evaluate(()=>globalThis.launcherDownloadURL),/^https:\/\/github.com\/OpenRotMG\/Open-RotMG-Single-Player\/releases\/download\/v[0-9.]+\/openrotmg-singleplayer-[0-9.]+-(linux-x64|win32-x64|darwin-arm64)\.zip$/);
-  await app.evaluate(({shell})=>{shell.openExternal=globalThis.savedOpenExternal;});
-  check('Launcher update uses only the exact official platform ZIP; export remains explicitly labeled',await page.locator('#help').textContent()==='Export live account');
+  check('Automatic launcher update availability does not claim a game update succeeded',await page.locator('#launcher-update-steps').isVisible()&&/Could not check/.test(await page.locator('#update-message').innerText())&&/HTTP 503/.test(await page.locator('#logs').textContent()));
+  assert.equal(await page.locator('#download-launcher').innerText(),'Update and reopen');
+  await page.locator('#download-launcher').click();await wait(async()=>(await page.evaluate(()=>window.launcher.launcherUpdates())).phase==='error','unavailable authenticated launcher metadata is rejected');
+  check('Unavailable launcher authentication fails before shutdown or replacement; export remains explicitly labeled',(await page.evaluate(()=>window.launcher.status())).pid===undefined&&await page.locator('#help').textContent()==='Export live account');
   await page.screenshot({path:join(out,'launcher-settings.png')});
   await app.evaluate(async()=>{await globalThis.setupRuntime.idleOperation('Prepare test startup before spawn',()=>globalThis.setupUpdates.beforeStart(true));await globalThis.setupUpdates.check();});
   await wait(async()=>await page.locator('#import').isDisabled(),'import blocked before first protected startup');
@@ -148,10 +148,13 @@ async function journey(){
   const replacementRoot=report.installations.at(-1).path;
   await rmdir(join(replacementRoot,'player data'));await rename(profile,join(replacementRoot,'player data'));use(replacementRoot);
   assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
-  restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();game=undefined;await close();
+  restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();const progress=game;game=undefined;await close();
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
+  await restoreProtection();restoreProtection=undefined;
+  await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
   report.status='passed';
  }catch(error){
+  if(app)report.launcherOutput={stderr:app.stderr(),stdout:app.stdout()};
   if(page&&!page.isClosed())try{report.failureView=await page.evaluate(async()=>({runtime:await window.launcher.status(),updates:await window.launcher.updates(),error:document.getElementById('error').textContent}));await page.screenshot({path:join(out,'launcher-failure.png')});}catch(capture){report.errors.push('Failure capture: '+String(capture));}
   if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{

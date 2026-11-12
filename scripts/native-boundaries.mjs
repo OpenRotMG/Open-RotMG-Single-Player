@@ -31,9 +31,11 @@ export async function protectInstallation(path) {
     return protectWindowsInstallation(postorder,sid,windowsPowerShellExecutable());
   }
   const {chmod}=await import('node:fs/promises');
-  const visit=async file=>{const info=await lstat(file);if(info.isSymbolicLink())return;if(info.isDirectory())for(const name of await readdir(file))await visit(join(file,name));await chmod(file,info.mode&~0o222);};
-  await visit(path);
-  return async()=>{};
+  const modes=[];
+  const visit=async file=>{const info=await lstat(file);if(info.isSymbolicLink())return;modes.push([file,info.mode&0o777]);if(info.isDirectory())for(const name of await readdir(file))await visit(join(file,name));await chmod(file,info.mode&~0o222);};
+  const restore=async()=>{const errors=[];for(const [file,mode]of modes)try{await chmod(file,mode);}catch(error){errors.push(error);}if(errors.length)throw new AggregateError(errors,'Install mode restoration failed');};
+  try{await visit(path);}catch(error){try{await restore();}catch(rollback){throw new AggregateError([error,rollback],'Install protection and mode restoration failed');}throw error;}
+  return restore;
 }
 export function protectWindowsInstallation(postorder,sid,engine,run=execFileSync) {
   assert(Array.isArray(postorder)&&postorder.length,'Pre-enumerated owned install paths required');

@@ -4,6 +4,8 @@ import {decodeJson, exact, hex, MAX_METADATA, REPOSITORY, Target, targetName, ve
 
 // Pinning this public key, rather than an environment setting, keeps a substituted origin from becoming trusted.
 export const MANIFEST_PUBLIC_KEY = '-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAS007dqkac8Tmb75dl8PkejOTeOREdBPEmyWo4tOQpbI=\n-----END PUBLIC KEY-----\n';
+export const LAUNCHER_PUBLIC_KEY = MANIFEST_PUBLIC_KEY;
+export function createLauncherPolicy(resources:string,launcher:string):UpdatePolicy{return {...createUpdatePolicy(resources,launcher),publicKey:LAUNCHER_PUBLIC_KEY};}
 export type Baseline = {root:string; mode:'source'|'release'; identitySha256:string; startupBackup:0|1; clientNamespace:0|1; manifest?:Uint8Array; signature?:Uint8Array};
 export type UpdatePolicy = {
   target:Target; launcher:string; baseline:Baseline; metadataBundle:{baseline:Baseline;publicKey:string;assetOrigin:string}; discovery:string; assetOrigin:string;

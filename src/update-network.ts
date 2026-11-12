@@ -67,7 +67,7 @@ async function consume(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum
   }finally{reader.releaseLock();}
   return total;
 }
-async function metadata(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum=MAX_METADATA):Promise<Buffer>{
+export async function metadata(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum=MAX_METADATA):Promise<Buffer>{
   const chunks:Buffer[]=[];await consume(url,policy,signal,maximum,policy.metadataDeadline,async bytes=>{chunks.push(Buffer.from(bytes));});return Buffer.concat(chunks);
 }
 export function assetURL(policy:UpdatePolicy,tag:string,name:string):string{
@@ -95,7 +95,7 @@ export async function discover(policy:UpdatePolicy,signal:AbortSignal,remember?:
   demand(manifest.payload.id===payload.id&&manifest.payload.name===payload.name&&manifest.payload.url===payload.browser_download_url&&manifest.payload.bytes===payload.size,'Signed payload does not belong to the resolved release generation');
   return{release,manifest,bytes,signature};
 }
-export async function downloadPayload(manifest:Manifest,path:string,policy:UpdatePolicy,signal:AbortSignal):Promise<void>{
+export async function downloadPayload(manifest:{payload:{url:string;bytes:number;sha256:string}},path:string,policy:UpdatePolicy,signal:AbortSignal):Promise<void>{
   const output=await open(path,'wx',0o600),hash=createHash('sha256');
   try{
     const size=await consume(manifest.payload.url,policy,signal,manifest.payload.bytes,policy.payloadDeadline,async bytes=>{

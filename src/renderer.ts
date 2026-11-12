@@ -6,7 +6,7 @@ declare global {
   interface Window { launcher: {
     minimize():Promise<void>; maximize():Promise<void>; close():Promise<void>;
     status():Promise<View>; start():Promise<void>; startInstalled():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
-    launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; downloadLauncher():Promise<void>;
+    launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
     updates():Promise<UpdateView>; checkUpdates():Promise<UpdateView>; retryUpdate():Promise<UpdateView>; recoverRuntime():Promise<UpdateView>; releases():Promise<void>; updatesChanged(callback:(view:UpdateView)=>void):void;
     importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
     makeBackup():Promise<SaveResult>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<SaveResult>; openBackupFolder():Promise<SaveResult>; restoreBackup(name?:string):Promise<SaveResult|undefined>;
@@ -39,7 +39,7 @@ const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee257220
 const commitNumber=(sha:string,count?:number)=>count!==undefined?`commit #${count}`:Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
 const runtimeSummary=(value:RuntimeSummary)=>`${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server,value.serverCount)} · Client ${commitNumber(value.client,value.clientCount)}`;
 function render(){
-  const v=runtimeView,u=updateView,busy=requesting||!v||Boolean(v.operation)||v.closing||['starting','stopping'].includes(v.status);
+  const v=runtimeView,u=updateView,busy=requesting||Boolean(launcherView?.blocked)||['downloading','installing'].includes(launcherView?.phase??'')||!v||Boolean(v.operation)||v.closing||['starting','stopping'].includes(v.status);
   const recovery=u?.phase==='recovery'||u?.phase==='initializing'||v?.status==='failed';
   button('play').disabled=busy||recovery||!u;
   button('play').textContent=v?.status==='starting'?'Preparing…':v?.status==='ready'?'Open game':u?.canPlayInstalled?'Play installed game':'Play';
@@ -61,6 +61,9 @@ function render(){
   button('check-launcher').disabled=requesting||!launcherView||launcherView.phase==='checking'||Boolean(v?.closing);
   button('download-launcher').hidden=launcherView?.phase!=='available';button('download-launcher').disabled=requesting||Boolean(v?.closing);
   element('launcher-update-steps').hidden=launcherView?.phase!=='available';
+  button('recover-launcher').hidden=!launcherView?.blocked;button('recover-launcher').disabled=requesting||Boolean(v?.closing);
+  if(launcherView?.blocked)element('home-result').textContent='Check launcher files in Settings → Updates.';
+  else if(element('home-result').textContent==='Check launcher files in Settings → Updates.')element('home-result').textContent='';
   element('status').textContent=v?statusMessages[v.status]:'Loading…';
   element('diagnostics').textContent=v?.diagnostics??'';
   const link=element<HTMLAnchorElement>('client-url');link.hidden=v?.status!=='ready'||!v.clientURL;link.textContent=v?.clientURL?new URL(v.clientURL).origin+'/':'';link.href=link.textContent;
@@ -69,7 +72,8 @@ function render(){
   element('update-available').textContent=u?.available?`Available: ${runtimeSummary(u.available)}`:'';
   element('update-message').textContent=updateMessage();
   element('launcher-version').textContent=launcherView?.installed??'';
-  element('launcher-update-message').textContent=!launcherView?'':launcherView.phase==='checking'?'Checking…':launcherView.phase==='error'?'Could not check. Try again.':launcherView.phase==='available'?'Update available.':launcherView.phase==='current'?'Up to date.':'';
+  const launcherMessages:Record<LauncherUpdateView['phase'],string>={idle:'',checking:'Checking…',error:'Update did not finish. See Advanced → Logs.',available:'Update available.',current:'Up to date.',downloading:'Downloading and checking…',installing:'Saving and reopening…',recovery:'Check launcher files before playing.'};
+  element('launcher-update-message').textContent=launcherView?launcherMessages[launcherView.phase]:'';
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
@@ -135,9 +139,10 @@ button('retry-update').onclick=()=>void invoke(async()=>{updateView=await window
 for(const id of ['recover-runtime','home-recovery'])button(id).onclick=()=>void invoke(async()=>{updateView=await window.launcher.recoverRuntime();await refreshBackups();});
 button('runtime-releases').onclick=()=>void invoke(()=>window.launcher.releases());
 button('check-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.checkLauncher();});
-button('download-launcher').onclick=()=>void invoke(()=>window.launcher.downloadLauncher());
+button('download-launcher').onclick=()=>void invoke(()=>window.launcher.installLauncher());
+button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.recoverLauncher();element('home-result').textContent='Launcher files checked. You can play.';});
 for(const id of ['technical','log-filter','log-search'])element(id).addEventListener(id==='log-search'?'input':'change',renderLogs);
 button('copy-logs').onclick=()=>void invoke(async()=>{try{await navigator.clipboard.writeText(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){element('copy-result').textContent='Could not copy. Select the log text and copy it.';throw error;}});
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
-window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.updatesChanged(view=>{updateView=view;render();});
-void invoke(async()=>{runtimeView=await window.launcher.status();updateView=await window.launcher.updates();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();});
+window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.updatesChanged(view=>{updateView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
+void invoke(async()=>{runtimeView=await window.launcher.status();updateView=await window.launcher.updates();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});

@@ -19,7 +19,7 @@ test('service refusal is explicit installed-version Play, with technical details
  f.change({status:'stopped',operation:'Import player'});for(const id of ['check-updates','play-installed','retry-update','recover-runtime'])assert(f.element(id).disabled,id);
 });
 test('launcher update and signed game update controls stay separate; guarded retry and fixed releases action remain available',async()=>{
- const f=await rendererFixture();f.launcher.checkLauncher=async()=>({installed:'0.1.3',available:'0.1.4',phase:'available',message:'Launcher update available'});f.launcher.downloadLauncher=async()=>f.calls.push(['download-launcher']);
+ const f=await rendererFixture();f.launcher.checkLauncher=async()=>({installed:'0.1.3',available:'0.1.4',phase:'available',message:'Launcher update available'});f.launcher.installLauncher=async()=>f.calls.push(['download-launcher']);
  f.update({phase:'service',message:'Game HTTP 503',canPlayInstalled:true});f.element('check-launcher').onclick();await tick();assert.equal(f.element('launcher-version').textContent,'0.1.3');assert.equal(f.element('download-launcher').hidden,false);assert.equal(f.element('launcher-update-steps').hidden,false);assert.match(f.element('logs').textContent,/Game HTTP 503/);
  f.element('download-launcher').onclick();await tick();assert.deepEqual(f.calls,[['download-launcher']]);
  f.update({phase:'launcher',canPlayInstalled:true});assert.equal(f.element('runtime-releases').hidden,false);f.element('runtime-releases').onclick();await tick();assert.deepEqual(f.calls.at(-1),['releases']);
