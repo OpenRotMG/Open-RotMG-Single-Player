@@ -5,7 +5,7 @@ import fs, {mkdir,mkdtemp,writeFile,readFile,readdir,stat,chmod} from 'node:fs/p
 import {join,resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Runtime} from '../dist/runtime.js';
-import {SaveControls,saveAuthority,checkedPassword,importPreview,snapshotPreview} from '../dist/saves.js';
+import {SaveControls,saveAuthority,checkedPassword,importPreview,snapshotPreview,isBackupName} from '../dist/saves.js';
 
 // This executable tests transport/lifecycle only, never claims Rust save or packaged acceptance.
 const executable=String.raw`#!${process.execPath}
@@ -84,7 +84,7 @@ test('save external allocation change refuses stale preview and cleans staging w
  await assert.rejects(readFile(join(f.resources,'imported.json')),/ENOENT/);assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
 });
 test('save full snapshots accumulate eight distinct private files without account export size cap',posix,async()=>{
- const f=await fixture(),paths=[];for(let i=0;i<8;i++){const result=await f.saves.makeBackup();paths.push(result.path);assert.match(result.message,/2 accounts, 7 characters/);}
+ const f=await fixture(),paths=[];for(let i=0;i<8;i++){const result=await f.saves.makeBackup();paths.push(result.path);assert.equal(result.message,'Backup created.');}
  assert.equal(new Set(paths).size,8);assert.equal((await readdir(f.saves.backups)).length,8);
  for(const path of paths)assert.equal((await stat(path)).mode&0o077,0);
 });
@@ -102,6 +102,16 @@ test('save missing/malformed/oversize input and unwritable backups do not report
 test('save Open backup folder awaits actual adapter and rejects OS returned error',posix,async()=>{
  const f=await fixture();const result=await f.saves.openBackupFolder();assert.equal(result.path,f.opened());
  f.dialogs.openFolder=async()=> 'No associated file manager';await assert.rejects(f.saves.openBackupFolder(),/No associated file manager/);
+});
+test('backup history lists regular snapshots newest first; named restore never accepts paths or symlinks',posix,async()=>{
+ const f=await fixture(),first=await f.saves.makeBackup(),second=await f.saves.makeBackup();await fs.utimes(first.path,1,1);
+ await writeFile(join(f.saves.backups,'not-a-snapshot.txt'),'ignored');await fs.symlink(first.path,join(f.saves.backups,'linked.sqlite'));
+ const files=await f.saves.listBackups();assert.equal(files.length,2);assert.equal(files[0].name,second.path.split('/').at(-1));assert(files.every(file=>file.bytes>0&&file.modified>0));
+ for(const name of ['../outside.sqlite','C:outside.sqlite','sub\\\\file.sqlite','x\u0000.sqlite','not-a-snapshot.txt']){assert(!isBackupName(name));await assert.rejects(f.saves.restoreBackup(name),/regular file/);}
+ await assert.rejects(f.saves.restoreBackup('linked.sqlite'),/regular file/);f.confirm(true);const restored=await f.saves.restoreBackup(files[0].name);assert.match(restored.message,/original local logins and passwords/);
+});
+test('save location opener uses only the owned profile and propagates OS failures',posix,async()=>{
+ const f=await fixture();const result=await f.saves.openSaveFolder();assert.equal(result.path,f.user);assert.equal(f.opened(),f.user);f.dialogs.openFolder=async()=> 'OS refusal';await assert.rejects(f.saves.openSaveFolder(),/OS refusal/);
 });
 test('save close awaits owned child work, cancels pending preview, and refuses new Start synchronously',posix,async()=>{
  const f=await fixture();await f.saves.beginImport();let closed=false;const close=f.runtime.close().then(()=>closed=true);
@@ -149,7 +159,7 @@ test('save restore refuses copying a live SQLite checkpoint with committed WAL b
 });
 test('save structured unchanged failure is safely retryable after the prerequisite is fixed',posix,async()=>{
  const f=await fixture();await f.control({fail:true});await assert.rejects(f.saves.makeBackup(),/Destination game save unchanged; output\/backup files may exist/);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- await f.control({});assert.match((await f.saves.makeBackup()).message,/Backup saved/);
+ await f.control({});assert.equal((await f.saves.makeBackup()).message,'Backup created.');
 });
 test('save unknown/malformed/missing/mismatched failure envelopes durably block replay without stderr guessing',posix,async()=>{
  for(const control of [{unknown:true},{noAck:true},{invalidUtf8:true},{fail:true,failureEnvelope:{protocol:2}},{fail:true,failureEnvelope:{operation:'restore'}},{fail:true,failureEnvelope:{outcome:'rolled-back'}},{fail:true,failureEnvelope:{error:''}},{fail:true,failureEnvelope:{extra:'unexpected'}}]){
@@ -160,7 +170,7 @@ test('save early stdin EPIPE is retryable only after real close and a valid unch
  const f=await fixture();await f.control({fail:true});const original=processes.spawn;let closed=false;
  t.mock.method(processes,'spawn',(...args)=>{const child=original(...args),end=child.stdin.end.bind(child.stdin);child.once('close',()=>closed=true);child.stdin.end=(...values)=>{process.nextTick(()=>child.stdin.emit('error',Object.assign(Error('early refusal EPIPE'),{code:'EPIPE'})));return end(...values);};return child;});
  await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/Destination game save unchanged/);assert(closed);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- t.mock.restoreAll();await f.control({});assert.match((await f.saves.makeBackup()).message,/Backup saved/);
+ t.mock.restoreAll();await f.control({});assert.equal((await f.saves.makeBackup()).message,'Backup created.');
 });
 test('save non-EPIPE stdin failure cannot be rescued by an unchanged acknowledgement',posix,async t=>{
  const f=await fixture();await f.control({fail:true});const original=processes.spawn;

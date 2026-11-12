@@ -8,6 +8,9 @@ async function invoke(channel:string,...args:unknown[]){
   return reply.value;
 }
 contextBridge.exposeInMainWorld('launcher', Object.freeze({
+  minimize: () => invoke('window:minimize'),
+  maximize: () => invoke('window:maximize'),
+  close: () => invoke('window:close'),
   status: () => invoke('runtime:status'),
   start: () => invoke('runtime:start'),
   startInstalled: () => invoke('runtime:start-installed'),
@@ -23,11 +26,14 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   client: () => invoke('runtime:client'),
   help: () => invoke('runtime:help'),
   importPlayer: () => invoke('save:import'),
-  confirmImport: (expected: string, password: string, confirmation: string, replace: boolean) => invoke('save:confirm-import', expected, password, confirmation, replace),
+  confirmImport: (expected: string, replace: boolean) => invoke('save:confirm-import', expected, replace),
   cancelImport: () => invoke('save:cancel-import'),
   makeBackup: () => invoke('save:backup'),
   openBackupFolder: () => invoke('save:folder'),
-  restoreBackup: () => invoke('save:restore'),
+  listBackups: () => invoke('save:list'),
+  saveLocation: () => invoke('save:location'),
+  openSaveFolder: () => invoke('save:open-location'),
+  restoreBackup: (name?: string) => name === undefined ? invoke('save:restore') : invoke('save:restore', name),
   updatesChanged: (callback:(view:UpdateView)=>void) => {
     ipcRenderer.on('update:changed',(_event,view:UpdateView)=>callback(view));
   },

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, open, rm, stat, realpath } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rm, stat, realpath, readdir, lstat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Runtime } from './runtime';
@@ -9,6 +9,8 @@ import {UserMessage} from './user-message';
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
 export type SaveResult = { message: string; path?: string; login?: string; disclosure?: string };
+export type BackupFile = { name: string; modified: number; bytes: number };
+export const isBackupName = (name: unknown): name is string => typeof name === 'string' && name.length <= 255 && /\.(sqlite|db)$/.test(name) && !/[<>:"|?*]/.test(name) && !/\p{Cc}/u.test(name) && !name.includes('/') && !name.includes('\\');
 export type SaveDialogs = {
   choose(kind: 'account' | 'snapshot', directory: string): Promise<string | undefined>;
   confirmRestore(preview: SnapshotPreview, path: string, modified: string): Promise<boolean>;
@@ -221,13 +223,23 @@ export class SaveControls {
       const {state, data} = this.runtime.runtimePaths(), path = this.backupPath('manual');
       const result = await saveAuthority(this.runtime, 'snapshot', [state, data, path]) as {snapshot: string; verified: boolean};
       if (result?.snapshot !== path || result.verified !== true) throw new Error(`Unverified snapshot outcome at ${path}; no backup success claimed`);
-      const preview = snapshotPreview(await saveAuthority(this.runtime, 'verify-snapshot', [path, data]));
-      return {message: `Backup saved · ${new Date().toLocaleString()} · ${preview.account_count} accounts, ${preview.character_count} characters. Includes your local passwords.`, path};
+      snapshotPreview(await saveAuthority(this.runtime, 'verify-snapshot', [path, data]));
+      return {message:'Backup created.', path};
     });
   }
-  restoreBackup(): Promise<SaveResult | undefined> {
+  async listBackups(): Promise<BackupFile[]> {
+    await this.backupDirectory();
+    const entries = await readdir(this.backups, {withFileTypes:true});
+    const files = await Promise.all(entries.filter(entry => entry.isFile() && /\.(sqlite|db)$/.test(entry.name)).map(async entry => {
+      const info = await stat(join(this.backups, entry.name));
+      return {name:entry.name, modified:info.mtimeMs, bytes:info.size};
+    }));
+    return files.sort((a,b) => b.modified-a.modified || a.name.localeCompare(b.name));
+  }
+  restoreBackup(name?: string): Promise<SaveResult | undefined> {
     return this.runtime.stoppedOperation('Restore backup', async () => {
-      const source = await this.dialogs.choose('snapshot', this.backups);
+      if (name !== undefined && (!isBackupName(name) || !(await lstat(join(this.backups,name))).isFile())) throw new Error('Selected backup must be a regular file in the backup folder');
+      const source = name === undefined ? await this.dialogs.choose('snapshot', this.backups) : join(this.backups,name);
       if (!source) return undefined;
       return this.staged(source, 'snapshot', async (path, modified) => {
         const {state, data} = this.runtime.runtimePaths();
@@ -240,8 +252,15 @@ export class SaveControls {
           const error = new Error(`Restore outcome is unverified; retain state and ${backup}; do not retry.`);
           this.runtime.blockAmbiguousSave(error); throw error;
         }
-        return {message: 'Full local save restored, including all original local logins and passwords. The state just replaced is in the pre-restore backup.', path: backup};
+        return {message: 'Backup restored, including original local logins and passwords.', path: backup};
       });
+    });
+  }
+  openSaveFolder(): Promise<SaveResult> {
+    return this.runtime.stoppedOperation('Open save folder', async () => {
+      const error = await this.dialogs.openFolder(this.runtime.userData);
+      if (error) throw new Error(`Could not open save folder ${this.runtime.userData}: ${error}`);
+      return {message:'Save folder opened.',path:this.runtime.userData};
     });
   }
   openBackupFolder(): Promise<SaveResult> {
@@ -249,7 +268,7 @@ export class SaveControls {
       await this.backupDirectory();
       const error = await this.dialogs.openFolder(this.backups);
       if (error) throw new Error(`Could not open backup folder ${this.backups}: ${error}`);
-      return {message: 'Opened full local backup folder. Backups are never automatically deleted.', path: this.backups};
+      return {message: 'Backup folder opened.', path: this.backups};
     });
   }
 }

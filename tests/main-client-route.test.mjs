@@ -36,11 +36,11 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     const ipcRenderer={invoke:(channel,...args)=>Promise.resolve().then(()=>handlers.get(channel)(trusted(),...args)),on:(channel,callback)=>{assert(['runtime:changed','update:changed'].includes(channel));if(channel==='runtime:changed')changed=value=>callback({},value);}};
     runInNewContext(await source('src/preload.ts'),{exports:{},require:id=>{assert.equal(id,'electron');return {ipcRenderer,contextBridge:{exposeInMainWorld:(key,value)=>{assert.equal(key,'launcher');launcher=value;}}};}});
     assert(Object.isFrozen(launcher));
-    const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',disabled:false});return elements.get(id);}};
+    const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',value:'',disabled:false,checked:true,setAttribute(){},addEventListener(){}});return elements.get(id);}};
     runInNewContext(await source('src/renderer.ts'),{exports:{},URL,window:{launcher,addEventListener(){}},document});
     await new Promise(ok=>setImmediate(ok));
     for(status of ['stopped','starting','stopping','failed','ready']){changed(view());assert.equal(elements.get('client').disabled,status!=='ready');}
-    elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.match(elements.get('error').textContent,/Open Server logs/);assert(!elements.get('error').textContent.includes('actual shell rejection'));
+    elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.match(elements.get('error').textContent,/Advanced → Logs/);assert(!elements.get('error').textContent.includes('actual shell rejection'));
     electron.shell.openExternal=async url=>calls.push(url);elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.equal(elements.get('error').textContent,'');assert.equal(calls.at(-1),'http://127.0.0.1:47831/');
   });
 }

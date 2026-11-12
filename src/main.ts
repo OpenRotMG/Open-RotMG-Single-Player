@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import {realpath} from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Runtime } from './runtime';
-import { SaveControls } from './saves';
+import { SaveControls, isBackupName } from './saves';
 import { RuntimeUpdates } from './updates';
 import { createUpdatePolicy } from './update-policy';
 import { LauncherUpdates } from './launcher-updates';
@@ -29,13 +29,14 @@ else {
   const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
+  const importPassword = 'password';
   app.whenReady().then(async () => {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
     const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
     runtime = new Runtime(policy.baseline.root, userData);
     site = await gameSite(runtime);
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName());
-    window = new BrowserWindow({ width: 900, height: 700, title: 'Open RotMG Single Player',
+    window = new BrowserWindow({ width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
@@ -63,9 +64,12 @@ else {
       if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return (async()=>{
         try{return{ok:true,value:await action(...args)};}
-        catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish as expected. Open Server logs for the error details.'};}
+        catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
       })();
     });
+    checked('window:minimize', () => window!.minimize());
+    checked('window:maximize', () => { if(window!.isMaximized())window!.unmaximize();else window!.maximize(); });
+    checked('window:close', () => window!.close());
     checked('runtime:status', view);
     checked('runtime:start', () => runtime.start());
     checked('runtime:start-installed', () => {
@@ -87,11 +91,14 @@ else {
     });
     checked('runtime:help', () => shell.openExternal('https://openrotmg.org/export/'));
     checked('save:import', () => saves.beginImport());
-    checked('save:confirm-import', (expected, password, confirmation, replace) => saves.finishImport(expected, password, confirmation, replace), args => args.length === 4 && typeof args[0] === 'string' && /^[a-f0-9]{64}$/.test(args[0]) && typeof args[1] === 'string' && Buffer.byteLength(args[1]) <= 128 && typeof args[2] === 'string' && Buffer.byteLength(args[2]) <= 128 && typeof args[3] === 'boolean');
+    checked('save:confirm-import', (expected, replace) => saves.finishImport(expected, importPassword, importPassword, replace), args => args.length === 2 && typeof args[0] === 'string' && /^[a-f0-9]{64}$/.test(args[0]) && typeof args[1] === 'boolean');
     checked('save:cancel-import', () => saves.cancelImport());
     checked('save:backup', () => saves.makeBackup());
     checked('save:folder', () => saves.openBackupFolder());
-    checked('save:restore', () => saves.restoreBackup());
+    checked('save:list', () => saves.listBackups());
+    checked('save:location', () => runtime.userData);
+    checked('save:open-location', () => saves.openSaveFolder());
+    checked('save:restore', name => saves.restoreBackup(name as string | undefined), args => args.length === 0 || args.length === 1 && isBackupName(args[0]));
     runtime.on('change', () => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view()); });
     updates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('update:changed', view); });
     void updates.startup();
@@ -105,16 +112,16 @@ else {
     try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
     catch (error) {
       if (runtime.view().status !== 'failed') {
-        runtime.reportProblem(error);dialog.showErrorBox('The game could not close normally', 'The launcher will stay open. Check Server logs before trying again. Your save has not been confirmed.');
+        runtime.reportProblem(error);dialog.showErrorBox('The game could not close normally', 'The launcher will stay open. Check Advanced → Logs before trying again. Your save has not been confirmed.');
         return;
       }
       try { await runtime.verifyFailureGate(); }
       catch (persistenceError) {
-        runtime.reportProblem(persistenceError);dialog.showErrorBox('Please keep the launcher open', 'We could not record the save problem safely. Keep your player data folder and report the details in Server logs.');
+        runtime.reportProblem(persistenceError);dialog.showErrorBox('Please keep the launcher open', 'We could not record the save problem safely. Keep your player data folder and report the details in Advanced → Logs.');
         return;
       }
       // Keep the app and ownership alive while an unverified child may still be draining.
-      runtime.reportProblem(error);dialog.showErrorBox('Your save needs to be checked', 'We could not confirm that the last action finished safely. Keep your player data folder. Open Settings and choose Review recovery before playing again. Error details are in Server logs.');
+      runtime.reportProblem(error);dialog.showErrorBox('Your save needs to be checked', 'We could not confirm the last save. Keep your player data folder. Use Check save before playing again. Details are in Advanced → Logs.');
       if (!runtime.view().pid) { quitting = true; app.exit(1); }
     } finally { closing = false; }
   }
