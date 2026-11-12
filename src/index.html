@@ -1,25 +1,38 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'"><title>OpenRotMG Singleplayer</title><link rel="stylesheet" href="style.css"></head>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Open RotMG Single Player</title><link rel="stylesheet" href="style.css">
+</head>
 <body><main>
-<header><h1>Open RotMG <span>Singleplayer</span></h1><nav aria-label="Launcher"><button id="show-home" aria-label="Home" title="Home">Home</button><button id="show-logs" aria-label="Server logs" title="Server logs">Server logs</button><button id="show-settings" class="icon" aria-label="Settings" title="Settings">⚙</button></nav></header>
-<section id="server-status" aria-live="polite"><h2 id="status">STOPPED</h2><p id="message">Loading launcher…</p><p id="error" role="alert"></p></section>
+<div class="titlebar"><img src="assets/amulet.png" alt=""><span>Open RotMG Single Player</span><nav aria-label="Window"><button id="minimize" aria-label="Minimize" title="Minimize">_</button><button id="maximize" aria-label="Maximize or restore" title="Maximize or restore">□</button><button id="close-window" aria-label="Save and close" title="Save and close">×</button></nav></div>
+<header><div class="brand"><img src="assets/amulet.png" alt=""><h1>Open RotMG</h1></div><nav aria-label="Launcher"><button id="show-home" aria-current="page">Play</button><button id="show-settings" aria-label="Settings">Settings</button></nav></header>
+<div class="workspace">
+<p id="error" class="notice error" role="alert"></p>
 <div id="home-page">
-<h2>Play offline</h2>
-<p>Start your server, then open the game in your browser.</p>
-<nav class="actions"><button id="start" disabled>Start Server</button><button id="stop" disabled>Stop Server</button><button id="client" class="primary" disabled>Start Client</button></nav>
-<p><a id="client-url" hidden></a></p>
-<p class="hint">Stop Server saves your progress before closing.</p>
+<section class="hero"><img class="portal" src="assets/nexus-portal.png" alt="Nexus portal"><button id="play" class="primary" disabled>Play</button><p id="message" role="status">Loading…</p><progress id="progress" aria-label="Preparing game" hidden></progress><button id="home-stop" class="quiet" hidden>Save &amp; stop</button><button id="home-recovery" hidden>Check save…</button></section>
+<p id="home-result" class="feedback" role="status"></p>
+<section id="imported-account" class="group" hidden><div class="kv"><span>Local login</span><code id="account-login"></code></div><div class="kv"><span>Password</span><code>password</code></div></section>
+<nav class="shortcuts" aria-label="Tools"><button id="import" class="quiet" disabled>Import account…</button><button id="show-backups" class="quiet">Backups</button><button id="show-advanced" class="quiet">Advanced</button></nav>
 </div>
 <div id="settings-page" hidden>
-<h2>Settings</h2>
-<section><h3>Players and backups</h3>
-<button id="finish-update" hidden>Finish preparing game</button>
-<nav class="actions"><button id="import" disabled>Import player</button><button id="help" title="https://openrotmg.org/export/">Export live account</button><button id="backup" disabled>Make backup</button><button id="folder" disabled>Open backup folder</button><button id="restore" disabled>Restore backup</button></nav>
-<section id="import-preview" hidden aria-label="Import preview"><h3>Import player</h3><p id="import-summary"></p><label>Local login (select to copy)<input id="local-login" readonly autocomplete="off"></label><p id="replace-warning" role="alert" hidden>This player was imported before. Replacing it overwrites that player's local progress and password. Other local accounts stay intact. A full backup is made first.</p><label>New local password<input id="password" type="password" autocomplete="new-password" maxlength="128"></label><label>Confirm new password<input id="confirmation" type="password" autocomplete="new-password" maxlength="128"></label><p class="hint">Use this login and your new password in the local game. Your live account credentials do not transfer.</p><nav><button id="import-cancel">Cancel</button><button id="import-confirm">Import player</button></nav></section>
-<p id="save-result" role="status"></p></section>
-<section id="runtime-updates" aria-label="Server and client updates"><h3>Server + client</h3><p id="update-installed">Installed: checking…</p><p id="update-available"></p><p id="update-message" role="status">Checking for updates…</p><nav><button id="check-updates" disabled>Check server + client updates</button><button id="play-installed" hidden>Play installed version</button><button id="retry-update" hidden>Retry update</button><button id="recover-runtime" hidden>Review recovery</button><button id="runtime-releases" hidden>Launcher downloads</button></nav></section>
-<section aria-label="Launcher updates"><h3>Launcher</h3><p id="launcher-version"></p><p id="launcher-update-message" role="status"></p><nav><button id="check-launcher" disabled>Check launcher updates</button><button id="download-launcher" hidden>Download launcher update</button></nav><p id="launcher-update-steps" class="hint" hidden>Stop the server and close the launcher. Extract the new ZIP, then replace its empty player data folder with your existing one.</p></section>
+<nav class="tabs" role="tablist" aria-label="Settings"><button id="tab-backups" role="tab" aria-controls="backups-page" aria-selected="true">Backups</button><button id="tab-updates" role="tab" aria-controls="updates-page" aria-selected="false" tabindex="-1">Updates</button><button id="tab-advanced" role="tab" aria-controls="advanced-page" aria-selected="false" tabindex="-1">Advanced</button></nav>
+<section id="backups-page" role="tabpanel" aria-labelledby="tab-backups">
+<section class="group"><div class="section-head"><h3>Backups</h3><button id="backup" disabled>Back up now</button></div><p>All local accounts and progress.</p><div class="backup-table"><table><thead><tr><th scope="col"><span class="sr-only">Select</span></th><th scope="col">Created</th><th scope="col">Reason</th></tr></thead><tbody id="backup-list"></tbody></table></div><p id="backup-empty">Loading backups…</p><nav class="between"><button id="restore" disabled>Restore selected…</button><button id="folder" class="quiet" disabled>Open backup folder</button></nav><button id="restore-other" class="quiet" disabled>Choose another backup…</button><p id="save-result" class="feedback" role="status"></p></section>
+<section class="group"><h3>Save location</h3><code id="save-location" class="path"></code><button id="save-folder" disabled>Open save folder</button><p id="location-result" class="feedback" role="status"></p></section>
+</section>
+<section id="updates-page" role="tabpanel" aria-labelledby="tab-updates" hidden>
+<div class="columns"><section id="runtime-updates" class="group" aria-label="Server and client updates"><h3>Server + client</h3><p id="update-version" class="version"></p><p id="update-message" class="setting-status" role="status">Loading…</p><nav><button id="check-updates" disabled>Check for updates</button><button id="play-installed" hidden>Play installed game</button><button id="retry-update" hidden>Retry update</button><button id="recover-runtime" hidden>Check save…</button><button id="runtime-releases" hidden>Launcher downloads</button></nav><details><summary>Version details</summary><div><p id="update-installed"></p><p id="update-available"></p></div></details></section>
+<section class="group" aria-label="Launcher updates"><h3>Launcher</h3><p id="launcher-version" class="version"></p><p id="launcher-update-message" class="setting-status" role="status"></p><nav><button id="check-launcher" disabled>Check for updates</button><button id="download-launcher" hidden>Download…</button></nav><div id="launcher-update-steps" hidden><ol><li>Save, stop, and close the launcher.</li><li>Extract the new ZIP into a separate folder.</li><li>Copy <b>player data</b> into its empty player data folder.</li><li>Open the new launcher.</li></ol><p>Keep the old folder until you have checked your progress.</p></div></section></div>
+</section>
+<section id="advanced-page" role="tabpanel" aria-labelledby="tab-advanced" hidden>
+<section class="group"><div class="section-head"><h3>Server</h3><span id="status" class="version">Stopped</span></div><nav><button id="start" disabled>Start</button><button id="stop" disabled>Save &amp; stop</button></nav><details><summary>Connection</summary><p><a id="client-url" hidden></a></p><button id="client" disabled>Open game</button></details></section>
+<section id="logs-page" class="group"><div class="section-head"><h3>Logs</h3><button id="copy-logs">Copy log</button></div><label class="check"><input id="technical" type="checkbox" checked> Technical details</label><div class="logtools"><select id="log-filter" aria-label="Log level"><option value="all">All events</option><option value="problems">Warnings &amp; errors</option></select><input id="log-search" aria-label="Search logs" placeholder="Search logs"></div><pre id="logs" tabindex="0" aria-label="Server logs"></pre><p id="copy-result" class="feedback" role="status"></p><details><summary>Log location</summary><code id="diagnostics" class="path"></code></details></section>
+</section>
 </div>
-<div id="logs-page" hidden><h2>Server logs</h2><p id="diagnostics"></p><pre id="logs" aria-label="Server logs"></pre></div>
-<footer>Open RotMG · 2012 Realm of the Mad God reimplementation</footer>
-</main><script type="module" src="renderer.js"></script></body></html>
+</div>
+</main>
+<dialog id="import-preview" aria-labelledby="import-title"><h2 id="import-title">Import account?</h2><p id="import-summary"></p><section class="group"><label>Local login<input id="local-login" readonly autocomplete="off"></label><div class="kv"><span>Password (always)</span><code id="import-password">password</code></div></section><p id="replace-warning" hidden>Replaces this account’s local progress and password. Other local accounts stay intact.</p><p>All local data is backed up first.</p><p id="import-error" class="error" role="alert"></p><nav class="dialog-actions"><button id="help" class="quiet">Export live account</button><button id="import-cancel">Cancel</button><button id="import-confirm">Back up &amp; import</button></nav></dialog>
+<script type="module" src="renderer.js"></script>
+</body></html>

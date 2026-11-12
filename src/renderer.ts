@@ -1,160 +1,143 @@
 import type { View } from './runtime';
-import type { ImportPreview, SaveResult } from './saves';
+import type { ImportPreview, SaveResult, BackupFile } from './saves';
 import type { UpdateView, RuntimeSummary } from './updates';
 import type { LauncherUpdateView } from './launcher-updates';
 declare global {
   interface Window { launcher: {
-    status(): Promise<View>; start(): Promise<void>; startInstalled():Promise<void>; stop(): Promise<void>; client(): Promise<void>; help(): Promise<void>;
-    launcherUpdates():Promise<LauncherUpdateView>;checkLauncher():Promise<LauncherUpdateView>;downloadLauncher():Promise<void>;
-    updates():Promise<UpdateView>;checkUpdates():Promise<UpdateView>;retryUpdate():Promise<UpdateView>;recoverRuntime():Promise<UpdateView>;releases():Promise<void>;updatesChanged(callback:(view:UpdateView)=>void):void;
-    importPlayer(): Promise<ImportPreview | undefined>; confirmImport(expected: string, password: string, confirmation: string, replace: boolean): Promise<SaveResult | undefined>; cancelImport(): Promise<boolean>;
-    makeBackup(): Promise<SaveResult>; openBackupFolder(): Promise<SaveResult>; restoreBackup(): Promise<SaveResult | undefined>;
-    changed(callback: (view: View) => void): void;
+    minimize():Promise<void>; maximize():Promise<void>; close():Promise<void>;
+    status():Promise<View>; start():Promise<void>; startInstalled():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
+    launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; downloadLauncher():Promise<void>;
+    updates():Promise<UpdateView>; checkUpdates():Promise<UpdateView>; retryUpdate():Promise<UpdateView>; recoverRuntime():Promise<UpdateView>; releases():Promise<void>; updatesChanged(callback:(view:UpdateView)=>void):void;
+    importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
+    makeBackup():Promise<SaveResult>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<SaveResult>; openBackupFolder():Promise<SaveResult>; restoreBackup(name?:string):Promise<SaveResult|undefined>;
+    changed(callback:(view:View)=>void):void;
   } }
 }
-const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
-const start = element<HTMLButtonElement>('start'), stop = element<HTMLButtonElement>('stop'), client = element<HTMLButtonElement>('client');
-const password = element<HTMLInputElement>('password'), confirmation = element<HTMLInputElement>('confirmation');
-let preview: ImportPreview | undefined;
-let submitting = false;
-let runtimeView:View|undefined, updateView:UpdateView|undefined,launcherView:LauncherUpdateView|undefined;
-let actionError='';
-const finishSetup='Click Start Server to finish preparing the game. Import and backups will be available when it finishes.';
-function renderDetails(){
-  element('logs').textContent=[runtimeView?.message,updateView?.message,launcherView?.message,...(runtimeView?.logs??[]),actionError].filter(Boolean).join('\n');
+const element = <T extends HTMLElement>(id:string):T => { const node=document.getElementById(id);if(!node)throw Error('Missing launcher control: '+id);return node as T; };
+const button = (id:string) => element<HTMLButtonElement>(id);
+const pages=['backups','updates','advanced'] as const;
+type Page = 'home'|typeof pages[number];
+let page:Page='home',runtimeView:View|undefined,updateView:UpdateView|undefined,launcherView:LauncherUpdateView|undefined;
+let preview:ImportPreview|undefined,requesting=false,submitting=false,actionError='',backups:BackupFile[]=[],selectedBackup:string|undefined,backupRequest=0;
+const statusMessages:Record<View['status'],string>={stopped:'Stopped',starting:'Preparing game…',ready:'Running',stopping:'Saving…',failed:'Save unconfirmed'};
+function updateMessage(){
+  const u=updateView;if(!u)return 'Loading…';
+  if(u.needsStart)return 'Play will prepare the game.';
+  const messages:Record<UpdateView['phase'],string>={initializing:'Loading…',checking:'Checking…',downloading:'Downloading update…',staged:'Update downloaded. Save and stop to prepare it.',activating:'Backing up and preparing…',ready:'Up to date.',unavailable:'Cannot connect. Try again.',service:'Could not check. Try again.',rejected:'Update could not be verified. See Advanced → Logs.',launcher:'A newer launcher is required.',recovery:'Check your save before continuing.',canceled:'Canceled. Play when you are ready.'};
+  // Playable readiness alone says nothing about whether the public release was checked.
+  return u.phase==='ready'?(u.message==='Matches the published server + client release.'?'Up to date.':u.installed?.kind==='source'?'Source build.':'Ready.'):messages[u.phase];
 }
-function renderMessage(){
-  const v=runtimeView;if(!v)return;
-  const messages:Record<View['status'],string>={stopped:'Server stopped.',starting:'Preparing the game and checking your save. Please wait…',ready:'Your server is ready.',stopping:'Saving your progress and stopping the server…',failed:'Your save needs to be checked. Open Settings and choose Review recovery.'};
-  element('message').textContent=v.closing?'Saving your progress and closing…':v.operation?'Please wait while the current action finishes.':updateView?.phase==='recovery'?'Your save needs to be checked. Open Settings and choose Review recovery.':v.status==='stopped'&&updateView?.needsStart?finishSetup:messages[v.status];
+function renderLogs(){
+  const technical=element<HTMLInputElement>('technical').checked;
+  const lines=technical?[runtimeView?.message,updateView?.message,launcherView?.message,...(runtimeView?.logs??[]),actionError]:[runtimeView?statusMessages[runtimeView.status]:'Loading…',updateMessage(),launcherView?.message,actionError];
+  const query=element<HTMLInputElement>('log-search').value.toLowerCase(),problems=element<HTMLSelectElement>('log-filter').value==='problems';
+  const selected=lines.filter((line):line is string=>Boolean(line)).join('\n').split('\n').filter(line=>line.toLowerCase().includes(query)&&(!problems||/error|fail|warn|unverified|refus|reject|unknown/i.test(line)));
+  element('logs').textContent=selected.length?selected.join('\n'):'No matching events.';
 }
-function clearPasswords() { password.value = ''; confirmation.value = ''; }
-function render(view: View) {
-  runtimeView=view;
-  element('status').textContent = view.status.toUpperCase();
-  renderMessage();
-  element('diagnostics').textContent = `Detailed logs: ${view.diagnostics}`;
-  renderDetails();
-  const link=element<HTMLAnchorElement>('client-url');
-  link.hidden=view.status!=='ready'||!view.clientURL;
-  link.textContent=view.clientURL?new URL(view.clientURL).origin+'/':'';
-  link.href=link.textContent;
-  const busy = !!view.operation || view.closing;
-  if (view.closing || (submitting && !view.operation)) hidePreview();
-  start.disabled = busy || view.status !== 'stopped';
-  stop.disabled = busy || !['starting', 'ready'].includes(view.status);
-  client.disabled = busy || view.status !== 'ready';
-  for (const id of ['import', 'backup', 'folder', 'restore']) element<HTMLButtonElement>(id).disabled = busy || !['stopped', 'ready'].includes(view.status);
-  updateButtons();
-  if(launcherView)renderLauncher(launcherView);
-}
-function updateButtons(){
-  const v=runtimeView,u=updateView,busy=!v||!!v.operation||v.closing||['starting','stopping'].includes(v.status);
-  if(v){
-    const recovery=u?.phase==='recovery'||u?.phase==='initializing';start.disabled=busy||v.status!=='stopped'||recovery;
-    for(const id of ['import','backup','folder','restore'])element<HTMLButtonElement>(id).disabled=busy||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
-  }
-  element<HTMLButtonElement>('finish-update').hidden=!u?.needsStart;
-  element<HTMLButtonElement>('finish-update').disabled=busy||v?.status!=='stopped';
-  element<HTMLButtonElement>('check-updates').disabled=busy||!u||['initializing','checking','downloading','activating'].includes(u.phase);
-  element<HTMLButtonElement>('play-installed').hidden=!u?.canPlayInstalled;
-  element<HTMLButtonElement>('play-installed').disabled=busy||v?.status!=='stopped';
-  element<HTMLButtonElement>('retry-update').hidden=!u?.canRetry;
-  element<HTMLButtonElement>('retry-update').disabled=busy||v?.status!=='stopped';
-  element<HTMLButtonElement>('recover-runtime').hidden=!u?.canRecover;
-  element<HTMLButtonElement>('recover-runtime').disabled=busy||!v||!['stopped','failed'].includes(v.status)||v.pid!==undefined;
-  element<HTMLButtonElement>('runtime-releases').hidden=u?.phase!=='launcher';
-  element<HTMLButtonElement>('runtime-releases').disabled=!!v?.closing;
-}
-// The historical release omitted counts; retain its verified labels without an online lookup.
+// These signed historical manifests predate authenticated commit-count metadata.
 const commitNumbers:Record<string,number>={'2c700135d755a4210c2204334aafee2572205ec1':2542,'d3016983e6fa807be8bf700001e0ba2cf0fc2a7e':88};
 const commitNumber=(sha:string,count?:number)=>count!==undefined?`commit #${count}`:Object.hasOwn(commitNumbers,sha)?`commit #${commitNumbers[sha]}`:'commit number unavailable';
-function runtimeSummary(value:RuntimeSummary){return `${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server,value.serverCount)} · Client ${commitNumber(value.client,value.clientCount)}`;}
-function renderUpdates(view:UpdateView){
-  updateView=view;
-  element('update-installed').textContent=view.installed?`Installed: ${runtimeSummary(view.installed)}`:'Installed: checking…';
-  element('update-available').textContent=view.available?`Available: ${runtimeSummary(view.available)}`:'';
-  const messages:Record<UpdateView['phase'],string>={initializing:'Preparing your game…',checking:'Checking for game updates…',downloading:'Downloading and checking the game update…',staged:'The update is downloaded. It will be installed after the current action finishes.',activating:'Backing up your save and preparing the game…',ready:view.message,unavailable:'Could not connect to check for game updates. You can choose Play installed version if it is available.',service:'Could not check for game updates. Try later, or choose Play installed version if it is available.',rejected:'This update could not be checked safely. You can choose Play installed version if it is available. Error details are in Server logs.',launcher:'This game update needs a newer launcher. Click Launcher downloads to get it.',recovery:'Your save needs to be checked before you continue. Click Review recovery. Keep your player data folder.',canceled:'Startup canceled. Click Start Server when you are ready.'};
-  element('update-message').textContent=view.needsStart?finishSetup:messages[view.phase];
-  renderMessage();renderDetails();
-  element('update-message').className=['service','rejected','launcher','recovery'].includes(view.phase)?'error':'hint';updateButtons();
+const runtimeSummary=(value:RuntimeSummary)=>`${value.version}${value.kind==='source'?' (source build)':''}\nServer ${commitNumber(value.server,value.serverCount)} · Client ${commitNumber(value.client,value.clientCount)}`;
+function render(){
+  const v=runtimeView,u=updateView,busy=requesting||!v||Boolean(v.operation)||v.closing||['starting','stopping'].includes(v.status);
+  const recovery=u?.phase==='recovery'||u?.phase==='initializing'||v?.status==='failed';
+  button('play').disabled=busy||recovery||!u;
+  button('play').textContent=v?.status==='starting'?'Preparing…':v?.status==='ready'?'Open game':u?.canPlayInstalled?'Play installed game':'Play';
+  element('message').textContent=v?.closing?'Saving and closing…':v?.status==='failed'||u?.phase==='recovery'?'Last save unconfirmed.':v?.status==='starting'?'Checking your save…':v?.status==='stopping'?'Saving your progress…':u?.needsStart?'Play will prepare the game.':!u||u.phase==='initializing'?'Loading…':'';
+  element('progress').hidden=!v||!['starting','stopping'].includes(v.status);
+  button('home-recovery').hidden=!u?.canRecover;button('home-recovery').disabled=busy||v?.pid!==undefined;
+  button('home-stop').hidden=v?.status!=='ready';button('home-stop').disabled=busy;
+  button('start').disabled=busy||v?.status!=='stopped'||recovery;
+  button('stop').disabled=busy||!v||!['starting','ready'].includes(v.status);
+  button('client').disabled=busy||v?.status!=='ready';
+  const saveBlocked=busy||!v||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
+  for(const id of ['import','backup','folder','restore-other','save-folder'])button(id).disabled=saveBlocked;
+  button('restore').disabled=saveBlocked||!selectedBackup;
+  button('check-updates').disabled=busy||!u||['initializing','checking','downloading','activating'].includes(u.phase);
+  button('play-installed').hidden=!u?.canPlayInstalled;button('play-installed').disabled=busy||v?.status!=='stopped';
+  button('retry-update').hidden=!u?.canRetry;button('retry-update').disabled=busy||v?.status!=='stopped';
+  button('recover-runtime').hidden=!u?.canRecover;button('recover-runtime').disabled=busy||!v||!['stopped','failed'].includes(v.status)||v.pid!==undefined;
+  button('runtime-releases').hidden=u?.phase!=='launcher';button('runtime-releases').disabled=Boolean(v?.closing);
+  button('check-launcher').disabled=requesting||!launcherView||launcherView.phase==='checking'||Boolean(v?.closing);
+  button('download-launcher').hidden=launcherView?.phase!=='available';button('download-launcher').disabled=requesting||Boolean(v?.closing);
+  element('launcher-update-steps').hidden=launcherView?.phase!=='available';
+  element('status').textContent=v?statusMessages[v.status]:'Loading…';
+  element('diagnostics').textContent=v?.diagnostics??'';
+  const link=element<HTMLAnchorElement>('client-url');link.hidden=v?.status!=='ready'||!v.clientURL;link.textContent=v?.clientURL?new URL(v.clientURL).origin+'/':'';link.href=link.textContent;
+  element('update-version').textContent=u?.installed?.version??'';
+  element('update-installed').textContent=u?.installed?`Installed: ${runtimeSummary(u.installed)}`:'Checking…';
+  element('update-available').textContent=u?.available?`Available: ${runtimeSummary(u.available)}`:'';
+  element('update-message').textContent=updateMessage();
+  element('launcher-version').textContent=launcherView?.installed??'';
+  element('launcher-update-message').textContent=!launcherView?'':launcherView.phase==='checking'?'Checking…':launcherView.phase==='error'?'Could not check. Try again.':launcherView.phase==='available'?'Update available.':launcherView.phase==='current'?'Up to date.':'';
+  if(v?.closing||(submitting&&!v?.operation))hidePreview();
+  renderLogs();
 }
-function renderLauncher(view:LauncherUpdateView){
-  launcherView=view;element('launcher-version').textContent=`Installed: ${view.installed}`;
-  element('launcher-update-message').textContent=view.phase==='error'?'Could not check for launcher updates. Check your internet connection and try again.':view.message;
-  renderDetails();
-  element('launcher-update-message').className=view.phase==='error'?'error':'hint';
-  element<HTMLButtonElement>('check-launcher').disabled=view.phase==='checking'||!!runtimeView?.closing;
-  element<HTMLButtonElement>('download-launcher').hidden=view.phase!=='available';
-  element<HTMLButtonElement>('download-launcher').disabled=!!runtimeView?.closing;
-  element('launcher-update-steps').hidden=view.phase!=='available';
+function reportError(error:unknown){actionError=String(error);const message=error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
+async function invoke(action:()=>Promise<unknown>){
+  if(requesting)return;
+  requesting=true;actionError='';element('error').textContent='';element('import-error').textContent='';render();
+  try{await action();}catch(error){reportError(error);}finally{requesting=false;render();}
 }
-const invoke = (action: () => Promise<unknown>) => { element('error').textContent = ''; void action().catch(error => { actionError=String(error);renderDetails();element('error').textContent = error instanceof Error?error.message:String(error); }); };
-function result(value: SaveResult | undefined) {
-  if (value) element('save-result').textContent = [value.message, value.disclosure, value.path].filter(Boolean).join('\n');
+function showPage(next:Page){
+  page=next;element('home-page').hidden=page!=='home';element('settings-page').hidden=page==='home';
+  for(const name of pages){element(`${name}-page`).hidden=page!==name;button(`tab-${name}`).setAttribute('aria-selected',String(page===name));button(`tab-${name}`).tabIndex=page===name?0:-1;}
+  button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-settings').setAttribute('aria-current',page!=='home'?'page':'false');
+  if(page==='backups')void refreshBackups().catch(reportError);
 }
-function hidePreview() { preview = undefined; clearPasswords(); element('import-preview').hidden = true; }
-function showPage(page:'home'|'settings'|'logs') {
-  for(const name of ['home','settings','logs']) element(`${name}-page`).hidden=name!==page;
-  if(page!=='settings')clearPasswords();
-}
-element('show-home').onclick=()=>showPage('home');
-element('show-settings').onclick=()=>showPage('settings');
-element('show-logs').onclick=()=>showPage('logs');
-element('client-url').onclick=event=>{event.preventDefault();invoke(()=>window.launcher.client());};
-start.onclick = () => invoke(() => window.launcher.start());
-element('finish-update').onclick=()=>{showPage('home');invoke(()=>window.launcher.start());};
-stop.onclick = () => invoke(() => window.launcher.stop());
-client.onclick = () => invoke(() => window.launcher.client());
-element('help').onclick = () => invoke(() => window.launcher.help());
-element('import').onclick = () => invoke(async () => {
-  hidePreview(); element('save-result').textContent = '';
-  const selected = await window.launcher.importPlayer();
-  if (!selected) return;
-  preview = selected; clearPasswords();
-  element('import-summary').textContent = `${selected.name} · exported ${new Date(selected.exported_at * 1000).toLocaleString()} · ${selected.character_count} characters (including past characters)\n${selected.disclosure}`;
-  element<HTMLInputElement>('local-login').value = selected.login;
-  element('replace-warning').hidden = !selected.replaced;
-  element('import-confirm').textContent = selected.replaced ? 'Back up and replace this player' : 'Import player';
-  element('import-preview').hidden = false;
-});
-element('import-confirm').onclick = () => invoke(async () => {
-  if (!preview || submitting) return;
-  const selected = preview;
-  submitting = true;
-  element<HTMLButtonElement>('import-confirm').disabled = true;
-  element<HTMLButtonElement>('import-cancel').disabled = true;
-  let outcome: Promise<SaveResult | undefined>;
-  try {
-    outcome = window.launcher.confirmImport(selected.expected, password.value, confirmation.value, selected.replaced);
-    clearPasswords();
-    result(await outcome); hidePreview();
-  } finally {
-    clearPasswords(); submitting = false;
-    element<HTMLButtonElement>('import-confirm').disabled = false;
-    element<HTMLButtonElement>('import-cancel').disabled = false;
+async function refreshBackups(){
+  const request=++backupRequest,files=await window.launcher.listBackups();if(request!==backupRequest)return;
+  backups=files;if(!files.some(file=>file.name===selectedBackup))selectedBackup=files[0]?.name;
+  const list=element('backup-list');list.replaceChildren();
+  for(const file of files){
+    const row=document.createElement('tr'),select=document.createElement('td'),date=document.createElement('td'),name=document.createElement('td'),radio=document.createElement('input');
+    radio.type='radio';radio.name='backup';radio.checked=file.name===selectedBackup;radio.setAttribute('aria-label',`${new Date(file.modified).toLocaleString()} · ${file.name}`);
+    radio.onchange=()=>{selectedBackup=file.name;render();};select.append(radio);
+    date.textContent=new Date(file.modified).toLocaleString();name.textContent='Other file';
+    for(const [part,label] of [['manual','Manual backup'],['pre-import','Before import'],['pre-replace','Before replacement'],['pre-restore','Before restore'],['pre-update','Before update'],['pre-start','Before starting'],['recovery-current','After save check']])if(file.name.includes(`-${part}-`)){name.textContent=label;break;}
+    row.setAttribute('data-backup',file.name);name.title=`${file.name} · ${file.bytes} bytes`;row.append(select,date,name);list.append(row);
   }
+  element('backup-empty').hidden=files.length>0;element('backup-empty').textContent='No backups yet.';render();
+}
+function hidePreview(){preview=undefined;const modal=element<HTMLDialogElement>('import-preview');if(modal.open)modal.close();}
+async function play(installed=false){if(runtimeView?.status!=='ready'){if(installed)await window.launcher.startInstalled();else await window.launcher.start();}await window.launcher.client();}
+function result(value:SaveResult|undefined,target='save-result'){if(value){element(target).textContent=[value.message,value.disclosure].filter(Boolean).join('\n');element(target).title=value.path??'';}}
+async function saveAction(action:()=>Promise<SaveResult|undefined>,target='save-result'){element(target).textContent='';result(await action(),target);await refreshBackups();}
+button('show-home').onclick=()=>showPage('home');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-advanced').onclick=()=>showPage('advanced');
+for(const name of pages){button(`tab-${name}`).onclick=()=>showPage(name);button(`tab-${name}`).onkeydown=event=>{const index=pages.indexOf(name),next=event.key==='ArrowRight'?(index+1)%pages.length:event.key==='ArrowLeft'?(index+pages.length-1)%pages.length:event.key==='Home'?0:event.key==='End'?pages.length-1:undefined;if(next!==undefined){event.preventDefault();showPage(pages[next]);button(`tab-${pages[next]}`).focus();}};}
+button('play').onclick=()=>void invoke(()=>play(Boolean(updateView?.canPlayInstalled)));
+button('start').onclick=()=>void invoke(()=>window.launcher.start());
+for(const id of ['stop','home-stop'])button(id).onclick=()=>void invoke(async()=>{await window.launcher.stop();element('home-result').textContent='Saved and stopped.';await refreshBackups();});
+button('client').onclick=()=>void invoke(()=>window.launcher.client());
+element('client-url').onclick=event=>{event.preventDefault();void invoke(()=>window.launcher.client());};
+button('help').onclick=()=>void invoke(()=>window.launcher.help());
+button('import').onclick=()=>void invoke(async()=>{
+  hidePreview();const selected=await window.launcher.importPlayer();if(!selected)return;
+  preview=selected;element('import-summary').textContent=`${selected.name} · ${selected.character_count} characters · ${new Date(selected.exported_at*1000).toLocaleDateString()}`;
+  element<HTMLInputElement>('local-login').value=selected.login;element('replace-warning').hidden=!selected.replaced;
+  element<HTMLDialogElement>('import-preview').showModal();button('import-cancel').focus();
 });
-element('import-cancel').onclick = () => invoke(async () => {
-  if (submitting) return;
-  clearPasswords(); const canceled = await window.launcher.cancelImport(); hidePreview();
-  if (!canceled) throw new Error('No pending preview was canceled. The import may already have completed; inspect its outcome before trying again.');
+button('import-confirm').onclick=()=>void invoke(async()=>{
+  if(!preview||submitting)return;const selected=preview;submitting=true;button('import-confirm').disabled=true;button('import-cancel').disabled=true;
+  try{const imported=await window.launcher.confirmImport(selected.expected,selected.replaced);hidePreview();if(imported){element('account-login').textContent=imported.login!;element('imported-account').hidden=false;showPage('home');element('home-result').textContent='Account imported.';await refreshBackups();}}
+  finally{submitting=false;button('import-confirm').disabled=false;button('import-cancel').disabled=false;}
 });
-const saveAction = (action: () => Promise<SaveResult | undefined>) => invoke(async () => { element('save-result').textContent = ''; result(await action()); });
-element('backup').onclick = () => saveAction(() => window.launcher.makeBackup());
-element('folder').onclick = () => saveAction(() => window.launcher.openBackupFolder());
-element('restore').onclick = () => saveAction(() => window.launcher.restoreBackup());
-window.addEventListener('pagehide', clearPasswords);
-element('check-updates').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.checkUpdates()));
-element('play-installed').onclick=()=>invoke(()=>window.launcher.startInstalled());
-element('retry-update').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.retryUpdate()));
-element('recover-runtime').onclick=()=>invoke(async()=>renderUpdates(await window.launcher.recoverRuntime()));
-element('runtime-releases').onclick=()=>invoke(()=>window.launcher.releases());
-element('check-launcher').onclick=()=>invoke(async()=>{
-  renderLauncher({installed:launcherView!.installed,phase:'checking',message:'Checking launcher releases…'});
-  renderLauncher(await window.launcher.checkLauncher());
-});
-element('download-launcher').onclick=()=>invoke(()=>window.launcher.downloadLauncher());
-window.launcher.changed(render);
-window.launcher.updatesChanged(renderUpdates);
-invoke(async () => {render(await window.launcher.status());renderUpdates(await window.launcher.updates());renderLauncher(await window.launcher.launcherUpdates());});
+const cancelImport=()=>void invoke(async()=>{if(submitting)return;const canceled=await window.launcher.cancelImport();hidePreview();if(!canceled)throw Error('Import was already submitted. Check its outcome in Advanced → Logs before trying again.');});
+button('import-cancel').onclick=cancelImport;element<HTMLDialogElement>('import-preview').oncancel=event=>{event.preventDefault();cancelImport();};
+button('backup').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.makeBackup()));
+button('folder').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.openBackupFolder()));
+button('save-folder').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.openSaveFolder(),'location-result'));
+button('restore').onclick=()=>void invoke(async()=>{if(!selectedBackup||!backups.some(file=>file.name===selectedBackup))throw Error('Choose a backup first.');const restored=await window.launcher.restoreBackup(selectedBackup);result(restored);if(restored)element('imported-account').hidden=true;await refreshBackups();});
+button('restore-other').onclick=()=>void invoke(async()=>{const restored=await window.launcher.restoreBackup();result(restored);if(restored)element('imported-account').hidden=true;await refreshBackups();});
+button('check-updates').onclick=()=>void invoke(async()=>{updateView=await window.launcher.checkUpdates();});
+button('play-installed').onclick=()=>void invoke(async()=>{showPage('home');await play(true);});
+button('retry-update').onclick=()=>void invoke(async()=>{updateView=await window.launcher.retryUpdate();});
+for(const id of ['recover-runtime','home-recovery'])button(id).onclick=()=>void invoke(async()=>{updateView=await window.launcher.recoverRuntime();await refreshBackups();});
+button('runtime-releases').onclick=()=>void invoke(()=>window.launcher.releases());
+button('check-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.checkLauncher();});
+button('download-launcher').onclick=()=>void invoke(()=>window.launcher.downloadLauncher());
+for(const id of ['technical','log-filter','log-search'])element(id).addEventListener(id==='log-search'?'input':'change',renderLogs);
+button('copy-logs').onclick=()=>void invoke(async()=>{try{await navigator.clipboard.writeText(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){element('copy-result').textContent='Could not copy. Select the log text and copy it.';throw error;}});
+for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
+window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.updatesChanged(view=>{updateView=view;render();});
+void invoke(async()=>{runtimeView=await window.launcher.status();updateView=await window.launcher.updates();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();});

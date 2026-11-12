@@ -258,7 +258,7 @@ export class RuntimeUpdates extends EventEmitter{
   async beforeSave(){
     await this.initialized();
     if(!this.current)throw new UserMessage('The game is still loading. Please wait before importing or making backups.');
-    if(this.transaction)throw new UserMessage(this.view().needsStart?'Click Start Server to finish preparing the game before importing or making backups.':'Your save needs to be checked first. Open Settings and choose Review recovery.');
+    if(this.transaction)throw new UserMessage(this.view().needsStart?'Click Play to prepare the game before importing or making backups.':'Check your save before continuing. Use Check save, or see Advanced → Logs.');
     await this.fence.requireClean(select(this.current));
   }
   async authorityStarting(_command:string,binary:string){

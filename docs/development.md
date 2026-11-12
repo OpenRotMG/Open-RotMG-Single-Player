@@ -8,7 +8,7 @@ Packaged builds run from the portable ZIP: the `OpenRotMG Singleplayer` launcher
 
 Stop and Close/Quit request durable shutdown through a private pipe. A launcher crash also closes that pipe so the server can drain. Failed shutdowns are not save success: the launcher blocks mutation and records `shutdown-failed.json`. If that record cannot be written, it keeps ownership and shows the error. Preserve the save and diagnostics for investigation. Never delete `state/state.lock` to override a running server.
 
-Options imports a credential-free player export with a new local password. Import/restore stop the server and validate privately staged input through the bundled server's `--local-save` authority. Replacements and restores require a verified full pre-operation backup. Full local snapshots in `userData/backups/` include all accounts and original local credentials, not downloaded assets, logs or control files. Manual snapshots accumulate without automatic deletion. Keep backups private.
+Import uses a credential-free account export and the fixed local password displayed in its confirmation. Existing accounts keep their passwords unless explicitly replaced. Import/restore stop the server and validate privately staged input through the bundled server's `--local-save` authority. Replacements and restores require a verified full pre-operation backup. Full local snapshots in `userData/backups/` include all accounts and original local credentials, not downloaded assets, logs or control files. Manual snapshots accumulate without automatic deletion. Keep backups private.
 
 ## Native builds and tests
 
@@ -40,7 +40,7 @@ npm run package
 
 Retain the entire `out/Open RotMG Single Player-PLATFORM-ARCH/` directory, including Electron licenses and runtime notices. `npm run package:test` drives the packaged launcher and actual game, including inventory mutation, restart, connected-parent crash and failure cases. Its explicit managed-browser and dedicated-CI modes are test infrastructure, not consumer capabilities. Receipts and screenshots stay in ignored `.qa/` output.
 
-The focused Linux save-controls gate is `npm run test:e2e -- --project=desktop`, after packaging the clean pinned generation. It requires explicit `OPENROTMG_BUILD_INPUTS`, an actual Phase 3 download in `OPENROTMG_SAVE_FIXTURE` with `OPENROTMG_SAVE_FIXTURE_SHA256`, a short owned on-disk `OPENROTMG_TEST_TMP_ROOT`, and the managed-browser environment described by `scripts/native-game.mjs`. Native dialog selections are declared only by the attached test process; there is no shipped renderer path override. This gate does not qualify other OSes, default-browser routing or installers.
+`npm run test:e2e -- ARTIFACT` runs the portable release gate (same as `verify:release`), requiring the adjacent installer receipt and a private display/session. Native chooser/confirmation fixtures belong only to the attached test process; no renderer path override ships.
 
 ## Validation limits
 

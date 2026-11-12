@@ -32,4 +32,5 @@ if(input.runtimeRelease!==undefined){
 }
 await writeFile('dist/runtime-baseline.json',JSON.stringify(baseline,null,2)+'\n');
 await cp('.qa/renderer/renderer.js','dist/renderer.js');for(const file of ['index.html','style.css','game.html','game.css'])await cp(`src/${file}`,`dist/${file}`);
+await cp('src/assets','dist/assets',{recursive:true});
 console.log(`Prepared explicit ${baseline.mode} baseline ${process.platform}/${process.arch}; identity ${baseline.identitySha256}`);
