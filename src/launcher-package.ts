@@ -1,9 +1,12 @@
-import {createReadStream} from 'node:fs';
-import {lstat,readdir,readlink,readFile,mkdir,chmod,open} from 'node:fs/promises';
-import {join,posix} from 'node:path';
+import type * as FileSystem from 'node:fs';
+// Electron virtualizes .asar as a directory; authentication must hash the actual archive bytes.
+export const disk:typeof FileSystem=process.versions.electron?require('original-fs'):require('node:fs');
+const {createReadStream,createWriteStream}=disk;
+const {lstat,readdir,readlink,readFile,mkdir,chmod,open,symlink}=disk.promises;
+import {join,posix,dirname} from 'node:path';
 import {createHash,createPublicKey,verify} from 'node:crypto';
-import {Parser,Unpack,ReadEntry} from 'tar';
-import {Transform,Writable} from 'node:stream';
+import {Parser,ReadEntry} from 'tar';
+import {Transform,Writable,Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {createGunzip} from 'node:zlib';
 import {Target,REPOSITORY,decodeJson,demand,exact,hex,integer,launcherVersion} from './update-format';
@@ -17,7 +20,7 @@ export const launcherAssetURL=(version:string,target:Target,suffix:string)=>`htt
 export function launcherPath(path:string,target:Target){
  demand(typeof path==='string'&&path.length<=1024&&!/[\\\x00-\x1f:]/.test(path)&&path===path.normalize('NFC'),'Unsafe launcher path');
  demand(path==='bootstrap'||path==='bootstrap.exe'||path==='app'||path.startsWith('app/'),'Launcher file is outside its package');
- for(const part of path.split('/'))demand(part&&part!=='.'&&part!=='..'&&!/[ .]$/.test(part)&&(target!=='win32-x64'||!/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)),'Unsafe launcher path component');
+ for(const part of path.split('/'))demand(part&&part!=='.'&&part!=='..'&&!/[ .]$/.test(part)&&(target!=='win32-x64'||!/[<>"|?*]/.test(part)&&!/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³]|conin\$|conout\$)(?:\.|$)/i.test(part)),'Unsafe launcher path component');
 }
 export function validateLauncherManifest(m:unknown,target:Target,version?:string):LauncherManifest{
  exact(m,'format,kind,version,target,bootstrap,source,payload,files','launcher manifest');const v=m as LauncherManifest;
@@ -25,12 +28,15 @@ export function validateLauncherManifest(m:unknown,target:Target,version?:string
  exact(v.payload,'name,url,bytes,sha256','launcher payload');demand(v.payload.name===launcherAsset(target,'tar.gz')&&v.payload.url===launcherAssetURL(v.version,target,'tar.gz')&&integer(v.payload.bytes,1,512*1024*1024)&&hex(v.payload.sha256),'Untrusted launcher payload');
  demand(Array.isArray(v.files)&&v.files.length>0&&v.files.length<=5000,'Launcher inventory exceeds bound');const entries=new Map<string,LauncherEntry>(),aliases=new Set<string>();let total=0;
  for(const e of v.files){launcherPath(e.path,target);demand(!aliases.has(e.path.toLowerCase()),'Duplicate/case-aliased launcher entry');aliases.add(e.path.toLowerCase());entries.set(e.path,e);demand([0o644,0o755,0o777].includes(e.mode),'Unsafe launcher mode');
-  if(e.type==='file'){exact(e,'path,type,mode,bytes,sha256','launcher file');demand(integer(e.bytes,0,1024*1024*1024)&&hex(e.sha256),'Invalid launcher file');total+=e.bytes!;}
-  else if(e.type==='directory')exact(e,'path,type,mode','launcher directory');
-  else{exact(e,'path,type,mode,link','launcher link');demand(e.type==='symlink'&&typeof e.link==='string'&&e.link.length<=1024&&!/[\\\x00-\x1f:]/.test(e.link)&&!posix.isAbsolute(e.link),'Unsafe launcher symlink');const resolved=posix.normalize(posix.join(posix.dirname(e.path),e.link!));demand(resolved.startsWith('app/'),'Launcher symlink escapes application');}
+  if(e.type==='file'){demand(e.mode===0o644||e.mode===0o755,'Unsafe launcher file mode');exact(e,'path,type,mode,bytes,sha256','launcher file');demand(integer(e.bytes,0,1024*1024*1024)&&hex(e.sha256),'Invalid launcher file');total+=e.bytes!;}
+  else if(e.type==='directory'){demand(e.mode===0o755,'Unsafe launcher directory mode');exact(e,'path,type,mode','launcher directory');}
+  else{exact(e,'path,type,mode,link','launcher link');demand(e.type==='symlink'&&e.mode===0o777&&typeof e.link==='string'&&e.link.length<=1024&&!/[\\\x00-\x1f:]/.test(e.link)&&!posix.isAbsolute(e.link),'Unsafe launcher symlink');const resolved=posix.normalize(posix.join(posix.dirname(e.path),e.link!));demand(resolved.startsWith('app/'),'Launcher symlink escapes application');}
  }
  demand(total>0&&total<=1024*1024*1024,'Expanded launcher exceeds bound');
  for(const e of v.files){let p=posix.dirname(e.path);while(p!=='.'){demand(entries.get(p)?.type==='directory','Launcher entry has missing/linked ancestor');p=posix.dirname(p);}}
+ function resolveLink(parts:string[],depth=0):string{demand(depth<=32,'Cyclic launcher symlink');const resolved:string[]=[];for(let i=0;i<parts.length;i++){const part=parts[i];if(part==='.')continue;if(part==='..'){demand(resolved.length>1,'Launcher symlink chain escapes application');resolved.pop();continue;}resolved.push(part);demand(resolved[0]==='app','Launcher symlink chain escapes application');const entry=entries.get(resolved.join('/'));demand(entry,'Dangling launcher symlink');if(entry.type==='symlink')return resolveLink([...resolved.slice(0,-1),...entry.link!.split('/'),...parts.slice(i+1)],depth+1);demand(i===parts.length-1||entry.type==='directory','Launcher symlink traverses a file');}return resolved.join('/');}
+ for(const e of v.files)if(e.type==='symlink')resolveLink(e.path.split('/'));
+ const appBase=target==='darwin-arm64'?'app/Open RotMG Single Player.app/Contents/':'app/',engine=appBase+(target==='darwin-arm64'?'MacOS/openrotmg-single-player':target==='win32-x64'?'openrotmg-single-player.exe':'openrotmg-single-player'),asar=appBase+(target==='darwin-arm64'?'Resources/app.asar':'resources/app.asar');demand(entries.get(engine)?.type==='file'&&(target==='win32-x64'||entries.get(engine)!.mode&0o111),'Launcher engine missing or not executable');demand(entries.get(asar)?.type==='file','Launcher application archive missing');
  demand(entries.get(target==='win32-x64'?'bootstrap.exe':'bootstrap')?.type==='file'&&entries.get('app')?.type==='directory','Incomplete launcher package');return v;
 }
 export function authenticateLauncher(bytes:Buffer,signature:Buffer,key:string,target:Target,version?:string){
@@ -48,8 +54,12 @@ export async function extractLauncher(archive:string,destination:string,m:Launch
  const run=async(s:Parser)=>{let bytes=0;const bound=new Transform({transform(chunk,_e,cb){bytes+=chunk.length;cb(bytes>expectedBytes+1024*(m.files.length+8)?Error('Launcher decompression limit exceeded'):null,chunk);}});await pipeline(createReadStream(archive),createGunzip(),bound,s as unknown as Writable);};
  await run(parse);demand(seen.size===expected.size&&expanded===expectedBytes,'Incomplete launcher archive');await mkdir(destination,{mode:0o700});
  seen.clear();expanded=0;
- const unpack=new Unpack({cwd:destination,strict:true,preservePaths:false,chmod:false,filter:(_p,e)=>{try{demand(e instanceof ReadEntry,'Unexpected launcher extraction entry');inspect(e);return true;}catch(error){unpack.abort(error as Error);return false;}}});unpack.on('meta',()=>unpack.abort(Error('Launcher archive changed after inspection')));unpack.on('ignoredEntry',()=>unpack.abort(Error('Special launcher extraction entry rejected')));await run(unpack);demand(seen.size===expected.size&&expanded===expectedBytes,'Launcher archive changed after inspection');
- for(const e of m.files)if(e.type!=='symlink'){await chmod(join(destination,e.path),e.mode);if(e.type==='file'){const f=await open(join(destination,e.path),'r');try{await f.sync();}finally{await f.close();}}}
+ const unpack=new Parser({strict:true,filter:(_p,e)=>{try{demand(e instanceof ReadEntry,'Unexpected launcher extraction entry');inspect(e);return true;}catch(error){unpack.abort(error as Error);return false;}}});
+ const writes:Promise<void>[]=[],active=new Set<ReadEntry>();let writeError:unknown;
+ unpack.on('entry',entry=>{active.add(entry);const item=expected.get(entry.path.replace(/\/$/,''))!,path=join(destination,item.path);const task=(async()=>{await mkdir(dirname(path),{recursive:true,mode:0o700});if(item.type==='directory')await mkdir(path,{recursive:true,mode:0o700});else if(item.type==='symlink')await symlink(item.link!,path);else await pipeline(entry as unknown as Readable,createWriteStream(path,{flags:'wx',mode:0o600}));if(item.type!=='file')entry.resume();})().catch(error=>{if(!writeError){writeError=error;unpack.abort(error as Error);}}).finally(()=>active.delete(entry));writes.push(task);});
+ unpack.on('meta',()=>unpack.abort(Error('Launcher archive changed after inspection')));unpack.on('ignoredEntry',()=>unpack.abort(Error('Special launcher extraction entry rejected')));
+ try{await run(unpack);}catch(error){writeError??=error;for(const entry of active)entry.destroy();throw error;}finally{await Promise.all(writes);}if(writeError)throw writeError;demand(seen.size===expected.size&&expanded===expectedBytes,'Launcher archive changed after inspection');
+ for(const e of m.files)if(e.type!=='symlink'){await chmod(join(destination,e.path),e.mode);if(e.type==='file'){const f=await open(join(destination,e.path),'r+');try{await f.sync();}finally{await f.close();}}}
  if(process.platform!=='win32')for(const e of [...m.files].reverse().filter(e=>e.type==='directory')){const f=await open(join(destination,e.path),'r');try{await f.sync();}finally{await f.close();}}
  await verifyLauncherTree(destination,m);
 }

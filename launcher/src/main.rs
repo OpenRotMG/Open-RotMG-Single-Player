@@ -14,7 +14,7 @@ fn app(root:&Path,id:&str)->PathBuf{let p=root.join("server data").join(if id=="
 fn script(exe:&Path)->PathBuf{exe.parent().unwrap().join(if cfg!(target_os="macos"){"../Resources/app.asar/dist/launcher-helper.js"}else{"resources/app.asar/dist/launcher-helper.js"})}
 fn sync_dir(path:&Path)->Result<(),String>{#[cfg(unix)]{File::open(path).and_then(|f|f.sync_all()).map_err(|e|format!("Cannot persist directory {}: {e}",path.display()))?;}Ok(())}
 fn durable_move(from:&Path,to:&Path,replace:bool)->Result<(),String>{
- #[cfg(windows)]{use std::os::windows::ffi::OsStrExt;use windows_sys::Win32::Storage::FileSystem::{MoveFileExW,MOVEFILE_REPLACE_EXISTING,MOVEFILE_WRITE_THROUGH};let wide=|p:&Path|p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();let a=wide(from);let b=wide(to);let flags=MOVEFILE_WRITE_THROUGH|if replace{MOVEFILE_REPLACE_EXISTING}else{0};if unsafe{MoveFileExW(a.as_ptr(),b.as_ptr(),flags)}==0{return Err(format!("Cannot publish {}: {}",to.display(),std::io::Error::last_os_error()))}}
+ #[cfg(windows)]{use std::os::windows::ffi::OsStrExt;use windows_sys::Win32::Storage::FileSystem::{MoveFileExW,MOVEFILE_REPLACE_EXISTING,MOVEFILE_WRITE_THROUGH};let wide=|p:&Path|p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();let a=wide(from);let b=wide(to);let flags=MOVEFILE_WRITE_THROUGH|if replace{MOVEFILE_REPLACE_EXISTING}else{0};let deadline=Instant::now()+Duration::from_secs(5);loop{if unsafe{MoveFileExW(a.as_ptr(),b.as_ptr(),flags)}!=0{break}let error=std::io::Error::last_os_error();if matches!(error.raw_os_error(),Some(32)|Some(33))&&Instant::now()<deadline{thread::sleep(Duration::from_millis(100));}else{return Err(format!("Cannot publish {}: {error}",to.display()))}}}
  #[cfg(unix)]{if !replace&&to.exists(){return Err(format!("Publication destination exists: {}",to.display()))}fs::rename(from,to).map_err(|e|format!("Cannot publish {}: {e}",to.display()))?;sync_dir(from.parent().unwrap())?;sync_dir(to.parent().unwrap())?;}
  Ok(())
 }
@@ -29,9 +29,12 @@ fn native(args:&[String])->Result<i32,String>{
 }
 fn handoff(root:&Path,from:&str)->Result<i32,String>{
  let tx=read(&root.join("server data/launcher-transaction.json"))?;let nonce=tx["nonce"].as_str().ok_or("Missing handoff nonce")?;if !token(nonce)||tx["phase"]!="armed"||tx["from"]!=from{return Err("Launcher handoff is not armed for this process".into())}
- let folder=root.join("server data/handoff").join(nonce);fs::create_dir_all(&folder).map_err(|e|e.to_string())?;let copied=folder.join(launcher());fs::copy(root.join(launcher()),&copied).map_err(|e|e.to_string())?;File::open(&copied).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;sync_dir(&folder)?;
+ let folder=root.join("server data/handoff").join(nonce);fs::create_dir_all(&folder).map_err(|e|e.to_string())?;let copied=folder.join(launcher());fs::copy(root.join(launcher()),&copied).map_err(|e|e.to_string())?;OpenOptions::new().read(true).write(true).open(&copied).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;sync_dir(&folder)?;
  let log=OpenOptions::new().create(true).append(true).open(folder.join("console.log")).map_err(|e|e.to_string())?;
- let mut child=Command::new(copied).args(["--launcher-handoff",root.to_str().ok_or("Non-UTF8 portable root")?,nonce,&std::process::id().to_string()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::from(log)).spawn().map_err(|e|format!("Cannot start update helper: {e}"))?;
+ let mut command=Command::new(copied);command.args(["--launcher-handoff",root.to_str().ok_or("Non-UTF8 portable root")?,nonce,&std::process::id().to_string()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::from(log));
+ // The original terminal may exit after handoff; it must not hang up the new supervisor.
+ #[cfg(unix)]{use std::os::unix::process::CommandExt;command.process_group(0);}
+ let mut child=command.spawn().map_err(|e|format!("Cannot start update helper: {e}"))?;
  let out=child.stdout.take().unwrap();let (send,receive)=std::sync::mpsc::channel();thread::spawn(move||{let mut line=String::new();let result=BufReader::new(out).read_line(&mut line).map(|_|line);let _=send.send(result);});let line=receive.recv_timeout(Duration::from_secs(10)).map_err(|e|format!("Update helper did not acknowledge ownership: {e}"))?.map_err(|e|e.to_string())?;if line.trim()!="ready"{return Err("Update helper rejected the handoff".into())}writeln!(child.stdin.take().unwrap(),"{nonce}").map_err(|e|e.to_string())?;Ok(0)
 }
 fn supervise(root:&Path,extra:&[String],health:Option<&str>)->Result<i32,String>{

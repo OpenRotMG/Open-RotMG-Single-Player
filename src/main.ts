@@ -100,7 +100,7 @@ else {
       finally{closing=false;}
     });
     checked('launcher:recover', () => launcherUpdates.recover());
-    checked('launcher:healthy', async () => {const operation=app.commandLine.getSwitchValue('launcher-update-health');if(operation&&launcherUpdates.view().blocked)await launcherUpdates.healthy(operation);});
+    checked('launcher:healthy', async () => {const operation=app.commandLine.getSwitchValue('launcher-update-health');if(operation&&launcherUpdates.view().blocked){await launcherUpdates.healthy(operation);try{await launcherUpdates.prune();}catch(error){runtime.reportProblem(new Error('Launcher update completed, but old code cleanup failed: '+String(error)));}}});
     checked('update:status', () => updates.view());
     checked('update:check', () => updates.check());
     checked('update:retry', () => updates.retry());

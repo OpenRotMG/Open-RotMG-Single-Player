@@ -19,6 +19,7 @@ export class LauncherUpdates extends EventEmitter {
   }
   async arm(prepared:{id:string;version:string}){demand(this.store&&this.state.phase==='installing','Launcher preparation is incomplete');return this.store.arm(prepared.id,prepared.version);}
   async healthy(operation:string){demand(this.store,'Missing portable launcher authority');await this.store.healthy(operation);this.state={installed:this.installed,phase:'current',message:`Launcher ${this.installed} updated.`,blocked:false};this.changed();}
+  async prune(){demand(this.store,'Missing portable launcher authority');await this.store.prune();}
   async recover(){demand(this.store&&!this.busy,'Launcher files cannot be checked during an update');await this.store.recover();this.state={installed:this.installed,phase:'idle',message:'Launcher files checked. The interrupted update was not replayed.',blocked:false};this.changed();return this.view();}
   failed(error:unknown){this.state.phase=this.state.blocked?'recovery':'error';this.state.message=`Launcher update failed: ${String(error)}`;this.changed();}
   download(){demand(this.state.phase==='available'&&this.downloadURL,'Check for a newer launcher before downloading');return this.downloadURL;}

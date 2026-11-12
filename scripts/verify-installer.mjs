@@ -154,6 +154,7 @@ async function journey(){
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
   report.status='passed';
  }catch(error){
+  if(app)report.launcherOutput={stderr:app.stderr(),stdout:app.stdout()};
   if(page&&!page.isClosed())try{report.failureView=await page.evaluate(async()=>({runtime:await window.launcher.status(),updates:await window.launcher.updates(),error:document.getElementById('error').textContent}));await page.screenshot({path:join(out,'launcher-failure.png')});}catch(capture){report.errors.push('Failure capture: '+String(capture));}
   if(error.windowsWriteProbe)(report.windowsWriteProbes??=[]).push(error.windowsWriteProbe);report.errors.push(String(error.stack??error));report.status='failed';process.exitCode=1;}
  finally{
