@@ -77,7 +77,8 @@ test('verify-installer explicitly selects nativeGame normal cache without browse
 test('offline installer workflow is manual, native-only, read-only and never signs/publishes or rebuilds runtime',async()=>{
  const workflow=await readFile('.github/workflows/offline-installers.yml','utf8'),producer=await readFile('scripts/installer-inputs.mjs','utf8'),verifier=await readFile('scripts/verify-installer.mjs','utf8');
  assert(workflow.includes('workflow_dispatch:'));assert(workflow.includes('[ubuntu-22.04, windows-2022, macos-15]'));assert(workflow.includes('contents: read'));assert(workflow.includes('actions: read'));assert(workflow.includes('persist-credentials: false'));
- for(const text of [workflow,producer])assert(!/RUNTIME_MANIFEST_SIGNING_KEY|secrets\.|contents: write|release upload|release create|cargo |ci-inputs\.mjs|ci-runtime-inputs\.mjs|releases\/latest/.test(text));
+ const nativeTests='cargo test --locked --manifest-path launcher/Cargo.toml';assert.equal(workflow.split(nativeTests).length,2);
+ for(const text of [workflow.replace(nativeTests,''),producer])assert(!/RUNTIME_MANIFEST_SIGNING_KEY|secrets\.|contents: write|release upload|release create|cargo |ci-inputs\.mjs|ci-runtime-inputs\.mjs|releases\/latest/.test(text));
  assert(workflow.includes('actions/upload-artifact@'));assert(workflow.includes('npm run verify:release'));
  assert(workflow.includes('for tool in Xvfb xauth dbus-run-session unzip zip; do command -v "$tool"; done'));assert(workflow.includes('playwright install chromium'));assert(!/apt-get|--with-deps|allow-unauthenticated|AllowInsecureRepositories|Verify-Peer=false/.test(workflow));
  assert(producer.includes('runtimeRelease:{manifest,signature,archive}'));assert(producer.includes('MANIFEST_PUBLIC_KEY'));

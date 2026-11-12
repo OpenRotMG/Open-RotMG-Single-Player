@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
-import {readFile,writeFile,readdir,lstat,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,readdir,lstat,mkdir,mkdtemp,rm} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {createPrivateKey,createPublicKey,sign} from 'node:crypto';
 import {hashFile,REPOSITORY,TARGETS} from '../dist/update-format.js';
 import {LAUNCHER_PUBLIC_KEY} from '../dist/update-policy.js';
-import {validateLauncherManifest,authenticateLauncher,LAUNCHER_DOMAIN,LAUNCHER_METADATA_LIMIT} from '../dist/launcher-package.js';
+import {extractLauncher,validateLauncherManifest,authenticateLauncher,LAUNCHER_DOMAIN,LAUNCHER_METADATA_LIMIT} from '../dist/launcher-package.js';
 let material=process.env.RUNTIME_MANIFEST_SIGNING_KEY;delete process.env.RUNTIME_MANIFEST_SIGNING_KEY;
 assert.equal(process.env.GITHUB_ACTIONS,'true');assert.equal(process.env.GITHUB_REF,'refs/heads/main');const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();assert.equal(process.env.GITHUB_SHA,head);assert.equal(execFileSync('git',['status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim(),'');
 const api=(path,...args)=>JSON.parse(execFileSync('gh',['api',path,...args],{maxBuffer:8*1024*1024})),version=JSON.parse(await readFile('package.json','utf8')).version;
@@ -17,7 +17,7 @@ async function validate(){
  const rows=[];
  for(const [os,target]of [['ubuntu-22.04','linux-x64'],['windows-2022','win32-x64'],['macos-15','darwin-arm64']]){
   const root=resolve('evidence',`offline-installer-${os}`),all=await files(root),results=all.filter(p=>p.endsWith('/installer-result.json'));assert.equal(results.length,1);const result=JSON.parse(await readFile(results[0],'utf8'));assert.equal(result.status,'passed');assert.deepEqual(result.errors,[]);assert(result.assertions.length>=44);assert.equal(result.launcherUpdate.status,'passed');assert.equal(result.launcherUpdate.from,version);assert.equal(result.launcherUpdate.target,target);assert.equal(result.delivery.installerSourceHead,head);assert.equal(result.delivery.target,target);
-  const folder=join(root,'installer-delivery'),manifestFile=join(folder,`launcher-${target}.json`),raw=await readFile(manifestFile);assert(raw.length<=LAUNCHER_METADATA_LIMIT);const manifest=validateLauncherManifest(JSON.parse(raw),target,version);assert.equal(manifest.source,head);const archive=join(folder,manifest.payload.name);assert.equal((await lstat(archive)).size,manifest.payload.bytes);assert.equal(await hashFile(archive),manifest.payload.sha256);
+  const folder=join(root,'installer-delivery'),manifestFile=join(folder,`launcher-${target}.json`),raw=await readFile(manifestFile);assert(raw.length<=LAUNCHER_METADATA_LIMIT);const manifest=validateLauncherManifest(JSON.parse(raw),target,version);assert.equal(manifest.source,head);const archive=join(folder,manifest.payload.name);assert.equal((await lstat(archive)).size,manifest.payload.bytes);assert.equal(await hashFile(archive),manifest.payload.sha256);const inspected=await mkdtemp(resolve('launcher-inspection-'));try{await extractLauncher(archive,join(inspected,'payload'),manifest);}finally{await rm(inspected,{recursive:true});}
   const assets=release.assets.filter(a=>a.name===manifest.payload.name);assert.equal(assets.length,1);assert.equal(assets[0].state,'uploaded');assert.equal(assets[0].size,manifest.payload.bytes);assert.equal(assets[0].digest,'sha256:'+manifest.payload.sha256);assert(release.assets.filter(a=>a.name===`launcher-${target}.json`).length<=1&&release.assets.filter(a=>a.name===`launcher-${target}.json.sig`).length<=1,'Duplicate launcher metadata assets');
   rows.push({target,manifestFile,archive,sha256:manifest.payload.sha256});
  }
