@@ -5,8 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { Runtime } from './runtime';
 import { SaveControls, isBackupName } from './saves';
 import { RuntimeUpdates } from './updates';
-import { createUpdatePolicy } from './update-policy';
+import { createUpdatePolicy,createLauncherPolicy } from './update-policy';
 import { LauncherUpdates } from './launcher-updates';
+import {LauncherStore} from './launcher-store';
 import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
 import {UserMessage} from './user-message';
@@ -35,7 +36,14 @@ else {
     const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
     runtime = new Runtime(policy.baseline.root, userData);
     site = await gameSite(runtime);
-    launcherUpdates = new LauncherUpdates(app.getVersion(),targetName());
+    const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
+    if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
+    const root=portableRoot?await realpath(portableRoot):undefined;
+    if(root&&userData!==await realpath(join(root,'player data')))throw Error('Launcher update ownership does not match player data');
+    const appPolicy=createLauncherPolicy(process.resourcesPath,app.getVersion());
+    const store=root?new LauncherStore({root,generation,installed:app.getVersion(),resources:process.resourcesPath,policy:appPolicy,native:join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer')}):undefined;
+    launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
+    await launcherUpdates.startup();
     window = new BrowserWindow({ width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -63,7 +71,11 @@ else {
     const checked = (channel: string, action: (...args: unknown[]) => unknown, valid: (args: unknown[]) => boolean = args => args.length === 0) => ipcMain.handle(channel, (event, ...args: unknown[]) => {
       if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return (async()=>{
-        try{return{ok:true,value:await action(...args)};}
+        try{
+          if(launcherUpdates.busy&&!['launcher:status','runtime:status','update:status','window:minimize','window:maximize',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserMessage('The launcher is updating. Please wait.');
+          if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','save:import','save:confirm-import','save:backup','save:restore'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
+          return{ok:true,value:await action(...args)};
+        }
         catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
       })();
     });
@@ -79,6 +91,16 @@ else {
     checked('launcher:status', () => launcherUpdates.view());
     checked('launcher:check', () => launcherUpdates.check());
     checked('launcher:download', () => shell.openExternal(launcherUpdates.download()));
+    checked('launcher:install', async () => {
+      try{
+        const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
+        await Promise.all([saves.cancelImport(),runtime.close()]);await site.close();
+        await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
+      }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The launcher update did not finish. Keep player data. See Advanced → Logs.');}
+      finally{closing=false;}
+    });
+    checked('launcher:recover', () => launcherUpdates.recover());
+    checked('launcher:healthy', async () => {const operation=app.commandLine.getSwitchValue('launcher-update-health');if(operation&&launcherUpdates.view().blocked)await launcherUpdates.healthy(operation);});
     checked('update:status', () => updates.view());
     checked('update:check', () => updates.check());
     checked('update:retry', () => updates.retry());
@@ -101,6 +123,7 @@ else {
     checked('save:restore', name => saves.restoreBackup(name as string | undefined), args => args.length === 0 || args.length === 1 && isBackupName(args[0]));
     runtime.on('change', () => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view()); });
     updates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('update:changed', view); });
+    launcherUpdates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('launcher:changed',view); });
     void updates.startup();
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
     void window.loadURL(index);

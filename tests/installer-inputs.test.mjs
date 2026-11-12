@@ -50,13 +50,13 @@ test('installer-inputs validates historical protected draft snapshot URLs withou
 });
 test('Forge only packages; no installer makers or OS signing are configured',()=>{
  const require=createRequire(import.meta.url),forge=require('../forge.config.js');
- assert.deepEqual(forge.makers,[]);assert.deepEqual(forge.packagerConfig.extraResource,['runtime']);assert(!forge.packagerConfig.osxSign&&!forge.packagerConfig.osxNotarize&&!forge.packagerConfig.windowsSign);
+ assert.deepEqual(forge.makers,[]);assert.deepEqual(forge.packagerConfig.extraResource,['runtime','launcher/THIRD-PARTY-NOTICES.txt']);assert(!forge.packagerConfig.osxSign&&!forge.packagerConfig.osxNotarize&&!forge.packagerConfig.windowsSign);
 });
 test('installedPaths puts the packaged app in server data and the profile in player data beside the launcher',()=>{
- assert.equal(installedPaths('/owned é','win32').executable,join('/owned é','server data/openrotmg-single-player.exe'));
+ assert.equal(installedPaths('/owned é','win32').executable,join('/owned é','server data/baseline/openrotmg-single-player.exe'));
  assert.equal(installedPaths('/owned é','win32').launcher,join('/owned é','OpenRotMG Singleplayer.exe'));
- assert.equal(installedPaths('/owned é','darwin').resources,join('/owned é','server data/Open RotMG Single Player.app/Contents/Resources'));
- assert.equal(installedPaths('/owned é','linux').resources,join('/owned é','server data/resources'));
+ assert.equal(installedPaths('/owned é','darwin').resources,join('/owned é','server data/baseline/Open RotMG Single Player.app/Contents/Resources'));
+ assert.equal(installedPaths('/owned é','linux').resources,join('/owned é','server data/baseline/resources'));
  assert.equal(installedPaths('/owned é','linux').player,join('/owned é','player data'));
 });
 test('installer maker precheck refuses a source preview or unsigned release metadata, without a production-key fixture',async()=>{

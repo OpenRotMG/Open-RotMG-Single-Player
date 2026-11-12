@@ -9,7 +9,7 @@ Select a dispatch ref matching `installer_sha` (full reviewed Git SHA), and supp
 - `OpenRotMG Singleplayer` (`.exe` on Windows): starts `server data`'s Electron app with `--user-data-dir=<game folder>/player data`, forwarding any other arguments. It execs on Linux/macOS and waits as the parent on Windows. Missing folders are reported, not guessed.
 - `README.txt` (`launcher/README.txt`).
 - `player data`: empty. Becomes the Electron userData: saves, backups, diagnostics and downloaded runtime generations. Moving it to a fresh extraction keeps everything.
-- `server data`: the Forge package (Electron, `resources/app.asar`, bundled runtime, licenses).
+- `server data`: initial Forge package under `baseline`, explicit launcher selection and native ownership lock; authenticated subsequent generations and handoff receipts remain here, never in the save database. The front door holds ownership through save/exit/activation/reopen. Its helper is copied outside the old application before the front door is replaced.
 
 The packaged app refuses to start without `--user-data-dir`, so opening the inner executable cannot silently use an OS profile. Targets: Ubuntu 22.04 x64, Windows x64 and Apple Silicon macOS. The selected macOS launcher is a plain binary run in Terminal; downloaded quarantine behavior is not qualified.
 
@@ -17,7 +17,7 @@ The packaged app refuses to start without `--user-data-dir`, so opening the inne
 
 Each Actions artifact contains the ZIP, `SHA256SUMS`, launcher corresponding source, exact pinned server/client source archives, licenses/notices, signed runtime metadata/signature, and `installer-receipt.json`. The existing game-art/audio/SWF rights caveat in `NOTICES.md` remains.
 
-Settings has independent **Server + client** and **Launcher** checks. Runtime checks use `releases/latest` and signed paired manifests, not moving source main. Launcher checks scan releases marked `LAUNCHER_VERSION=X.Y.Z` and offer the exact platform ZIP with manual replacement steps. The historical v0.1.0 package is explicitly recognized.
+Settings has independent **Server + client** and **Launcher** checks. Runtime checks still use `releases/latest` and their existing signed paired manifests. Launcher **Update and reopen** verifies a purpose-bound Ed25519 descriptor and complete archive, stages a separate generation, then uses the existing durable game close before a native helper replaces the front door and selection. Renderer health confirms the exact operation/version/player-data path. Interrupted handoffs block Play until explicit Check launcher files; no automatic replay or rollback. Initial0.1.3-and-older users need one manual ZIP upgrade to acquire this feature.
 
 Bump `package.json`/lock for each launcher release; create a new matching `vX.Y.Z` release, never replace a published version's ZIPs. Put `LAUNCHER_VERSION=X.Y.Z` on its own release-body line. A launcher-only release must use GitHub `make_latest:false` so old runtime-only checkers still resolve the latest signed runtime. A combined runtime/launcher release has both markers and all native-qualified signed runtime assets; only that release may become latest. Source changes alone are not published game updates.
 

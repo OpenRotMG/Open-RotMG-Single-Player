@@ -5,7 +5,7 @@ import {join,relative,isAbsolute} from 'node:path';
 import {launcherName,portableEntries,portableFolder,windowsTar} from './make-zip.mjs';
 
 export function installedPaths(root,platform=process.platform){
- const server=join(root,'server data'),app=platform==='darwin'?join(server,'Open RotMG Single Player.app'):server;
+ const server=join(root,'server data/baseline'),app=platform==='darwin'?join(server,'Open RotMG Single Player.app'):server;
  return {launcher:join(root,launcherName(platform)),player:join(root,'player data'),server,resources:join(app,platform==='darwin'?'Contents/Resources':'resources'),executable:join(app,platform==='darwin'?'Contents/MacOS/openrotmg-single-player':platform==='win32'?'openrotmg-single-player.exe':'openrotmg-single-player')};
 }
 export async function installArtifact(artifact,root,out){

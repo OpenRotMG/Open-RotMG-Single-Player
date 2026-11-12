@@ -85,6 +85,7 @@ async function collectInstaller(){
  const installers=(await walk('out/make')).filter(path=>path.endsWith('.zip'));assert.equal(installers.length,1,'Exactly one portable ZIP required');
  const name=`openrotmg-singleplayer-${(await json('package.json')).version}-${attribution.target}.zip`;await copyFile(installers[0],join(output,name));
  execFileSync('git',['archive','--format=tar.gz',`--output=${join(output,'launcher-source.tar.gz')}`,attribution.installerSourceHead]);
+ for(const suffix of ['json','tar.gz'])await copyFile(`out/make/launcher-${attribution.target}.${suffix}`,join(output,`launcher-${attribution.target}.${suffix}`));
  const sources=[];
  for(const kind of ['server','client']){
   const pin=attribution.pins[kind],repository=pin.repository.replace('https://github.com/',''),file=`${kind}-source-${pin.commit}.tar.gz`,fd=openSync(join(output,file),'wx');

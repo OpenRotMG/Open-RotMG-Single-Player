@@ -1,50 +1,58 @@
-// The portable ZIP keeps Electron's many sibling files in "server data"; this program is the one thing to open.
 #![windows_subsystem = "windows"]
-use std::{env, ffi::OsString, process::Command};
-
-fn fail(message: String) -> ! {
-    eprintln!("OpenRotMG Singleplayer: {message}");
-    #[cfg(windows)]
-    {
-        #[link(name = "user32")]
-        extern "system" {
-            fn MessageBoxW(window: *mut u8, text: *const u16, caption: *const u16, kind: u32) -> i32;
-        }
-        let wide = |text: &str| text.encode_utf16().chain([0]).collect::<Vec<u16>>();
-        unsafe { MessageBoxW(std::ptr::null_mut(), wide(&message).as_ptr(), wide("OpenRotMG Singleplayer").as_ptr(), 0x10) };
-    }
-    std::process::exit(1);
+use std::{env,fs::{self,File,OpenOptions},io::{BufRead,BufReader,Write},path::{Path,PathBuf},process::{Command,Stdio},thread,time::{Duration,Instant}};
+use fs2::FileExt;
+use serde_json::Value;
+const UPDATE_EXIT:i32=73;
+trait Canonical {fn portable_canonicalize(&self)->std::io::Result<PathBuf>;}
+impl<T:AsRef<Path>> Canonical for T {fn portable_canonicalize(&self)->std::io::Result<PathBuf>{dunce::canonicalize(self)}}
+fn launcher()->&'static str{if cfg!(windows){"OpenRotMG Singleplayer.exe"}else{"OpenRotMG Singleplayer"}}
+fn token(s:&str)->bool{s.len()==36&&s.bytes().all(|c|c.is_ascii_hexdigit()||c==b'-')}
+fn generation(s:&str)->bool{s=="baseline"||s.len()==66&&s.starts_with("g-")&&s[2..].bytes().all(|c|c.is_ascii_hexdigit())}
+fn read(path:&Path)->Result<Value,String>{let b=fs::read(path).map_err(|e|format!("Cannot read {}: {e}",path.display()))?;if b.len()>65536{return Err("Launcher record exceeds limit".into())}serde_json::from_slice(&b).map_err(|e|e.to_string())}
+fn selected(root:&Path)->Result<String,String>{let v=read(&root.join("server data/launcher-selection.json"))?;let s=v["generation"].as_str().ok_or("Missing launcher generation")?;if v["format"]!=1||!generation(s){return Err("Invalid launcher selection; keep player data and report this error".into())}Ok(s.to_owned())}
+fn app(root:&Path,id:&str)->PathBuf{let p=root.join("server data").join(if id=="baseline"{"baseline".to_owned()}else{format!("generations/{id}/payload/app")});if cfg!(target_os="macos"){p.join("Open RotMG Single Player.app/Contents/MacOS/openrotmg-single-player")}else{p.join(if cfg!(windows){"openrotmg-single-player.exe"}else{"openrotmg-single-player"})}}
+fn script(exe:&Path)->PathBuf{exe.parent().unwrap().join(if cfg!(target_os="macos"){"../Resources/app.asar/dist/launcher-helper.js"}else{"resources/app.asar/dist/launcher-helper.js"})}
+fn sync_dir(path:&Path)->Result<(),String>{#[cfg(unix)]{File::open(path).and_then(|f|f.sync_all()).map_err(|e|format!("Cannot persist directory {}: {e}",path.display()))?;}Ok(())}
+fn durable_move(from:&Path,to:&Path,replace:bool)->Result<(),String>{
+ #[cfg(windows)]{use std::os::windows::ffi::OsStrExt;use windows_sys::Win32::Storage::FileSystem::{MoveFileExW,MOVEFILE_REPLACE_EXISTING,MOVEFILE_WRITE_THROUGH};let wide=|p:&Path|p.as_os_str().encode_wide().chain(Some(0)).collect::<Vec<_>>();let a=wide(from);let b=wide(to);let flags=MOVEFILE_WRITE_THROUGH|if replace{MOVEFILE_REPLACE_EXISTING}else{0};if unsafe{MoveFileExW(a.as_ptr(),b.as_ptr(),flags)}==0{return Err(format!("Cannot publish {}: {}",to.display(),std::io::Error::last_os_error()))}}
+ #[cfg(unix)]{if !replace&&to.exists(){return Err(format!("Publication destination exists: {}",to.display()))}fs::rename(from,to).map_err(|e|format!("Cannot publish {}: {e}",to.display()))?;sync_dir(from.parent().unwrap())?;sync_dir(to.parent().unwrap())?;}
+ Ok(())
 }
-
-fn main() {
-    let program = env::current_exe().unwrap_or_else(|error| fail(format!("Cannot locate this program: {error}")));
-    let root = program.parent().unwrap_or_else(|| fail(format!("No folder contains {}", program.display())));
-    let player = root.join("player data");
-    let game = root.join("server data").join(if cfg!(target_os = "macos") {
-        "Open RotMG Single Player.app/Contents/MacOS/openrotmg-single-player"
-    } else if cfg!(windows) {
-        "openrotmg-single-player.exe"
-    } else {
-        "openrotmg-single-player"
-    });
-    for path in [&player, &game] {
-        if !path.exists() {
-            fail(format!("Missing {}\nKeep this program next to the \"player data\" and \"server data\" folders from the ZIP.", path.display()));
-        }
-    }
-    let mut profile = OsString::from("--user-data-dir=");
-    profile.push(&player);
-    let mut command = Command::new(&game);
-    command.arg(profile).args(env::args_os().skip(1));
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let error = command.exec();
-        fail(format!("Cannot start {}: {error}", game.display()));
-    }
-    #[cfg(windows)]
-    match command.status() {
-        Ok(status) => std::process::exit(status.code().expect("Windows exit statuses always carry a code")),
-        Err(error) => fail(format!("Cannot start {}: {error}", game.display())),
-    }
+fn lock(root:&Path,wait:bool)->Result<File,String>{let f=OpenOptions::new().read(true).write(true).create(true).truncate(false).open(root.join("server data/launcher.lock")).map_err(|e|format!("Cannot open launcher ownership: {e}"))?;let end=Instant::now()+Duration::from_secs(if wait{20}else{0});loop{match f.try_lock_exclusive(){Ok(())=>return Ok(f),Err(e)if e.kind()==std::io::ErrorKind::WouldBlock&&Instant::now()<end=>thread::sleep(Duration::from_millis(50)),Err(e)=>return Err(format!("The launcher is already open, updating, or this folder is not writable: {e}"))}}}
+fn safe_relative(s:&str)->bool{!s.is_empty()&&!s.contains('\\')&&!s.contains(':')&&s.split('/').all(|p|!p.is_empty()&&p!="."&&p!="..")}
+fn native(args:&[String])->Result<i32,String>{
+ if args.len()!=5{return Err("Invalid native publication arguments".into())}let root=PathBuf::from(&args[1]).portable_canonicalize().map_err(|e|e.to_string())?;let from=&args[2];let to=&args[3];let kind=&args[4];if !safe_relative(from)||!safe_relative(to){return Err("Unsafe launcher publication path".into())}
+ let a=root.join(from);let b=root.join(to);let parent=a.parent().ok_or("No source parent")?.portable_canonicalize().map_err(|e|e.to_string())?;let destination=b.parent().ok_or("No destination parent")?.portable_canonicalize().map_err(|e|e.to_string())?;let server=root.join("server data").portable_canonicalize().map_err(|e|e.to_string())?;
+ if !parent.starts_with(&server){return Err("Publication source is outside server data".into())}
+ let valid=match kind.as_str(){"record"=>destination==server&&["launcher-selection.json","launcher-transaction.json","launcher-result.json","launcher-floor.json"].contains(&b.file_name().and_then(|s|s.to_str()).unwrap_or("")),"generation"=>destination==server.join("generations")&&generation(b.file_name().and_then(|s|s.to_str()).unwrap_or("")),"bootstrap"=>b==root.join(launcher()),_=>false};if !valid{return Err("Refusing publication outside launcher-owned destinations".into())}
+ durable_move(&a,&b,kind!="generation")?;println!("{{\"committed\":true}}");Ok(0)
 }
+fn handoff(root:&Path,from:&str)->Result<i32,String>{
+ let tx=read(&root.join("server data/launcher-transaction.json"))?;let nonce=tx["nonce"].as_str().ok_or("Missing handoff nonce")?;if !token(nonce)||tx["phase"]!="armed"||tx["from"]!=from{return Err("Launcher handoff is not armed for this process".into())}
+ let folder=root.join("server data/handoff").join(nonce);fs::create_dir_all(&folder).map_err(|e|e.to_string())?;let copied=folder.join(launcher());fs::copy(root.join(launcher()),&copied).map_err(|e|e.to_string())?;File::open(&copied).and_then(|f|f.sync_all()).map_err(|e|e.to_string())?;sync_dir(&folder)?;
+ let log=OpenOptions::new().create(true).append(true).open(folder.join("console.log")).map_err(|e|e.to_string())?;
+ let mut child=Command::new(copied).args(["--launcher-handoff",root.to_str().ok_or("Non-UTF8 portable root")?,nonce,&std::process::id().to_string()]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::from(log)).spawn().map_err(|e|format!("Cannot start update helper: {e}"))?;
+ let out=child.stdout.take().unwrap();let (send,receive)=std::sync::mpsc::channel();thread::spawn(move||{let mut line=String::new();let result=BufReader::new(out).read_line(&mut line).map(|_|line);let _=send.send(result);});let line=receive.recv_timeout(Duration::from_secs(10)).map_err(|e|format!("Update helper did not acknowledge ownership: {e}"))?.map_err(|e|e.to_string())?;if line.trim()!="ready"{return Err("Update helper rejected the handoff".into())}writeln!(child.stdin.take().unwrap(),"{nonce}").map_err(|e|e.to_string())?;Ok(0)
+}
+fn supervise(root:&Path,extra:&[String],health:Option<&str>)->Result<i32,String>{
+ let id=selected(root)?;let player=root.join("player data").portable_canonicalize().map_err(|e|format!("Keep player data beside this program: {e}"))?;let exe=app(root,&id);if !exe.is_file(){return Err(format!("Selected launcher is missing: {}. Keep player data.",exe.display()))}
+ let mut c=Command::new(exe);c.current_dir(root).arg(format!("--user-data-dir={}",player.display())).arg(format!("--portable-root={}",root.display())).arg(format!("--launcher-generation={id}")).args(extra).env("OPENROTMG_BOOTSTRAP",root.join(launcher()));if let Some(nonce)=health{c.arg(format!("--launcher-update-health={nonce}"));let log=OpenOptions::new().create(true).append(true).open(root.join("server data/handoff").join(nonce).join("console.log")).map_err(|e|e.to_string())?;c.stdout(Stdio::from(log.try_clone().map_err(|e|e.to_string())?)).stderr(Stdio::from(log));}
+ let code=c.status().map_err(|e|format!("Cannot open selected launcher: {e}"))?.code().ok_or("Launcher exited without a normal status")?;if code==UPDATE_EXIT{handoff(root,&id)}else{Ok(code)}
+}
+fn run()->Result<i32,String>{
+ let args=env::args().skip(1).collect::<Vec<_>>();if args.as_slice()==["--launcher-version"]{println!("1 {}",env!("CARGO_PKG_VERSION"));return Ok(0)}if args.first().map(String::as_str)==Some("--launcher-publish"){return native(&args)}
+ if args.first().map(String::as_str)==Some("--launcher-handoff"){
+  if args.len()!=4||!token(&args[2]){return Err("Invalid launcher handoff".into())}let root=PathBuf::from(&args[1]).portable_canonicalize().map_err(|e|e.to_string())?;let nonce=&args[2];if env::current_exe().map_err(|e|e.to_string())?.portable_canonicalize().map_err(|e|e.to_string())?!=root.join("server data/handoff").join(nonce).join(launcher()).portable_canonicalize().map_err(|e|e.to_string())?{return Err("Update helper is outside its owned handoff directory".into())}
+  #[cfg(windows)] let parent={use windows_sys::Win32::System::Threading::{OpenProcess,PROCESS_SYNCHRONIZE};let pid=args[3].parse::<u32>().map_err(|e|e.to_string())?;let handle=unsafe{OpenProcess(PROCESS_SYNCHRONIZE,0,pid)};if handle.is_null(){return Err(format!("Cannot bind parent process: {}",std::io::Error::last_os_error()))}handle};
+  println!("ready");std::io::stdout().flush().map_err(|e|e.to_string())?;let mut ack=String::new();std::io::stdin().read_line(&mut ack).map_err(|e|e.to_string())?;if ack.trim()!=nonce{return Err("Unacknowledged launcher handoff".into())}
+  let _ownership=lock(&root,true)?;
+  #[cfg(windows)]{use windows_sys::Win32::{System::Threading::WaitForSingleObject,Foundation::{CloseHandle,WAIT_OBJECT_0}};let status=unsafe{WaitForSingleObject(parent,15000)};unsafe{CloseHandle(parent)};if status!=WAIT_OBJECT_0{return Err("Original launcher has not exited; no replacement attempted".into())}}
+  let tx=read(&root.join("server data/launcher-transaction.json"))?;if tx["nonce"]!=*nonce||tx["phase"]!="armed"{return Err("Launcher transaction changed during handoff".into())}let from=tx["from"].as_str().filter(|s|generation(s)).ok_or("Invalid previous launcher")?;let exe=app(&root,from);let current=env::current_exe().map_err(|e|e.to_string())?;
+  let supervisor=serde_json::json!({"pid":std::process::id(),"root":root,"operation":nonce});let mut proof=File::create(root.join("server data/handoff").join(nonce).join("supervisor.json")).map_err(|e|e.to_string())?;proof.write_all(supervisor.to_string().as_bytes()).and_then(|_|proof.sync_all()).map_err(|e|e.to_string())?;
+  let log=OpenOptions::new().create(true).append(true).open(root.join("server data/handoff").join(nonce).join("console.log")).map_err(|e|e.to_string())?;
+  let status=Command::new(&exe).env("ELECTRON_RUN_AS_NODE","1").env("OPENROTMG_BOOTSTRAP",current).arg(script(&exe)).arg(&root).arg(nonce).stdout(Stdio::from(log.try_clone().map_err(|e|e.to_string())?)).stderr(Stdio::from(log)).status().map_err(|e|format!("Cannot start verified launcher installer: {e}"))?;if !status.success(){return Err("Launcher update did not finish. Open the launcher and check its files; keep player data.".into())}return supervise(&root,&[],Some(nonce))
+ }
+ if args.iter().any(|a|a.starts_with("--portable-root")||a.starts_with("--launcher-generation")||a.starts_with("--launcher-update-health")){return Err("Portable ownership flags cannot be supplied manually".into())}
+ let exe=env::current_exe().map_err(|e|e.to_string())?;let root=exe.parent().ok_or("No portable root")?.portable_canonicalize().map_err(|e|e.to_string())?;let _ownership=lock(&root,false)?;supervise(&root,&args,None)
+}
+fn main(){match run(){Ok(code)=>std::process::exit(code),Err(error)=>{let message=format!("OpenRotMG Singleplayer: {error}");eprintln!("{message}");#[cfg(windows)]if env::args().nth(1).as_deref()!=Some("--launcher-publish"){use std::os::windows::ffi::OsStrExt;use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW,MB_ICONERROR};let text=std::ffi::OsStr::new(&message).encode_wide().chain(Some(0)).collect::<Vec<_>>();unsafe{MessageBoxW(std::ptr::null_mut(),text.as_ptr(),text.as_ptr(),MB_ICONERROR)};}std::process::exit(1)}}}

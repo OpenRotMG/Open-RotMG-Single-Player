@@ -1,19 +1,22 @@
 OpenRotMG Singleplayer
 
-Extract the ZIP, open the "OpenRotMG Singleplayer" folder, then open the program of the same name. Start Server, then Start Client to play in your browser.
+Extract the ZIP, open its folder, then open "OpenRotMG Singleplayer". Click Play.
 
-The gear in the top right opens Settings for players, backups and separate server/client and launcher updates. Server logs has its own page.
+Settings contains Backups, Updates and Advanced. Close the launcher to save and stop.
 
-player data: your saves, backups, logs and downloaded game updates. Keep it private.
-server data: the game, server and launcher. Don't change anything in it.
+player data: your saves, backups and local settings. Keep it private.
+server data: application files and updates. Don't change files inside it.
+Keep the program and both folders together, in a local folder outside OneDrive or other cloud sync.
 
-Keep the program and both folders together. To move to a new version, extract the new ZIP and replace its empty "player data" folder with your old one.
+Updates: Settings > Updates > Launcher > Update and reopen. The game saves before the launcher reopens. Game updates have their own control.
+If upgrading from launcher 0.1.3 or older, save/stop and close first, extract the new ZIP separately, then copy your existing player data over its empty player data folder. Keep the old folder until your progress is confirmed.
 
-To bring over your live account, export it at https://openrotmg.org/export/ and choose Import player in Settings. You'll pick a new local password. Local play never uploads anything to the live game.
+To import your live account, export at https://openrotmg.org/export/ and click Import account. Imported accounts use the local password: password. Replacement requires confirmation; existing accounts are not automatically reset. Your game progress stays local.
 
-This build isn't signed, so your computer may warn you the first time:
-- Windows: if "Windows protected your PC" appears, choose More info, then Run anyway.
-- macOS (Apple Silicon): a Terminal window opens and stays open while you play. If macOS blocks the program, open System Settings > Privacy & Security and choose Open Anyway. It may ask again for the game itself.
-- Linux x64: run "OpenRotMG Singleplayer" from the extracted folder.
+The OS binaries are unsigned, so your computer may require first-launch approval. Only approve software you obtained from the official download:
+- Windows may show "Windows protected your PC": More info > Run anyway, if your security policy permits it.
+- macOS (Apple Silicon): the program opens in Terminal. If blocked, use System Settings > Privacy & Security > Open Anyway. The game may require its own approval.
+- Linux x64: open "OpenRotMG Singleplayer" in the extracted folder. The filesystem must permit execution.
+Automatic updates verify our publisher signature; they do not disable OS protections or guarantee that security warnings disappear.
 
-Source code, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases
+Downloads, source code, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases

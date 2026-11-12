@@ -1,0 +1,58 @@
+name: Authenticate exact native-qualified launcher draft
+on:
+  workflow_dispatch:
+    inputs:
+      native_run:
+        description: Successful trusted-main portable run at this exact source SHA
+        required: true
+        type: string
+      release_id:
+        description: Existing unpublished launcher-only draft with the exact native payloads
+        required: true
+        type: string
+concurrency:
+  group: single-player-launcher-promotion
+  cancel-in-progress: false
+permissions:
+  contents: read
+  actions: read
+jobs:
+  authenticate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.2
+      - name: Install only trusted-main validators, without package install scripts
+        run: npm ci --ignore-scripts && npx tsc
+      - name: Download data-only evidence from the fixed native workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+        shell: bash
+        run: |
+          [[ "$NATIVE_RUN" =~ ^[1-9][0-9]*$ ]]
+          mkdir evidence
+          gh run download "$NATIVE_RUN" --repo OpenRotMG/Open-RotMG-Single-Player --dir evidence
+      - name: Validate all three native upgrades and sign purpose-bound metadata only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NATIVE_RUN: ${{ inputs.native_run }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RUNTIME_MANIFEST_SIGNING_KEY: ${{ secrets.RUNTIME_MANIFEST_SIGNING_KEY }}
+        run: node scripts/promote-launcher.mjs
+      - name: Preserve only public descriptors, signatures and source receipts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: launcher-draft-receipts
+          path: signed-launcher/*
+          if-no-files-found: error
