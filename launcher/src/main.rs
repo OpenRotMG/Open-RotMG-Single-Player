@@ -55,7 +55,7 @@ fn run()->Result<i32,String>{
   let log=OpenOptions::new().create(true).append(true).open(root.join("server data/handoff").join(nonce).join("console.log")).map_err(|e|e.to_string())?;
   let status=Command::new(&exe).env("ELECTRON_RUN_AS_NODE","1").env("OPENROTMG_BOOTSTRAP",current).arg(script(&exe)).arg(&root).arg(nonce).stdout(Stdio::from(log.try_clone().map_err(|e|e.to_string())?)).stderr(Stdio::from(log)).status().map_err(|e|format!("Cannot start verified launcher installer: {e}"))?;if !status.success(){return Err("Launcher update did not finish. Open the launcher and check its files; keep player data.".into())}return supervise(&root,&[],Some(nonce))
  }
- if args.iter().any(|a|a.starts_with("--portable-root")||a.starts_with("--launcher-generation")||a.starts_with("--launcher-update-health")){return Err("Portable ownership flags cannot be supplied manually".into())}
+ if args.iter().any(|a|a.starts_with("--user-data-dir")||a.starts_with("--portable-root")||a.starts_with("--launcher-generation")||a.starts_with("--launcher-update-health")){return Err("Portable ownership flags cannot be supplied manually".into())}
  let exe=env::current_exe().map_err(|e|e.to_string())?;let root=exe.parent().ok_or("No portable root")?.portable_canonicalize().map_err(|e|e.to_string())?;let _ownership=lock(&root,false)?;supervise(&root,&args,None)
 }
 #[cfg(test)]mod tests{

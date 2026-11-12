@@ -74,7 +74,7 @@ export async function launchUpdateTest({executablePath,electronPath=executablePa
    evaluate:(fn,arg)=>debug.evaluate(`(${fn.toString()})(process.getBuiltinModule('module').createRequire(process.resourcesPath+'/app.asar/dist/main.js')('electron'),${JSON.stringify(arg)})`,mainContext),
    firstWindow:async()=>{const context=browser.contexts()[0];return context.pages()[0]??context.waitForEvent('page',{timeout:30000});},
    waitForEvent:async name=>{assert(['close','exit'].includes(name));return name==='exit'?exited:closed;},
-   detach:async()=>{assert(child.exitCode!==null||child.signalCode!==null,'Detach requires actual owned main exit');debug.close();await browser.close();},
+   detach:async()=>{assert(child.exitCode!==null||child.signalCode!==null,'Detach requires actual owned main exit');debug.close();await browser.close();child.stdout.destroy();child.stderr.destroy();},
    // app.exit can close inspector before replying; only actual owned main exit settles that race.
    close:async()=>{try{await app.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].close());}catch(error){if(child.exitCode===null&&child.signalCode===null){const timer=new AbortController();try{await Promise.race([exited,delay(5000,undefined,{signal:timer.signal}).then(()=>{throw error;})]);}finally{timer.abort();}}}return closed;},
    stderr:()=>stderr,stdout:()=>stdout,

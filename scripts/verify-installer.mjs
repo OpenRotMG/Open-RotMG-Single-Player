@@ -21,7 +21,7 @@ import {assertWindowsInstallerWriteDenied} from './installer-write-probe.mjs';
 assert.equal(process.argv.length,3,'npm run verify:release -- ARTIFACT (with adjacent installer-receipt.json)');
 if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
  const child=spawn('dbus-run-session',[process.execPath,...process.argv.slice(1)],{stdio:'inherit',env:{...process.env,OPENROTMG_PRIVATE_INSTALLER_TEST:'1'}});child.on('exit',code=>process.exitCode=code??1);
-}else await journey();
+}else{await journey();if(process.exitCode)process.exit(process.exitCode);}
 async function journey(){
  await mkdir('.qa/installer-tests',{recursive:true});const out=await mkdtemp(resolve('.qa/installer-tests/run-'));
  const report={format:1,status:'running',os:{platform:process.platform,arch:process.arch,release:release(),version:osVersion()},out,assertions:[],errors:[],screenshots:[],limits:['Unsigned binaries; no Authenticode/notarization. The ZIP is extracted without downloaded quarantine or Mark-of-the-Web, so Gatekeeper/SmartScreen prompts are not qualified','Normal-cache browser requests are uncontrolled; update availability is controlled (HTTP 503), and a pre-spawn pause prepares a real selected startup on synthetic data; NOT OS-wide offline or default-browser/hardware qualification','Synthetic exported account and explicit native chooser/confirmation fixtures; real installed Rust save authority and native game','Owned hosted runner user only; not a clean non-administrator machine or removal of every installed developer tool']};
