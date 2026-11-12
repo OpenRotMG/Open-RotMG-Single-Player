@@ -6,7 +6,7 @@ import { Runtime } from './runtime';
 import { SaveControls, isBackupName } from './saves';
 import { RuntimeUpdates } from './updates';
 import { createUpdatePolicy,createLauncherPolicy } from './update-policy';
-import { LauncherUpdates } from './launcher-updates';
+import { LauncherUpdates,requireLauncherSaveState } from './launcher-updates';
 import {LauncherStore} from './launcher-store';
 import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
@@ -93,8 +93,8 @@ else {
     checked('launcher:download', () => shell.openExternal(launcherUpdates.download()));
     checked('launcher:install', async () => {
       try{
-        const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
-        await Promise.all([saves.cancelImport(),runtime.close()]);await site.close();
+        requireLauncherSaveState(runtime.view(),updates.view());const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
+        await Promise.all([saves.cancelImport(),runtime.close()]);requireLauncherSaveState(runtime.view(),updates.view(),true);await site.close();
         await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
       }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The launcher update did not finish. Keep player data. See Advanced → Logs.');}
       finally{closing=false;}

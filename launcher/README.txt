@@ -6,7 +6,7 @@ Settings contains Backups, Updates and Advanced. Close the launcher to save and 
 
 player data: your saves, backups and local settings. Keep it private.
 server data: application files and updates. Don't change files inside it.
-Keep the program and both folders together, in a local folder outside OneDrive or other cloud sync.
+Keep the program and both folders together, in a short local path outside OneDrive or other cloud sync.
 
 Updates: Settings > Updates > Launcher > Update and reopen. The game saves before the launcher reopens. Game updates have their own control.
 If upgrading from launcher 0.1.3 or older, save/stop and close first, extract the new ZIP separately, then copy your existing player data over its empty player data folder. Keep the old folder until your progress is confirmed.

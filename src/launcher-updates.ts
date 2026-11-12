@@ -1,5 +1,9 @@
 import {EventEmitter} from 'node:events';
 import {LauncherStore} from './launcher-store';
+import {UserMessage} from './user-message';
+import type {View} from './runtime';
+import type {UpdateView} from './updates';
+export function requireLauncherSaveState(runtime:Pick<View,'status'|'pid'|'operation'>,game:Pick<UpdateView,'phase'|'canManageSaves'|'needsStart'>,stopped=false){if(!['stopped','ready'].includes(runtime.status)||runtime.operation||game.phase==='recovery'||!(game.canManageSaves||game.needsStart)||runtime.status==='stopped'&&runtime.pid||stopped&&(runtime.status!=='stopped'||runtime.pid))throw new UserMessage('The save is not ready for a launcher update. Finish any running operation or use Check save. If the game has already stopped, close and reopen the launcher first.');}
 import {REPOSITORY,Target,decodeJson,demand,integer,launcherVersion,versionAtLeast} from './update-format';
 
 export type LauncherUpdateView={installed:string;available?:string;phase:'idle'|'checking'|'current'|'available'|'error'|'downloading'|'installing'|'recovery';message:string;blocked?:boolean};
