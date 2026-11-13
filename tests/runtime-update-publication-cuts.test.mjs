@@ -11,7 +11,7 @@ const setups=[];function visit(node){if(ts.isBinaryExpression(node)&&node.operat
 const profile=join('owned root','profile'),hold="globalThis.runtimeUpdateTest.cutHeld=true;await new Promise(()=>{globalThis.runtimeUpdateTest.releaseCut=()=>process.kill(process.pid,'SIGKILL');});";
 function emitted(boundary){
  const publishedRecordCut=runInNewContext('('+helper.getText(source)+')');
- return runInNewContext(setups[boundary==='restore'?1:0],{publishedRecordCut,join,profile,boundary,hold});
+ return runInNewContext(setups[boundary==='restore'?1:0],{publishedRecordCut,join,profile,boundary,hold,runtimeTestStorage:profile=>profile});
 }
 const records={bootstrap:{initialized:false},selection:{kind:'update',phase:'selected'},restore:{phase:'recovering',recovery:{kind:'restore',receiptSha256:'receipt'}}};
 const pathFor=boundary=>join(profile,boundary==='bootstrap'?'runtime-profile.json':'runtime-pending.json');

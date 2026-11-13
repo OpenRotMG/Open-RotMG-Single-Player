@@ -6,7 +6,7 @@ import {create} from 'tar';
 import {tree,clientFiles,sha256} from './assets.mjs';
 import {hashFile,MAX_EXPANDED,MAX_PAYLOAD,runtimeFiles,targetName,verifyCapabilities,verifyRuntime,saveCompatibility} from '../dist/update-format.js';
 
-export async function assembleRuntime(input,pins,destination,{startupBackup,clientNamespace,desktopMetadata,save,noticesRoot=resolve('.')}={}){
+export async function assembleRuntime(input,pins,destination,{startupBackup,clientNamespace,desktopMetadata,accountManagement,save,noticesRoot=resolve('.')}={}){
  assert([0,1].includes(startupBackup)&&[0,1].includes(clientNamespace),'Explicit tested startup-backup/client-namespace capabilities required');
  assert(desktopMetadata===undefined||[0,1].includes(desktopMetadata),'Invalid explicit bundled metadata capability');
  assert(save&&save.cli===1&&saveCompatibility(save)&&save.startupBackup===startupBackup,'Explicit compatible save protocol/schema required');
@@ -30,6 +30,7 @@ export async function assembleRuntime(input,pins,destination,{startupBackup,clie
  for(const name of Object.keys(client.files).filter(n=>/license|notice|copying/i.test(n)))await cp(join(input.preparedClient,name),join(destination,'notices',name.replaceAll('/','-')));
  for(const file of ['NOTICES.md','LICENSE'])await cp(join(noticesRoot,file),join(destination,'notices',file));
  await writeFile(join(destination,'notices/source-pins.json'),JSON.stringify(pins,null,2)+'\n');
+ if(accountManagement!==undefined){assert.equal(accountManagement,1);await writeFile(join(destination,'notices/account-management.json'),JSON.stringify({format:1,server:pins.server.commit,cli:1,storage:1})+'\n');}
  await writeFile(join(destination,'notices/runtime-capabilities.json'),JSON.stringify({format:1,server:pins.server.commit,clientNamespace,...(desktopMetadata===undefined?{}:{desktopMetadata}),save},null,2)+'\n');
  const packaged=await tree(destination,['data','client','notices',binary,'REVISION']);await writeFile(join(destination,'inventory.json'),JSON.stringify({files:Object.keys(packaged.files),sha256:packaged.files},null,2));
  await writeFile(join(destination,'build-identity.json'),JSON.stringify({pins,platform:process.platform,arch:process.arch,binarySha256:input.serverBinarySha256,buildReceiptSha256:sha256(await readFile(input.serverBuildReceipt)),assetsSha256:packaged.sha256},null,2));

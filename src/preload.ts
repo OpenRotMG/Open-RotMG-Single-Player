@@ -28,6 +28,8 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   stop: () => invoke('runtime:stop'),
   client: () => invoke('runtime:client'),
   help: () => invoke('runtime:help'),
+  listAccounts:()=>invoke('account:list'),
+  editAccount:(account:number,expected:string,username:string,password:string)=>invoke('account:edit',account,expected,username,password),
   importPlayer: () => invoke('save:import'),
   confirmImport: (expected: string, replace: boolean) => invoke('save:confirm-import', expected, replace),
   cancelImport: () => invoke('save:cancel-import'),

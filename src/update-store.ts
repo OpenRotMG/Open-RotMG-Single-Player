@@ -39,7 +39,7 @@ export const select=(g:Generation):Selection=>({format:1,id:g.id,descriptorSha25
 export class RuntimeStore{
   readonly generations:string;readonly staging:string;
   private metadata?:WindowsMetadataPublication;private metadataBinary?:Promise<string>;
-  constructor(readonly userData:string,readonly policy:UpdatePolicy,onMetadataFailure?:(error:Error)=>void){
+  constructor(readonly userData:string,readonly policy:UpdatePolicy,onMetadataFailure?:(error:Error)=>void,readonly playerData:string=userData){
     this.generations=join(userData,'runtimes');this.staging=join(userData,'runtime-staging');
     if(process.platform==='win32')this.metadata=new WindowsMetadataPublication(userData,()=>this.bundledMetadataBinary(),error=>onMetadataFailure?.(error));
   }

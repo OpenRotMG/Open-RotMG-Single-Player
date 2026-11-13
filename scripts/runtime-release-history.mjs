@@ -17,7 +17,8 @@ export function requirePromotionSource(nativeHead,promotionHead,git){
 }
 export function requireNativePromotionRun(run,jobs,head,id){
  assert.equal(run.id,id);assert.equal(run.head_sha,head);assert.equal(run.head_branch,'main');assert.equal(run.event,'workflow_dispatch');assert.equal(run.path,'.github/workflows/runtime-updates-test.yml');assert.equal(run.status,'completed');assert.equal(run.conclusion,'success');assert.equal(run.repository.full_name,REPOSITORY);assert.equal(run.head_repository.full_name,REPOSITORY);assert(positive(run.run_attempt));assert.equal(jobs.total_count,3);assert.equal(jobs.jobs.length,3);
- for(const os of ['ubuntu-22.04','windows-2022','macos-15']){const found=jobs.jobs.filter(j=>j.name===`runtime-updates (${os})`);assert.equal(found.length,1);const job=found[0];assert.equal(job.run_id,id);assert.equal(job.head_sha,head);assert.equal(job.head_branch,'main');assert.equal(job.run_attempt,run.run_attempt);assert.equal(job.status,'completed');assert.equal(job.conclusion,'success');}
+ const mac=jobs.jobs.filter(j=>/^runtime-updates \(macos-(15|26)\)$/.test(j.name));assert.equal(mac.length,1,'Exactly one supported standard Apple Silicon job required');
+ for(const name of ['runtime-updates (ubuntu-22.04)','runtime-updates (windows-2022)',mac[0].name]){const found=jobs.jobs.filter(j=>j.name===name);assert.equal(found.length,1);const job=found[0];assert.equal(job.run_id,id);assert.equal(job.head_sha,head);assert.equal(job.head_branch,'main');assert.equal(job.run_attempt,run.run_attempt);assert.equal(job.status,'completed');assert.equal(job.conclusion,'success');}
 }
 export function requireUnsignedResume(validated,run,jobs){
  const c=UNSIGNED_RUNTIME_DRAFT;assert.deepEqual(validated.resume,{releaseId:c.releaseId,failedPromotionRun:c.failedPromotionRun});assert.equal(validated.head,c.head);assert.equal(validated.runId,c.nativeRun);assert.equal(validated.tag,c.tag);assert.equal(validated.sequence,c.sequence);

@@ -29,7 +29,7 @@ export function pending(value:unknown):Pending{
   return value as unknown as Pending;
 }
 export async function readPending(store:RuntimeStore):Promise<Pending>{return pending(await record(store.path('runtime-pending.json')));}
-export const backupPath=(store:RuntimeStore,name:string)=>{backupName(name);return join(store.userData,'backups',name);};
+export const backupPath=(store:RuntimeStore,name:string)=>{backupName(name);return join(store.playerData,'backups',name);};
 export async function readNativeAck(store:RuntimeStore,p:Pending):Promise<NativeStartupAck>{
   demand(p.pid!==null,'Startup was interrupted before owned PID proof became durable; no automatic migration replay or backup substitution is allowed');
   const path=backupPath(store,p.migrationName),bytes=await boundedFile(path+'.ack.json',16*1024);

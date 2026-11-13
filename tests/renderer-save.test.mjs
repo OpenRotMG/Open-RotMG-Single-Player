@@ -5,7 +5,7 @@ test('XP navigation keeps Settings selected, groups backup locations, and has Lo
  const f=await rendererFixture();f.element('show-backups').onclick();await tick();assert.equal(f.element('settings-page').hidden,false);assert.equal(f.element('home-page').hidden,true);assert.equal(f.element('show-settings').getAttribute('aria-current'),'page');assert.equal(f.element('tab-backups').getAttribute('aria-selected'),'true');assert.equal(f.element('save-location').textContent,'/owned/player data');
  f.element('show-advanced').onclick();assert.equal(f.element('advanced-page').hidden,false);assert.equal(f.element('backups-page').hidden,true);assert.equal(f.element('show-settings').getAttribute('aria-current'),'page');
  assert(!f.elements.has('show-logs'));assert(!f.elements.has('finish-update'));assert(!f.elements.has('password'));assert(!f.elements.has('confirmation'));assert.match(f.html,/<code id="import-password">password<\/code>/);
- f.element('tab-advanced').onkeydown({key:'Home',preventDefault(){}});assert.equal(f.element('tab-backups').getAttribute('aria-selected'),'true');assert(f.element('tab-backups').focused);
+ f.element('tab-advanced').onkeydown({key:'Home',preventDefault(){}});assert.equal(f.element('tab-accounts').getAttribute('aria-selected'),'true');assert(f.element('tab-accounts').focused);
 });
 test('Play waits for owned startup, opens once, and a failed startup never opens the game',async()=>{
  const f=await rendererFixture();let ready;f.launcher.start=()=>new Promise(resolve=>ready=resolve);

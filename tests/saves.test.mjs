@@ -22,6 +22,7 @@ else if(control.noAck){process.exitCode=2;}
 else if(control.invalidUtf8){process.stdout.write(Buffer.concat([Buffer.from('{"protocol":1,"operation":"'+command+'","outcome":"unchanged","error":"'),Buffer.from([255]),Buffer.from('"}') ]));process.exitCode=2;}
 else if(control.fail){fail('unchanged','specific authority validation failure');}
 else if(control.unknown){fail('unknown','destination write or migration boundary crossed');}
+else if(command==='accounts'||command==='account-edit')console.log(JSON.stringify(control.accountResult));
 else if(command==='preview')setTimeout(()=>console.log(JSON.stringify(identity())),control.delay||0);
 else if(command==='verify-snapshot')console.log(JSON.stringify({verified:true,schema:22,scope:'all-local-accounts',account_count:2,character_count:7}));
 else if(command==='snapshot'){fs.writeFileSync(args[2],'full fixture snapshot',{flag:'wx',mode:0o600});console.log(JSON.stringify({snapshot:args[2],verified:true}));}
@@ -50,6 +51,10 @@ test('save preview and snapshot metadata are required, not invented',()=>{
  assert.throws(()=>snapshotPreview({verified:true}),/metadata/);
  for(const [value,confirmation] of [['short','other'],['abcd','abcd'],['12345\n','12345\n'],['é'.repeat(65),'é'.repeat(65)],['abc\ud800','abc\ud800']])assert.throws(()=>checkedPassword(value,confirmation),/password/);
  assert.equal(checkedPassword('é'.repeat(64),'é'.repeat(64)),'é'.repeat(64));
+});
+test('account authority returns known passwords only to its caller, never the durable lifecycle acknowledgement',posix,async()=>{
+ const f=await fixture(),secret='private-local-credential',row={account:1,name:'Guest1',username:'player@local.invalid',password:secret,expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});let proof;f.runtime.authorityClosed=async value=>{proof=value;};const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.equal(value.accounts[0].password,secret);assert(!JSON.stringify(proof).includes(secret));assert.equal(proof.ack.accounts[0].username,row.username);
+ await assert.rejects(f.saves.listAccounts(),/Server \+ client update/);assert.equal(f.runtime.view().status,'stopped');
 });
 test('save native chooser cancellation changes no save or backups',posix,async()=>{
  const f=await fixture();f.choose(undefined);assert.equal(await f.saves.beginImport(),undefined);assert.equal(await f.saves.restoreBackup(),undefined);
