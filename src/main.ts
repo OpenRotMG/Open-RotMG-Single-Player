@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, clipboard } from 'electron';
 import { join } from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {realpathSync} from 'node:fs';
@@ -12,7 +12,7 @@ import { LauncherUpdates,requireLauncherSaveState } from './launcher-updates';
 import {LauncherStore} from './launcher-store';
 import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
-import {UserMessage} from './user-message';
+import {UserMessage,UserNotice} from './user-message';
 
 app.setName('Open RotMG Single Player');
 const playerData=app.getPath('userData');
@@ -41,7 +41,8 @@ else {
   let updates: RuntimeUpdates;
   let launcherUpdates: LauncherUpdates;
   let site: Awaited<ReturnType<typeof gameSite>>;
-  const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
+  let consoleLog:string|undefined;
+  const view = () => ({...runtime.view(),consoleLog,clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
   const importPassword = 'password';
@@ -54,9 +55,11 @@ else {
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
     const root=portableRoot?await realpath(portableRoot):undefined;
     if(root&&userData!==await realpath(join(root,'player data')))throw Error('Launcher update ownership does not match player data');
+    if(root){const operation=app.commandLine.getSwitchValue('launcher-update-health');consoleLog=operation?join(root,'server data/handoff',operation,'console.log'):join(root,'server data/launcher-console.log');}
     const appPolicy=createLauncherPolicy(process.resourcesPath,app.getVersion());
     const store=root?new LauncherStore({root,generation,installed:app.getVersion(),resources:process.resourcesPath,policy:appPolicy,native:join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer')}):undefined;
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
+    launcherUpdates.on('log',message=>runtime.reportUpdate('Launcher: '+message));
     await launcherUpdates.startup();
     window = new BrowserWindow({ width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
@@ -83,16 +86,18 @@ else {
       buttons:['Cancel',prompt.kind==='restore-update'?'Back up current save and restore':prompt.kind==='retry-update'?'Retry update':'Verify and continue'],defaultId:0,cancelId:0,noLink:true,
     })).response===1);
     const checked = (channel: string, action: (...args: unknown[]) => unknown, valid: (args: unknown[]) => boolean = args => args.length === 0) => ipcMain.handle(channel, (event, ...args: unknown[]) => {
-      if (!window || closing || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
+      if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return (async()=>{
         try{
-          if(launcherUpdates.busy&&!['launcher:status','runtime:status','update:status','window:minimize','window:maximize',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserMessage('The launcher is updating. Please wait.');
+          if(closing&&!['launcher:status','runtime:status','update:status','logs:copy','window:minimize','window:maximize'].includes(channel))throw new UserNotice('The launcher is closing. Please wait.');
+          if(launcherUpdates.busy&&!['launcher:status','runtime:status','update:status','window:minimize','window:maximize','logs:copy','save:location',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserNotice('The launcher is updating. Please wait.');
           if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
           return{ok:true,value:await action(...args)};
         }
-        catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
+        catch(error){if(error instanceof UserNotice)return{ok:false,error:error.message,severity:'info'};runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
       })();
     });
+    checked('logs:copy',text=>clipboard.writeText(text as string),args=>args.length===1&&typeof args[0]==='string'&&Buffer.byteLength(args[0])<=1024*1024);
     checked('window:minimize', () => window!.minimize());
     checked('window:maximize', () => { if(window!.isMaximized())window!.unmaximize();else window!.maximize(); });
     checked('window:close', () => window!.close());
@@ -109,7 +114,7 @@ else {
       try{
         requireLauncherSaveState(runtime.view(),updates.view());const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
         await Promise.all([saves.cancelImport(),runtime.close()]);requireLauncherSaveState(runtime.view(),updates.view(),true);await site.close();
-        await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
+        launcherUpdates.step('Starting authenticated update helper');await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
       }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The launcher update did not finish. Keep player data. See Advanced → Logs.');}
       finally{closing=false;}
     });
@@ -143,7 +148,7 @@ else {
     void updates.startup();
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
     void window.loadURL(index);
-  }).catch(error => { console.error(error);dialog.showErrorBox('The game could not open', 'Keep your player data folder. Please report this problem with the error details from the terminal.'); app.exit(1); });
+  }).catch(error => { console.error(error);dialog.showErrorBox('The game could not open', 'Keep your player data folder. Please report this problem with server data/launcher-console.log.\n'+String(error)); app.exit(1); });
   async function close() {
     if (closing) return;
     closing = true;

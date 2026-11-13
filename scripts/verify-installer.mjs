@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir,cp} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir,cp,copyFile} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
 import {release,version as osVersion} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -10,6 +10,7 @@ import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 import {launchUpdateTest} from './runtime-update-test-launch.mjs';
 import {updateTestDisplay} from './runtime-update-test-display.mjs';
 import {consumerEnvironment,protectInstallation,assertInstallationProtected,runtimeLinkage,windowsProcessIdentity} from './native-boundaries.mjs';
+import {verifyLegacyLauncher} from './verify-legacy-launcher.mjs';
 import {verifyLauncherUpdate} from './verify-launcher-update.mjs';
 import {nativeGame} from './native-game.mjs';
 import {processArgv} from './process-argv.mjs';
@@ -91,6 +92,7 @@ async function journey(){
   check('Custom XP caption keeps named minimize, maximize and save-and-close controls',await page.locator('.titlebar').isVisible()&&await page.locator('#minimize,#maximize,#close-window').count()===3);
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-advanced').click();
+  check('The workspace owns scrolling inside the fixed XP caption and blue window frame',await page.evaluate(()=>{const main=document.querySelector('main').getBoundingClientRect(),workspace=document.querySelector('.workspace');return document.documentElement.scrollHeight===innerHeight&&main.right===innerWidth&&getComputedStyle(workspace).overflowY==='auto'&&document.querySelector('.titlebar').getBoundingClientRect().top===0;}));
   check('Logs and their actual diagnostic location live inside selected Settings Advanced',await page.locator('#logs-page').isVisible()&&await page.locator('#diagnostics').textContent()===join(storage,'diagnostics')&&await page.locator('#show-settings').getAttribute('aria-current')==='page'&&await page.locator('#tab-advanced').getAttribute('aria-selected')==='true');
   await page.locator('#log-search').fill('no-such-native-log-row');check('Real packaged logs search visibly filters without deleting technical history',await page.locator('#logs').innerText()==='No matching events.');await page.locator('#log-search').fill('');
   await page.screenshot({path:join(out,'launcher-logs.png')});
@@ -168,7 +170,9 @@ async function journey(){
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
   check('A real legacy-shaped profile migration preserves authenticated runtime selection and the original server key while keeping player data save-only',(await readFile(join(storage,'runtime-selection.json'))).equals(legacySelection)&&await hashFile(join(storage,'server-state/server.pem'))===legacyKey&&(await readdir(profile)).every(name=>['state','backups'].includes(name))&&(await readdir(join(profile,'state'))).every(name=>['game.db','game.db-wal','game.db-shm','state.lock','local-passwords.json'].includes(name)));
   await restoreProtection();restoreProtection=undefined;
+  const legacySeed=join(out,'legacy-seed.sqlite');await copyFile(join(profile,'state/game.db'),legacySeed);
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
+  await verifyLegacyLauncher({artifact,seed:legacySeed,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
   report.status='passed';
  }catch(error){
   if(app)report.launcherOutput={stderr:app.stderr(),stdout:app.stdout()};

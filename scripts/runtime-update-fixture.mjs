@@ -59,7 +59,7 @@ export async function runtimeFixture({out,runtime,archive,archiveInfo,target=tar
  }
  return{
   origin,publicKey,requests,errors,identity,archive,archiveInfo,
-  policy:baseline=>({target,baseline,discovery,assetOrigin:origin,redirectOrigins:[origin],publicKey,request:fetch,metadataDeadline:20000,payloadDeadline:180000}),
+  policy:baseline=>({target,baseline,discovery,assetOrigin:origin,redirectOrigins:[origin],publicKey,request:fetch,metadataDeadline:20000,payloadIdleDeadline:1000,payloadDeadline:180000}),
   set:(next,nextSequence=sequence)=>{assert(['good','503','429','signature','wrong-key','future','wrong-target','minimum-launcher','future-key','legacy-capability','malformed','invalid-utf8','wrong-digest','unsafe-path','symlink','truncated','timeout','redirect'].includes(next));mode=next;sequence=nextSequence;},
   hold:()=>{hold=true;},held:()=>held.length,
   release:()=>{hold=false;const responses=held;held=[];for(const response of responses)serve(new URL(discovery).pathname,response);},

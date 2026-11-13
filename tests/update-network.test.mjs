@@ -13,7 +13,7 @@ async function publisher(t){
   if(mode==='timeout')return;
   if(mode==='redirect'){response.writeHead(302,{location:'https://evil.invalid/no'});response.end();return;}
   if(mode==='loop'){response.writeHead(302,{location:request.url});response.end();return;}
-  const send=(body,length=body.length)=>{response.writeHead(200,{'content-length':length});response.end(body);};
+  const send=(body,length=body.length)=>{response.writeHead(200,{'content-length':length,...(mode==='truncated'?{connection:'close'}:{})});response.end(body);};
   if(request.url.endsWith('/latest')){
    const assets=[{id:301,name:'runtime-linux-x64.json',size:bytes.length},{id:401,name:'runtime-linux-x64.json.sig',size:signature.length},{id:manifest.payload.id,name:manifest.payload.name,size:payload.length}].map(a=>({...a,browser_download_url:`${origin}/OpenRotMG/Open-RotMG-Single-Player/releases/download/${manifest.tag}/${a.name}`}));
    if(mode==='asset-id')assets[2].id++;
@@ -21,12 +21,13 @@ async function publisher(t){
   }
   if(request.url.endsWith('.json.sig')){send(mode==='signature'?Buffer.alloc(64):signature);return;}
   if(request.url.endsWith('.json')){send(bytes);return;}
+  if(request.url.endsWith('.tar.gz')&&['slow','stall'].includes(mode)){response.writeHead(200,{'content-length':payload.length});response.write(payload.subarray(0,1));if(mode==='stall')return;let offset=1;const timer=setInterval(()=>{const next=Math.min(payload.length,offset+Math.ceil(payload.length/6));response.write(payload.subarray(offset,next));offset=next;if(offset===payload.length){clearInterval(timer);response.end();}},100);response.on('close',()=>clearInterval(timer));return;}
   if(request.url.endsWith('.tar.gz')){send(mode==='truncated'?payload.subarray(0,payload.length-10):payload,payload.length);return;}
   response.writeHead(404);response.end();
  });
  await new Promise(ok=>server.listen(0,'127.0.0.1',ok));const origin=`http://127.0.0.1:${server.address().port}`;
  t.after(async()=>{server.closeAllConnections();await new Promise(ok=>server.close(ok));});
- const policy={target:'linux-x64',launcher:'0.1.0',baseline:{root:runtime,mode:'source',identitySha256:'a'.repeat(64)},discovery:`${origin}/api/repos/OpenRotMG/Open-RotMG-Single-Player/releases/latest`,assetOrigin:origin,redirectOrigins:[origin],publicKey:publicPEM(keys),request:fetch,metadataDeadline:5000,payloadDeadline:5000};
+ const policy={target:'linux-x64',launcher:'0.1.0',baseline:{root:runtime,mode:'source',identitySha256:'a'.repeat(64)},discovery:`${origin}/api/repos/OpenRotMG/Open-RotMG-Single-Player/releases/latest`,assetOrigin:origin,redirectOrigins:[origin],publicKey:publicPEM(keys),request:fetch,metadataDeadline:5000,payloadIdleDeadline:1000,payloadDeadline:5000};
  manifest=await manifestFor(runtime,join(root,'runtime.tar.gz'),origin);payload=await readFile(join(root,'runtime.tar.gz'));
  const update=mutate=>{const next=structuredClone(manifest);mutate(next);({bytes,signature}=signed(next,keys));};update(()=>{});
  return{root,policy,manifest,mode:value=>{mode=value;},update};
@@ -57,4 +58,8 @@ test('update-network rejects digest mismatch and actual truncated transfer witho
 test('update-network never reclassifies a local staging filesystem failure as offline',async t=>{
  const f=await publisher(t),signal=new AbortController().signal,result=await discover(f.policy,signal);
  await assert.rejects(downloadPayload(result.manifest,join(f.root,'missing','file'),f.policy,signal),e=>e.code==='ENOENT'&&e.kind!=='unavailable');
+});
+
+test('update-network permits healthy slow progress and reports exact bytes, but separately bounds a stalled connection',async t=>{
+ const f=await publisher(t),signal=new AbortController().signal,result=await discover(f.policy,signal),counts=[];f.mode('slow');await downloadPayload(result.manifest,join(f.root,'slow.tar.gz'),{...f.policy,payloadIdleDeadline:500,payloadDeadline:5000},signal,n=>counts.push(n));assert.equal(counts.at(-1),result.manifest.payload.bytes);assert(counts.length>=5);assert(counts.every((n,i)=>i===0||n>counts[i-1]));f.mode('stall');await assert.rejects(downloadPayload(result.manifest,join(f.root,'stall.tar.gz'),{...f.policy,payloadIdleDeadline:200,payloadDeadline:5000},signal),e=>e.kind==='unavailable'&&/No network progress/.test(e.message)&&/after 1 bytes/.test(e.message));
 });

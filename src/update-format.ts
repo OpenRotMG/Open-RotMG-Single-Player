@@ -142,7 +142,7 @@ export async function verifyCapabilities(root:string,pins:Pins,startupBackup:0|1
   if('desktopMetadata' in value)demand(value.desktopMetadata===0||value.desktopMetadata===1,'Invalid bundled metadata capability');if(desktopMetadata!==undefined)demand(value.desktopMetadata===desktopMetadata,'Bundled runtime lacks required desktopMetadata capability');exact(value.save,'cli,read,write,startupBackup','runtime capability save protocol');
   demand(value.format===1&&value.server===pins.server.commit&&value.clientNamespace===clientNamespace&&value.save.cli===1&&saveCompatibility(value.save)&&value.save.startupBackup===startupBackup,'Declared runtime capabilities differ from authenticated/explicit baseline contract');
 }
-export async function verifyRuntime(root: string, target: Target, expected?: Manifest): Promise<BuildIdentity> {
+export async function verifyRuntime(root: string, target: Target, expected?: Manifest,progress?:import('./update-progress').ProgressSink): Promise<BuildIdentity> {
   const files = await runtimeFiles(root,target), inventory = decodeJson(await boundedFile(join(root,'inventory.json')), 4 * 1024 * 1024);
   exact(inventory,'files,sha256','runtime inventory');
   demand(Array.isArray(inventory.files) && inventory.files.length > 0 && inventory.files.length <= MAX_FILES && new Set(inventory.files).size === inventory.files.length, 'Invalid runtime inventory list');
@@ -150,7 +150,7 @@ export async function verifyRuntime(root: string, target: Target, expected?: Man
   const hashes = inventory.sha256 as Record<string,unknown>;
   demand(JSON.stringify(Object.keys(hashes)) === JSON.stringify(inventory.files), 'Inventory paths and hashes disagree');
   demand(JSON.stringify([...inventory.files,'inventory.json','build-identity.json'].sort()) === JSON.stringify([...files].sort()), 'Runtime inventory is incomplete or contains extra files');
-  for (const path of inventory.files) { runtimePath(path,target);demand(hex(hashes[path]) && await hashFile(join(root,path)) === hashes[path], `Runtime file digest mismatch: ${path}`); }
+  let checked=0;progress?.('Checking game file hashes',0,inventory.files.length,'files');for (const path of inventory.files) { runtimePath(path,target);demand(hex(hashes[path]) && await hashFile(join(root,path)) === hashes[path], `Runtime file digest mismatch: ${path}`);progress?.('Checking game file hashes',++checked,inventory.files.length,'files'); }
   const dataHashes = Object.fromEntries(files.filter(path=>path.startsWith('data/')).map(path=>[path,hashes[path]]));
   const clientRoots = ['index.html','launcher.js','client.swf','draw.html','native-texture-editor.swf','spectator.html','spectator.js','spectator.swf','vendor'];
   const clientHashes = Object.fromEntries(clientRoots.flatMap(root=>files.filter(path=>path===`client/${root}`||path.startsWith(`client/${root}/`)).map(path=>[path.slice(7),hashes[path]])));
