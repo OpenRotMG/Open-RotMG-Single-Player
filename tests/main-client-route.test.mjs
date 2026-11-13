@@ -36,8 +36,8 @@ for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
     const ipcRenderer={invoke:(channel,...args)=>Promise.resolve().then(()=>handlers.get(channel)(trusted(),...args)),on:(channel,callback)=>{assert(['runtime:changed','update:changed','launcher:changed'].includes(channel));if(channel==='runtime:changed')changed=value=>callback({},value);}};
     runInNewContext(await source('src/preload.ts'),{exports:{},require:id=>{assert.equal(id,'electron');return {ipcRenderer,contextBridge:{exposeInMainWorld:(key,value)=>{assert.equal(key,'launcher');launcher=value;}}};}});
     assert(Object.isFrozen(launcher));
-    const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',value:'',disabled:false,checked:true,querySelectorAll:()=>[],setAttribute(){},addEventListener(){}});return elements.get(id);}};
-    runInNewContext(await source('src/renderer.ts'),{exports:{},URL,window:{launcher,addEventListener(){}},document});
+    const document={getElementById:id=>{if(!elements.has(id))elements.set(id,{textContent:'',value:'',disabled:false,checked:true,querySelectorAll:()=>[],removeAttribute(){},setAttribute(){},addEventListener(){}});return elements.get(id);}};
+    runInNewContext(await source('src/renderer.ts'),{exports:{},URL,setInterval:()=>0,window:{launcher,addEventListener(){}},document});
     await new Promise(ok=>setImmediate(ok));
     for(status of ['stopped','starting','stopping','failed','ready']){changed(view());assert.equal(elements.get('client').disabled,status!=='ready');}
     elements.get('client').onclick();await new Promise(ok=>setImmediate(ok));assert.match(elements.get('error').textContent,/Advanced → Logs/);assert(!elements.get('error').textContent.includes('actual shell rejection'));

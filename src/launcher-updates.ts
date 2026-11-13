@@ -1,3 +1,4 @@
+import {UpdateReporter,UpdateProgress,progressText} from './update-progress';
 import {EventEmitter} from 'node:events';
 import {LauncherStore} from './launcher-store';
 import {UserMessage} from './user-message';
@@ -6,9 +7,10 @@ import type {UpdateView} from './updates';
 export function requireLauncherSaveState(runtime:Pick<View,'status'|'pid'|'operation'>,game:Pick<UpdateView,'phase'|'canManageSaves'|'needsStart'>,stopped=false){if(!['stopped','ready'].includes(runtime.status)||runtime.operation||game.phase==='recovery'||!(game.canManageSaves||game.needsStart)||runtime.status==='stopped'&&runtime.pid||stopped&&(runtime.status!=='stopped'||runtime.pid))throw new UserMessage('The save is not ready for a launcher update. Finish any running operation or use Check save. If the game has already stopped, close and reopen the launcher first.');}
 import {REPOSITORY,Target,decodeJson,demand,integer,launcherVersion,versionAtLeast} from './update-format';
 
-export type LauncherUpdateView={installed:string;available?:string;phase:'idle'|'checking'|'current'|'available'|'error'|'downloading'|'installing'|'recovery';message:string;blocked?:boolean};
+export type LauncherUpdateView={installed:string;available?:string;phase:'idle'|'checking'|'current'|'available'|'error'|'downloading'|'installing'|'recovery';message:string;blocked?:boolean;progress?:UpdateProgress};
 const discovery=`https://api.github.com/repos/${REPOSITORY}/releases?per_page=100`;
 export class LauncherUpdates extends EventEmitter {
+  private reporter=new UpdateReporter(value=>{this.state.progress=value;this.state.message=progressText(value);this.changed();},message=>this.emit('log',message));
   private state:LauncherUpdateView;private task?:Promise<LauncherUpdateView>;private controller?:AbortController;private downloadURL?:string;
   constructor(private installed:string,private target:Target,private request:typeof fetch=fetch,private store?:LauncherStore){super();launcherVersion(installed);this.state={installed,phase:'idle',message:''};}
   view(){return {...this.state};}
@@ -17,10 +19,11 @@ export class LauncherUpdates extends EventEmitter {
   get busy(){return ['downloading','installing'].includes(this.state.phase);}
   async startup(){if(this.store){await this.store.verifySelected();this.state.blocked=await this.store.blocked();if(this.state.blocked){this.state.phase='recovery';this.state.message='A launcher update did not finish. Check launcher files before playing.';}}return this.view();}
   async prepare(){
-    demand(this.store&&this.state.phase==='available'&&this.state.available&&!this.state.blocked,'Check for an authenticated launcher update first');const version=this.state.available,controller=new AbortController();this.controller=controller;this.state={...this.state,phase:'downloading',message:'Downloading launcher…'};this.changed();
-    try{const prepared=await this.store.stage(version,controller.signal,message=>{this.state.message=message;this.changed();});this.state.phase='installing';this.state.message='Saving and reopening…';this.changed();return prepared;}
+    demand(this.store&&this.state.phase==='available'&&this.state.available&&!this.state.blocked,'Check for an authenticated launcher update first');this.reporter.reset();const version=this.state.available,controller=new AbortController();this.controller=controller;this.state={...this.state,phase:'downloading',message:'Downloading launcher…'};this.changed();
+    try{const prepared=await this.store.stage(version,controller.signal,this.reporter.report);this.state.phase='installing';this.reporter.report('Saving game and closing its server');return prepared;}
     catch(error){this.state.phase='error';this.state.message=`Launcher update failed: ${String(error)}`;this.changed();throw error;}finally{this.controller=undefined;}
   }
+  step(message:string){this.reporter.report(message);}
   async arm(prepared:{id:string;version:string}){demand(this.store&&this.state.phase==='installing','Launcher preparation is incomplete');return this.store.arm(prepared.id,prepared.version);}
   async healthy(operation:string){demand(this.store,'Missing portable launcher authority');await this.store.healthy(operation);this.state={installed:this.installed,phase:'current',message:`Launcher ${this.installed} updated.`,blocked:false};this.changed();}
   async prune(){demand(this.store,'Missing portable launcher authority');await this.store.prune();}
@@ -32,7 +35,7 @@ export class LauncherUpdates extends EventEmitter {
     demand(!this.busy&&!this.state.blocked,'Finish or check the existing launcher update first');
     this.downloadURL=undefined;this.state={installed:this.installed,phase:'checking',message:'Checking launcher releases…'};
     const controller=new AbortController();this.controller=controller;
-    const task=this.discover(AbortSignal.any([controller.signal,AbortSignal.timeout(20_000)])).catch(error=>{
+    this.reporter.reset();this.reporter.report('Fetching published launcher releases');const task=this.discover(AbortSignal.any([controller.signal,AbortSignal.timeout(20_000)])).catch(error=>{
       this.state={installed:this.installed,phase:'error',message:`Launcher update check failed: ${error instanceof Error?error.message:String(error)}`};return this.view();
     }).finally(()=>{this.task=undefined;this.controller=undefined;this.changed();});this.task=task;return task;
   }

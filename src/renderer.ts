@@ -4,6 +4,7 @@ import type { UpdateView, RuntimeSummary } from './updates';
 import type { LauncherUpdateView } from './launcher-updates';
 declare global {
   interface Window { launcher: {
+    copyLogs(text:string):Promise<void>;
     minimize():Promise<void>; maximize():Promise<void>; close():Promise<void>;
     status():Promise<View>; start():Promise<void>; startInstalled():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
     launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
@@ -23,6 +24,7 @@ let preview:ImportPreview|undefined,requesting=false,submitting=false,actionErro
 const statusMessages:Record<View['status'],string>={stopped:'Stopped',starting:'Preparing game…',ready:'Running',stopping:'Saving…',failed:'Save unconfirmed'};
 function updateMessage(){
   const u=updateView;if(!u)return 'Loading…';
+  if(u.progress&&['checking','downloading','activating'].includes(u.phase))return u.message;
   if(u.needsStart)return 'Play will prepare the game.';
   const messages:Record<UpdateView['phase'],string>={initializing:'Loading…',checking:'Checking…',downloading:'Downloading update…',staged:'Update downloaded. Save and stop to prepare it.',activating:'Backing up and preparing…',ready:'Up to date.',unavailable:'Cannot connect. Try again.',service:'Could not check. Try again.',rejected:'Update could not be verified. See Advanced → Logs.',launcher:'A newer launcher is required.',recovery:'Check your save before continuing.',canceled:'Canceled. Play when you are ready.'};
   // Playable readiness alone says nothing about whether the public release was checked.
@@ -62,14 +64,14 @@ function render(){
   button('retry-update').hidden=!u?.canRetry;button('retry-update').disabled=busy||v?.status!=='stopped';
   button('recover-runtime').hidden=!u?.canRecover;button('recover-runtime').disabled=busy||!v||!['stopped','failed'].includes(v.status)||v.pid!==undefined;
   button('runtime-releases').hidden=u?.phase!=='launcher';button('runtime-releases').disabled=Boolean(v?.closing);
-  button('check-launcher').disabled=requesting||!launcherView||launcherView.phase==='checking'||Boolean(v?.closing);
+  button('check-launcher').disabled=busy||!launcherView||launcherView.phase==='checking';
   button('download-launcher').hidden=launcherView?.phase!=='available';button('download-launcher').disabled=requesting||Boolean(v?.closing);
   element('launcher-update-steps').hidden=launcherView?.phase!=='available';
   button('recover-launcher').hidden=!launcherView?.blocked;button('recover-launcher').disabled=requesting||Boolean(v?.closing);
   if(launcherView?.blocked)element('home-result').textContent='Check launcher files in Settings → Updates.';
   else if(element('home-result').textContent==='Check launcher files in Settings → Updates.')element('home-result').textContent='';
   element('status').textContent=v?statusMessages[v.status]:'Loading…';
-  element('diagnostics').textContent=v?.diagnostics??'';
+  element('diagnostics').textContent=[v?.diagnostics,v?.consoleLog].filter(Boolean).join('\n');
   const link=element<HTMLAnchorElement>('client-url');link.hidden=v?.status!=='ready'||!v.clientURL;link.textContent=v?.clientURL?new URL(v.clientURL).origin+'/':'';link.href=link.textContent;
   element('update-version').textContent=u?.installed?.version??'';
   element('update-installed').textContent=u?.installed?`Installed: ${runtimeSummary(u.installed)}`:'Checking…';
@@ -77,11 +79,13 @@ function render(){
   element('update-message').textContent=updateMessage();
   element('launcher-version').textContent=launcherView?.installed??'';
   const launcherMessages:Record<LauncherUpdateView['phase'],string>={idle:'',checking:'Checking…',error:'Update did not finish. See Advanced → Logs.',available:'Update available.',current:'Up to date.',downloading:'Downloading and checking…',installing:'Saving and reopening…',recovery:'Check launcher files before playing.'};
-  element('launcher-update-message').textContent=launcherView?launcherMessages[launcherView.phase]:'';
+  element('launcher-update-message').textContent=launcherView?(['checking','downloading','installing','error'].includes(launcherView.phase)?launcherView.message:launcherMessages[launcherView.phase]):'';
+  for(const [name,value,active]of [['runtime',u?.progress,Boolean(u&&['checking','downloading','activating'].includes(u.phase))],['launcher',launcherView?.progress,Boolean(launcherView&&['checking','downloading','installing'].includes(launcherView.phase))]] as const){const bar=element<HTMLProgressElement>(name+'-progress');bar.hidden=!active||!value;if(value&&value.completed!==undefined&&value.total!==undefined){bar.max=value.total;bar.value=value.completed;}else bar.removeAttribute('value');}
+  updateClock();
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
-function reportError(error:unknown){actionError=String(error);const message=error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
+function reportError(error:unknown){const info=error instanceof Error&&error.name==='Notice';actionError=info?'':String(error);element('error').setAttribute('class',info?'notice info':'notice error');element('error').setAttribute('role',info?'status':'alert');const message=error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
 async function invoke(action:()=>Promise<unknown>){
   if(requesting)return;
   requesting=true;actionError='';element('error').textContent='';element('import-error').textContent='';render();
@@ -92,7 +96,7 @@ function showPage(next:Page){
   page=next;element('home-page').hidden=page!=='home';element('settings-page').hidden=page==='home';
   for(const name of pages){element(`${name}-page`).hidden=page!==name;button(`tab-${name}`).setAttribute('aria-selected',String(page===name));button(`tab-${name}`).tabIndex=page===name?0:-1;}
   button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-settings').setAttribute('aria-current',page!=='home'?'page':'false');
-  if(page==='backups')void refreshBackups().catch(reportError);
+  if(page==='backups'&&!['downloading','installing'].includes(launcherView?.phase??''))void refreshBackups().catch(reportError);
   if(page==='accounts')element('accounts-status').textContent=runtimeView?.status==='ready'?'Save & load accounts to manage local logins.':'Refresh accounts to view local logins.';
 }
 async function refreshBackups(){
@@ -165,7 +169,9 @@ button('check-launcher').onclick=()=>void invoke(async()=>{launcherView=await wi
 button('download-launcher').onclick=()=>void invoke(()=>window.launcher.installLauncher());
 button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.recoverLauncher();element('home-result').textContent='Launcher files checked. You can play.';});
 for(const id of ['technical','log-filter','log-search'])element(id).addEventListener(id==='log-search'?'input':'change',renderLogs);
-button('copy-logs').onclick=()=>void invoke(async()=>{try{await navigator.clipboard.writeText(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){element('copy-result').textContent='Could not copy. Select the log text and copy it.';throw error;}});
+button('copy-logs').onclick=()=>void (async()=>{element('copy-result').textContent='';try{await window.launcher.copyLogs(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){reportError(error);}})();
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
+function updateClock(){for(const [name,p,active]of [['runtime',updateView?.progress,Boolean(updateView&&['checking','downloading','activating'].includes(updateView.phase))],['launcher',launcherView?.progress,Boolean(launcherView&&['checking','downloading','installing'].includes(launcherView.phase))]]as const){const age=p?Math.max(0,Math.floor((Date.now()-p.updatedAt)/1000)):0;element(name+'-progress-age').textContent=active&&p?(age>=3?'Last progress '+age+'s ago.':'Working. Percentages describe the current step.') :'';}}
+setInterval(updateClock,1000);
 window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.updatesChanged(view=>{updateView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
 void invoke(async()=>{runtimeView=await window.launcher.status();updateView=await window.launcher.updates();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});

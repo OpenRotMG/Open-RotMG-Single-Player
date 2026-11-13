@@ -12,7 +12,7 @@ import type { RuntimeUpdates } from './updates';
 export type AuthorityCompletion = {command:string;binary:string;code:number;outcome:'success'|'unchanged';ack:unknown};
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
+export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; consoleLog?:string; operation?: string; closing: boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
 
@@ -77,6 +77,7 @@ export class Runtime extends EventEmitter {
     this.lines = this.lines.slice(-MAX_LOG);
     this.emit('change', this.view());
   }
+  reportUpdate(message:string){const line=new Date().toISOString()+' [updates] '+message;this.line(line);console.info(line);}
   reportProblem(error:unknown){console.error(error);this.line(error instanceof Error?error.stack??error.message:String(error));}
   private fail(error: unknown) {
     this.unsafe = true;

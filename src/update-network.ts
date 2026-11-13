@@ -21,12 +21,12 @@ function checkedURL(url:string,policy:UpdatePolicy):URL{
   demand(policy.redirectOrigins.includes(parsed.origin)&&!parsed.username&&!parsed.password&&!parsed.hash,'Untrusted runtime update origin/credentials/fragment');
   return parsed;
 }
-async function responseFor(url:string,policy:UpdatePolicy,signal:AbortSignal,deadline:number):Promise<{response:Response;bounded:AbortSignal}>{
-  const initial=checkedURL(url,policy);let current=initial;const bounded=AbortSignal.any([signal,AbortSignal.timeout(deadline)]);
+async function responseFor(url:string,policy:UpdatePolicy,signal:AbortSignal,canceled:AbortSignal):Promise<Response>{
+  const initial=checkedURL(url,policy);let current=initial;
   for(let redirects=0;redirects<=4;redirects++){
     let response:Response;
-    try{response=await policy.request(current,{redirect:'manual',signal:bounded,headers:{Accept:url===policy.discovery?'application/vnd.github+json':'application/octet-stream','Accept-Encoding':'identity','User-Agent':'OpenRotMG-Single-Player'}});}
-    catch(error){return transportProblem(bounded.aborted?bounded.reason:error,signal);}
+    try{response=await policy.request(current,{redirect:'manual',signal,headers:{Accept:url===policy.discovery?'application/vnd.github+json':'application/octet-stream','Accept-Encoding':'identity','User-Agent':'OpenRotMG-Single-Player'}});}
+    catch(error){return transportProblem(signal.aborted?signal.reason:error,canceled);}
     demand(!response.redirected,'Uncontrolled runtime redirect');
     if([301,302,303,307,308].includes(response.status)){
       const location=response.headers.get('location');
@@ -41,31 +41,36 @@ async function responseFor(url:string,policy:UpdatePolicy,signal:AbortSignal,dea
       let cleanup='';try{await response.body?.cancel();}catch(error){cleanup=`; response cleanup failed (${transportCode(error)})`;}
       throw new UpdateProblem('service',`${rate?'GitHub runtime update rate limit':'Runtime update service refused request'} (HTTP ${response.status})${cleanup}`);
     }
-    return{response,bounded};
+    return response;
   }
   throw new UpdateProblem('rejected','Runtime redirect limit exceeded');
 }
-async function consume(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum:number,deadline:number,write:(bytes:Uint8Array)=>Promise<void>):Promise<number>{
-  const{response,bounded}=await responseFor(url,policy,signal,deadline);
-  const size=response.headers.get('content-length');
-  demand(size===null||(/^\d+$/.test(size)&&integer(Number(size),0,maximum)),'Runtime HTTP content length exceeds bound or is invalid');
-  demand(response.body,'Runtime response body is missing');let total=0;
-  const reader=response.body.getReader();
+async function consume(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum:number,deadline:number,write:(bytes:Uint8Array)=>Promise<void>,progress?:(bytes:number)=>void):Promise<number>{
+  const idle=new AbortController(),bounded=AbortSignal.any([signal,AbortSignal.timeout(deadline),idle.signal]);let timer:ReturnType<typeof setTimeout>|undefined,total=0;
+  const arm=(ms:number)=>{clearTimeout(timer);timer=setTimeout(()=>idle.abort(new DOMException(`No network progress for ${ms/1000}s`,'TimeoutError')),ms);};
   try{
-    for(;;){
-      let chunk:ReadableStreamReadResult<Uint8Array>;
-      try{chunk=await reader.read();}catch(error){
-        if(signal.aborted)return transportProblem(error,signal);
-        throw new UpdateProblem('rejected',`Incomplete runtime HTTP 200 response after ${total} bytes (${transportCode(bounded.aborted?bounded.reason:error)}); no completed metadata/payload is claimed`);
+    arm(policy.metadataDeadline);
+    const response=await responseFor(url,policy,bounded,signal),size=response.headers.get('content-length');
+    demand(size===null||(/^\d+$/.test(size)&&integer(Number(size),0,maximum)),'Runtime HTTP content length exceeds bound or is invalid');
+    demand(response.body,'Runtime response body is missing');const reader=response.body.getReader();
+    try{
+      for(;;){
+        // The former three-minute whole-file deadline killed healthy slow downloads.
+        arm(Math.min(deadline,policy.payloadIdleDeadline));let chunk:ReadableStreamReadResult<Uint8Array>;
+        try{chunk=await reader.read();}catch(error){
+          if(signal.aborted)return transportProblem(error,signal);
+          const timed=bounded.aborted&&bounded.reason?.name==='TimeoutError';
+          throw new UpdateProblem(timed?'unavailable':'rejected',`Incomplete runtime transfer: download stopped after ${total} bytes (${transportCode(bounded.aborted?bounded.reason:error)}${idle.signal.aborted?'; '+idle.signal.reason.message:''}); no incomplete files will be installed`);
+        }
+        clearTimeout(timer);if(chunk.done)break;
+        total+=chunk.value.byteLength;demand(total<=maximum,'Runtime response byte limit exceeded');await write(chunk.value);progress?.(total);
       }
-      if(chunk.done)break;
-      total+=chunk.value.byteLength;demand(total<=maximum,'Runtime response byte limit exceeded');await write(chunk.value);
-    }
-  }catch(error){
-    try{await reader.cancel();}catch(cleanup){throw new UpdateProblem('rejected',`Runtime transfer failed: ${error instanceof Error?error.message:transportCode(error)}; response cleanup failed (${transportCode(cleanup)})`);}
-    throw error;
-  }finally{reader.releaseLock();}
-  return total;
+      demand(size===null||Number(size)===total,'Incomplete runtime HTTP content length');return total;
+    }catch(error){
+      try{await reader.cancel();}catch(cleanup){if(error instanceof Error)error.message+=`; response cleanup failed (${transportCode(cleanup)})`;}
+      throw error;
+    }finally{reader.releaseLock();}
+  }finally{clearTimeout(timer);idle.abort();}
 }
 export async function metadata(url:string,policy:UpdatePolicy,signal:AbortSignal,maximum=MAX_METADATA):Promise<Buffer>{
   const chunks:Buffer[]=[];await consume(url,policy,signal,maximum,policy.metadataDeadline,async bytes=>{chunks.push(Buffer.from(bytes));});return Buffer.concat(chunks);
@@ -95,12 +100,12 @@ export async function discover(policy:UpdatePolicy,signal:AbortSignal,remember?:
   demand(manifest.payload.id===payload.id&&manifest.payload.name===payload.name&&manifest.payload.url===payload.browser_download_url&&manifest.payload.bytes===payload.size,'Signed payload does not belong to the resolved release generation');
   return{release,manifest,bytes,signature};
 }
-export async function downloadPayload(manifest:{payload:{url:string;bytes:number;sha256:string}},path:string,policy:UpdatePolicy,signal:AbortSignal):Promise<void>{
+export async function downloadPayload(manifest:{payload:{url:string;bytes:number;sha256:string}},path:string,policy:UpdatePolicy,signal:AbortSignal,progress?:(bytes:number)=>void):Promise<void>{
   const output=await open(path,'wx',0o600),hash=createHash('sha256');
   try{
     const size=await consume(manifest.payload.url,policy,signal,manifest.payload.bytes,policy.payloadDeadline,async bytes=>{
       let offset=0;while(offset<bytes.byteLength){const{bytesWritten}=await output.write(bytes,offset,bytes.byteLength-offset);demand(bytesWritten>0,'Runtime staging write made no progress');offset+=bytesWritten;}hash.update(bytes);
-    });
+    },progress);
     demand(size===manifest.payload.bytes&&hash.digest('hex')===manifest.payload.sha256,'Runtime payload digest/size mismatch or truncated download');await output.sync();
   }finally{await output.close();}
 }

@@ -10,7 +10,7 @@ export type Baseline = {root:string; mode:'source'|'release'; identitySha256:str
 export type UpdatePolicy = {
   target:Target; launcher:string; baseline:Baseline; metadataBundle:{baseline:Baseline;publicKey:string;assetOrigin:string}; discovery:string; assetOrigin:string;
   redirectOrigins:readonly string[]; publicKey:string; request:typeof fetch;
-  metadataDeadline:number; payloadDeadline:number;
+  metadataDeadline:number; payloadDeadline:number; payloadIdleDeadline:number;
 };
 export function createUpdatePolicy(resources:string, launcher:string):UpdatePolicy {
   const config=decodeJson(readFileSync(join(__dirname,'runtime-baseline.json')),MAX_METADATA*2+1024);
@@ -27,5 +27,5 @@ export function createUpdatePolicy(resources:string, launcher:string):UpdatePoli
   return policy(launcher,{root:join(resources,'runtime'),mode:'source',identitySha256:config.identitySha256,startupBackup:config.startupBackup as 0|1,clientNamespace:config.clientNamespace as 0|1});
 }
 function policy(launcher:string,baseline:Baseline):UpdatePolicy {
-  return {target:targetName(),launcher,baseline,metadataBundle:{baseline,publicKey:MANIFEST_PUBLIC_KEY,assetOrigin:'https://github.com'},discovery:`https://api.github.com/repos/${REPOSITORY}/releases/latest`,assetOrigin:'https://github.com',redirectOrigins:['https://api.github.com','https://github.com','https://release-assets.githubusercontent.com','https://objects.githubusercontent.com'],publicKey:MANIFEST_PUBLIC_KEY,request:fetch,metadataDeadline:20_000,payloadDeadline:180_000};
+  return {target:targetName(),launcher,baseline,metadataBundle:{baseline,publicKey:MANIFEST_PUBLIC_KEY,assetOrigin:'https://github.com'},discovery:`https://api.github.com/repos/${REPOSITORY}/releases/latest`,assetOrigin:'https://github.com',redirectOrigins:['https://api.github.com','https://github.com','https://release-assets.githubusercontent.com','https://objects.githubusercontent.com'],publicKey:MANIFEST_PUBLIC_KEY,request:fetch,metadataDeadline:20_000,payloadDeadline:30*60_000,payloadIdleDeadline:60_000};
 }

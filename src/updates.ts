@@ -1,3 +1,4 @@
+import {UpdateReporter,UpdateProgress,progressText} from './update-progress';
 import {EventEmitter} from 'node:events';
 import {randomUUID} from 'node:crypto';
 import {copyFile,lstat,mkdir,stat,unlink} from 'node:fs/promises';
@@ -15,13 +16,14 @@ import {Activity,Authorization,ReadyProof,Receipt,RecoveredRuntimeFence} from '.
 import {UserMessage} from './user-message';
 
 export type RuntimeSummary={version:string;sequence:number;server:string;client:string;serverCount?:number;clientCount?:number;ruffle:string;kind:'source'|'release'};
-export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean;canManageSaves:boolean;needsStart:boolean};
+export type UpdateView={phase:'initializing'|'checking'|'downloading'|'staged'|'activating'|'ready'|'unavailable'|'service'|'rejected'|'launcher'|'recovery'|'canceled';message:string;installed?:RuntimeSummary;available?:RuntimeSummary;canPlayInstalled:boolean;canRecover:boolean;canRetry:boolean;canManageSaves:boolean;needsStart:boolean;progress?:UpdateProgress};
 export type UpdateConfirmation={kind:'restore-update'|'verify-current'|'retry-update';message:string;detail:string};
 const equal=(a:unknown,b:unknown)=>JSON.stringify(a)===JSON.stringify(b);
 const summary=(g:Pick<Generation,'version'|'sequence'|'pins'|'kind'>):RuntimeSummary=>({version:g.version,sequence:g.sequence,server:g.pins.server.commit,client:g.pins.client.commit,...(g.pins.server.commitCount!==undefined?{serverCount:g.pins.server.commitCount}:{}),...(g.pins.client.commitCount!==undefined?{clientCount:g.pins.client.commitCount}:{}),ruffle:g.pins.ruffle.version,kind:g.kind});
 // Leave room for native acknowledgement staging suffixes under Windows' path limit in a portable extraction.
 const fileName=(reason:string,id=randomUUID())=>`${Date.now()}-${reason}-${id}.sqlite`;
 export class RuntimeUpdates extends EventEmitter{
+  private reporter=new UpdateReporter(value=>{this.message=progressText(value);this.emit('change',this.view());},message=>this.runtime.reportUpdate('Game: '+message));
   readonly store:RuntimeStore;readonly fence:RecoveredRuntimeFence;
   private initialization?:Promise<void>;private task?:Promise<UpdateView>;private controller?:AbortController;
   private current?:Generation;private committed?:Generation;private staged?:Generation;private available?:RuntimeSummary;
@@ -39,9 +41,9 @@ export class RuntimeUpdates extends EventEmitter{
   }
   prepareDiagnostics(){return this.store.container(this.runtime.diagnostics);}
   view():UpdateView{
-    return{phase:this.phase,message:this.message,canManageSaves:!!this.current&&!this.transaction&&!['initializing','recovery'].includes(this.phase),needsStart:this.transaction?.phase==='selected'&&this.transaction.failureSha256===null,installed:this.committed?summary(this.committed):undefined,available:this.available,canPlayInstalled:!!this.current&&this.runtime.isIdle()&&!this.transaction&&!!this.failure&&this.failure.kind!=='recovery',canRecover:this.phase==='recovery',canRetry:!!this.staged&&!this.transaction&&this.phase==='rejected'};
+    return{phase:this.phase,message:this.message,progress:this.reporter.value,canManageSaves:!!this.current&&!this.transaction&&!['initializing','recovery'].includes(this.phase),needsStart:this.transaction?.phase==='selected'&&this.transaction.failureSha256===null,installed:this.committed?summary(this.committed):undefined,available:this.available,canPlayInstalled:!!this.current&&this.runtime.isIdle()&&!this.transaction&&!!this.failure&&this.failure.kind!=='recovery',canRecover:this.phase==='recovery',canRetry:!!this.staged&&!this.transaction&&this.phase==='rejected'};
   }
-  private update(phase:UpdateView['phase'],message:string){this.phase=phase;this.message=message;this.emit('change',this.view());}
+  private update(phase:UpdateView['phase'],message:string){this.reporter.reset();this.phase=phase;this.message=message;this.runtime.reportUpdate('Game: '+phase+' · '+message);this.emit('change',this.view());}
   private problem(error:unknown){
     const recovery=!!this.transaction||this.runtime.view().status==='failed'||this.phase==='initializing'||this.phase==='recovery';
     const value=error instanceof UpdateProblem&&!recovery?error:new UpdateProblem(recovery?'recovery':'rejected',error instanceof Error?error.message:String(error));this.failure=value;if(this.staged)this.quarantined=true;this.update(value.kind,value.message);
@@ -82,7 +84,7 @@ export class RuntimeUpdates extends EventEmitter{
           throw new UpdateProblem('recovery','A previous runtime operation requires explicit recovery; no new update was attempted');
         }
         this.failure=undefined;this.update('checking','Checking the trusted release generation…');
-        const discovered=await discover(this.policy,controller.signal,(bytes,signature,sequence)=>this.store.remember(bytes,signature,{sequence})),m=discovered.manifest;
+        this.reporter.report('Fetching and authenticating game release metadata');const discovered=await discover(this.policy,controller.signal,(bytes,signature,sequence)=>this.store.remember(bytes,signature,{sequence})),m=discovered.manifest;
         this.available=summary({version:m.version,sequence:m.sequence,pins:m.pins,kind:'release'});
         demand(this.current,'Installed runtime was not initialized');const profile=await this.store.profile();
         const floor=Math.max(this.current.sequence,await this.store.authenticatedFloor(),...profile.attempts.map(a=>a.sequence));
@@ -93,9 +95,9 @@ export class RuntimeUpdates extends EventEmitter{
         else{
           this.update('downloading',`Downloading and verifying paired runtime ${m.version}…`);stage=await this.store.stage();
           await this.store.writeBytes(join(stage,'manifest.json'),discovered.bytes);await this.store.writeBytes(join(stage,'manifest.sig'),discovered.signature);
-          const archive=join(stage,'payload.tar.gz');await downloadPayload(m,archive,this.policy,controller.signal);
-          await extractRuntime(archive,join(stage,'runtime'),this.policy.target,m.payload.expandedBytes);
-          const identity=await verifyRuntime(join(stage,'runtime'),this.policy.target,m),g=generation(identity,digest(await boundedFile(join(stage,'runtime','build-identity.json'))),this.policy.target,1,1,m,digest(discovered.bytes));
+          const archive=join(stage,'payload.tar.gz');this.reporter.report('Downloading server and client',0,m.payload.bytes,'bytes');await downloadPayload(m,archive,this.policy,controller.signal,bytes=>this.reporter.report('Downloading server and client',bytes,m.payload.bytes,'bytes'));
+          await extractRuntime(archive,join(stage,'runtime'),this.policy.target,m.payload.expandedBytes,this.reporter.report);
+          const identity=await verifyRuntime(join(stage,'runtime'),this.policy.target,m,this.reporter.report),g=generation(identity,digest(await boundedFile(join(stage,'runtime','build-identity.json'))),this.policy.target,1,1,m,digest(discovered.bytes));
           await unlink(archive);await this.store.publish(stage,g);stage=undefined;this.staged=g;
         }
         this.quarantined=profile.failed.includes(this.staged.id);

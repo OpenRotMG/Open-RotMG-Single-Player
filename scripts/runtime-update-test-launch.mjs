@@ -2,14 +2,15 @@ import {chromium} from '@playwright/test';
 import {spawn} from 'node:child_process';
 import {EventEmitter} from 'node:events';
 import {setTimeout as delay} from 'node:timers/promises';
-import {resolve} from 'node:path';
+import {resolve,join,dirname} from 'node:path';
+import {readFile,stat} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 
 async function endpoint(child,stderr){
  const deadline=Date.now()+30_000;
  while(Date.now()<deadline){
   assert(child.exitCode===null&&child.signalCode===null,'Owned Electron exited before debugger attachment');
-  const match=/Debugger listening on (ws:\/\/127\.0\.0\.1:[0-9]+\/[^\s]+)/.exec(stderr());
+  const match=/Debugger listening on (ws:\/\/127\.0\.0\.1:[0-9]+\/[^\s]+)/.exec(await stderr());
   if(match){const url=new URL(match[1]);assert(url.protocol==='ws:'&&url.hostname==='127.0.0.1'&&url.port&&!url.username&&!url.password&&!url.search&&!url.hash);return url.href;}
   await delay(50);
  }
@@ -27,13 +28,15 @@ async function inspector(url){
 // electronPath differs from executablePath when the portable launcher supplies the profile and (on Windows) stays as Electron's parent.
 export async function launchUpdateTest({executablePath,electronPath=executablePath,profile,env,policy,setupMain=''}){
  const viaLauncher=electronPath!==executablePath,args=['--inspect-brk=0','--remote-debugging-port=0',...(viaLauncher?[]:[`--user-data-dir=${profile}`]),...(process.platform==='linux'?['--ozone-platform=x11']:[])];
+ const consoleFile=join(dirname(executablePath),'server data/launcher-console.log');let offset=0;if(viaLauncher)try{offset=(await stat(consoleFile)).size;}catch(e){if(e.code!=='ENOENT')throw e;}
  const child=spawn(executablePath,args,{env,stdio:['ignore','pipe','pipe'],windowsHide:true}),events=new EventEmitter();let debug,browser,mainContext,resumed=false,stderr='',stdout='';
  // Crash cuts need main's actual exit independently of inherited pipes held by a paused owned backend.
  const exited=new Promise(ok=>child.once('exit',(code,signal)=>ok({code,signal})));
  const closed=new Promise(ok=>child.once('close',(code,signal)=>{events.emit('close',{code,signal});ok({code,signal});}));let spawnError;child.once('error',error=>spawnError=error);child.stdout.on('data',bytes=>stdout+=bytes);child.stderr.on('data',bytes=>{stderr+=bytes;if(stderr.includes('Waiting for the debugger to disconnect'))debug?.close();});
+ const output=async()=>{if(viaLauncher)try{const text=(await readFile(consoleFile)).subarray(offset).toString('utf8');stderr=pipeStderr+text;}catch(e){if(e.code!=='ENOENT')throw e;}if(stderr.includes('Waiting for the debugger to disconnect'))debug?.close();return stderr;};let pipeStderr='';child.stderr.on('data',bytes=>pipeStderr+=bytes);const logTail=setInterval(()=>{void output().catch(error=>{spawnError=error;});},100);logTail.unref();child.once('exit',()=>clearInterval(logTail));
  console.log(`update-test-launch spawned owned Electron pid=${child.pid}`);
  try{
-  debug=await inspector(await endpoint(child,()=>stderr));
+  debug=await inspector(await endpoint(child,output));
   const pauses=[],pauseLog=[],scripts=new Map();debug.on('Debugger.scriptParsed',value=>scripts.set(value.scriptId,{url:value.url,contextId:value.executionContextId}));debug.on('Debugger.paused',value=>{pauses.push(value);pauseLog.push(value.callFrames.map(frame=>({url:frame.url,scriptId:frame.location.scriptId,line:frame.location.lineNumber})));});
   await debug.send('Runtime.enable');await debug.send('Debugger.enable');console.log('update-test-launch inspector attached before startup');
   await debug.send('Debugger.setBreakpointByUrl',{urlRegex:'app\\.asar[/\\\\]dist[/\\\\]main\\.js$',lineNumber:0});await debug.send('Runtime.runIfWaitingForDebugger');
@@ -66,7 +69,7 @@ export async function launchUpdateTest({executablePath,electronPath=executablePa
   })()`;
   assert(Number.isSafeInteger(mainContext),'Actual main context was not observed');
   const proof=await debug.frameEvaluate(script,mainFrame.callFrameId);assert(proof.beforeMain);console.log('update-test-launch fixture attached before main');resumed=true;await debug.send('Debugger.resume');console.log('update-test-launch main resumed');
-  const chromeDeadline=Date.now()+30000;while(!stderr.includes('DevTools listening on ')&&Date.now()<chromeDeadline&&child.exitCode===null)await delay(50);assert(stderr.includes('DevTools listening on '),`Owned Electron Chromium inspector missing: ${stderr}`);
+  const chromeDeadline=Date.now()+30000;while(!(await output()).includes('DevTools listening on ')&&Date.now()<chromeDeadline&&child.exitCode===null)await delay(50);assert(stderr.includes('DevTools listening on '),`Owned Electron Chromium inspector missing: ${stderr}`);
   const chromeURL=new URL(/DevTools listening on (ws:\/\/127\.0\.0\.1:[0-9]+\/devtools\/browser\/[^\s]+)/.exec(stderr)?.[1]);assert(chromeURL.hostname==='127.0.0.1'&&!chromeURL.search&&!chromeURL.hash);
   browser=await chromium.connectOverCDP(chromeURL.href);console.log('update-test-launch Chromium attached');
   const app={
