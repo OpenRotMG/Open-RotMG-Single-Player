@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir,cp} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
 import {release,version as osVersion} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -158,13 +158,15 @@ async function journey(){
   check('Selected full restore recovers the older custom password, preserves other credentials and original gameplay progress',true);
   await launch();await start();await game.verify(true);await close();await game.close();
   check('Full backup/restore, cold reopen and active-game Close preserve progress without orphan processes',true);
-  const stateHash=await hashFile(join(profile,'state/game.db'));await restoreProtection();restoreProtection=undefined;
+  const stateHash=await hashFile(join(profile,'state/game.db')),legacySelection=await readFile(join(storage,'runtime-selection.json')),legacyKey=await hashFile(join(storage,'server-state/server.pem'));await restoreProtection();restoreProtection=undefined;
+  for(const name of await readdir(storage))await cp(join(storage,name),join(profile,name),{recursive:true,verbatimSymlinks:true,errorOnExist:true,force:false});
   const replacement=join(out,'new copy Open RotMG é 日本');report.installations.push(await installArtifact(artifact,replacement,out));
   const replacementRoot=report.installations.at(-1).path;
   await rmdir(join(replacementRoot,'player data'));await rename(profile,join(replacementRoot,'player data'));use(replacementRoot);
   assert.equal(await hashFile(join(profile,'state/game.db')),stateHash);assert.equal(await hashFile(join(resources,'app.asar')),report.installed.asarSha256);await verifyRuntime(runtime,targetName(),manifest);
   restoreProtection=await protectInstallation(paths.server);await assertProtected('reinstall');await launch();await start();await game.verify(true);await stop();await game.close();const progress=game;game=undefined;await close();
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
+  check('A real legacy-shaped profile migration preserves authenticated runtime selection and the original server key while keeping player data save-only',(await readFile(join(storage,'runtime-selection.json'))).equals(legacySelection)&&await hashFile(join(storage,'server-state/server.pem'))===legacyKey&&(await readdir(profile)).every(name=>['state','backups'].includes(name))&&(await readdir(join(profile,'state'))).every(name=>['game.db','game.db-wal','game.db-shm','state.lock','local-passwords.json'].includes(name)));
   await restoreProtection();restoreProtection=undefined;
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
   report.status='passed';

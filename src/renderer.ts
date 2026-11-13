@@ -133,7 +133,7 @@ function renderAccounts(accounts:LocalAccount[]){
     hint.textContent=account.username===null?'Guest account. Set a username and password to sign in.':account.password===null?'Password not saved. Leave blank to keep it, or enter a new password.':'';
     show.type='button';show.textContent='Show password';show.onclick=()=>{password.type=password.type==='password'?'text':'password';show.textContent=password.type==='password'?'Show password':'Hide password';};
     save.type='submit';save.textContent='Save changes';form.append(title,userLabel,passwordLabel,show,save,hint);
-    form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('accounts-status').textContent='Account updated. Your progress is unchanged.';await refreshBackups();});};
+    form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('imported-account').hidden=true;element('accounts-status').textContent='Account updated. Your progress is unchanged.';await refreshBackups();});};
     list.append(form);
   }
 }

@@ -8,12 +8,12 @@ import {observeRuntimeAssets} from '../scripts/runtime-update-cache-observer.mjs
 function fixture(origin='http://127.0.0.1:47831'){
  const session=new EventEmitter(),assets=[],errors=[],bodyTasks=[],bodies=new Map(),calls=[];
  session.send=(method,{requestId})=>{calls.push({method,requestId});return new Promise((resolve,reject)=>bodies.set(requestId,{resolve,reject}));};
- observeRuntimeAssets({session,assets,errors,bodyTasks,origin});
+ const observer=observeRuntimeAssets({session,assets,errors,bodyTasks,origin});
  const emit=(name,data={})=>session.emit('Network.'+name,{requestId:'warm',...data});
  const response=(fields={})=>emit('responseReceived',{hasExtraInfo:true,response:{url:'http://127.0.0.1:47831/launcher.js',status:200,headers:{'Last-Modified':'Thu, 05 Nov 2026 12:05:16 GMT'},...fields}});
- const finish=()=>emit('loadingFinished');
- const body=async()=>{bodies.get('warm').resolve({body:'old-A',base64Encoded:false});await Promise.all(bodyTasks);};
- return{session,assets,errors,bodyTasks,bodies,calls,emit,response,finish,body};
+ const finish=()=>{emit('loadingFinished');observer.captureLoadedBodies(origin+'/');};
+ const body=async()=>{observer.captureLoadedBodies(origin+'/');bodies.get('warm').resolve({body:'old-A',base64Encoded:false});await Promise.all(bodyTasks);};
+ return{session,assets,errors,bodyTasks,bodies,calls,emit,response,finish,body,observer};
 }
 for(const timing of ['before response','after response','after loadingFinished','after body resolution'])for(const fact of ['wire304','servedFromCache'])test(`runtime-update-cache-observer retains ${fact} ${timing}`,async()=>{
  const f=fixture(),late=()=>fact==='wire304'?f.emit('responseReceivedExtraInfo',{statusCode:304}):f.emit('requestServedFromCache');
@@ -27,6 +27,10 @@ test('runtime-update-cache-observer joins completion arriving before response me
 });
 test('runtime-update-cache-observer keeps pending resources visible until actual completion and bytes',async()=>{
  const f=fixture();f.response();assert.equal(f.assets[0].body,'pending');assert.equal(f.assets[0].sha256,undefined);assert.deepEqual(f.calls,[]);f.finish();f.finish();await f.body();assert.equal(f.assets[0].body,'received');assert.equal(f.calls.length,1);
+});
+test('runtime-update-cache-observer explicit loaded-document capture requires actual bytes without inventing loadingFinished',async()=>{
+ const f=fixture();f.response();f.observer.captureLoadedBodies('http://127.0.0.1:47831/_runtime/foreign/');assert.equal(f.calls.length,0);f.observer.captureLoadedBodies('http://127.0.0.1:47831/');assert.equal(f.calls.length,1);await f.body();assert.equal(f.assets[0].body,'received');assert.equal(f.assets[0].sha256,createHash('sha256').update('old-A').digest('hex'));assert(!f.assets[0].eventOrder.some(e=>e.event==='loadingFinished'));assert(f.assets[0].eventOrder.some(e=>e.event==='bodyReadRequested'));
+ const rejected=fixture();rejected.response();rejected.observer.captureLoadedBodies('http://127.0.0.1:47831/');rejected.bodies.get('warm').reject(Error('stream still unavailable'));await Promise.all(rejected.bodyTasks);assert.equal(rejected.assets[0].body,'unavailable');assert.equal(rejected.assets[0].sha256,undefined);assert.equal(rejected.errors.length,1);rejected.observer.captureLoadedBodies('http://127.0.0.1:47831/');assert.equal(rejected.calls.length,1);
 });
 test('runtime-update-cache-observer preserves disk-cache and service-worker flags without fabricating wire status',async()=>{
  const f=fixture();f.response({fromDiskCache:true,fromServiceWorker:true});f.finish();await f.body();assert.equal(f.assets[0].fromDiskCache,true);assert.equal(f.assets[0].fromServiceWorker,true);assert.equal(f.assets[0].wireStatus,null);assert.equal(f.assets[0].servedFromCache,false);
