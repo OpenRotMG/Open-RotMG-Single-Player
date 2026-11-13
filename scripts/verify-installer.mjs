@@ -37,8 +37,8 @@ async function journey(){
   report.delivery=receipt;report.artifact={path:artifact,sha256:await hashFile(artifact)};
   const flags=JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]');assert(flags.length===0||JSON.stringify(flags)==='["--ignore-gpu-blocklist"]','Only approved software WebGL flag allowed');
   lease=await acquireQaPortLease();display=await updateTestDisplay(out);report.display=display.proof;
-  const env=await consumerEnvironment(display.env,out),installation=join(out,'extracted Open RotMG é 日本');let paths,profile,resources,executable,runtime;
-  const use=root=>{paths=installedPaths(root);({player:profile,resources,executable}=paths);runtime=join(resources,'runtime');};
+  const env=await consumerEnvironment(display.env,out),installation=join(out,'extracted Open RotMG é 日本');let paths,profile,storage,resources,executable,runtime;
+  const use=root=>{paths=installedPaths(root);({player:profile,resources,executable}=paths);runtime=join(resources,'runtime');storage=join(root,'server data/profile');};
   report.installations=[await installArtifact(artifact,installation,out)];use(report.installations[0].path);
   const launcherVersion=JSON.parse(await readFile('package.json','utf8')).version,binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
   const config=JSON.parse(extractFile(join(resources,'app.asar'),'dist/runtime-baseline.json').toString());assert.equal(config.mode,'release');
@@ -55,6 +55,7 @@ async function journey(){
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   if(manifest.save.write===23)check('The exported fixture includes collection_sources, which the old bundled server rejected',Object.hasOwn(JSON.parse(await readFile(portable,'utf8')),'collection_sources'));
   const secret='password';let userData;
+  await mkdir(join(profile,'Cache'));await writeFile(join(profile,'Cache/migration-proof'),'legacy cache bytes');await mkdir(join(profile,'diagnostics'));await writeFile(join(profile,'diagnostics/000-legacy.jsonl'),'legacy diagnostic bytes');
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
    ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:executable,profile,env,policy:{},setupMain:`module.createUpdatePolicy=(resources,launcher)=>({...productionPolicy(resources,launcher),request:async()=>new Response('',{status:503})});
@@ -64,7 +65,7 @@ async function journey(){
     const appUpdates=require(process.resourcesPath+'/app.asar/dist/launcher-updates.js'),Original=appUpdates.LauncherUpdates;
     appUpdates.LauncherUpdates=class extends Original{constructor(version,target,request,store){const parts=version.split('.').map(Number);parts[2]++;const next=parts.join('.'),repository='OpenRotMG/Open-RotMG-Single-Player';super(version,target,async()=>new Response(JSON.stringify([{id:123,tag_name:'v'+next,url:'https://api.github.com/repos/'+repository+'/releases/123',draft:false,prerelease:false,body:'LAUNCHER_VERSION='+next,assets:[{name:'openrotmg-singleplayer-'+next+'-'+target+'.zip',size:1,browser_download_url:'https://github.com/'+repository+'/releases/download/v'+next+'/openrotmg-singleplayer-'+next+'-'+target+'.zip'}]}])),store);}};`}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.evaluate(()=>window.launcher.updates())).phase==='service','controlled update service refusal');
-   userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,profile);report.userData=userData;
+   userData=await app.evaluate(({app})=>app.getPath('userData'));assert.equal(userData,storage);report.userData=userData;
    assert.equal(await app.evaluate(()=>process.resourcesPath),resources);assert.equal(await app.evaluate(()=>process.execPath),executable);
    assert.equal(await app.evaluate(()=>process.env.PATH),env.PATH);assert(!(await app.evaluate(()=>process.env.NODE_OPTIONS)));
    const pid=await app.evaluate(()=>process.pid),argv=await processArgv(pid);assert(!argv.includes('--no-sandbox'));
@@ -75,20 +76,22 @@ async function journey(){
   const start=async()=>{
    await page.locator('#show-home').click();await page.locator('#play').click();await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'actual installed child readiness',650000);
    const view=await page.evaluate(()=>window.launcher.status()),health=await(await fetch(view.origin+'/health')).json();serverPid=view.pid;assert.equal(health.process,serverPid);
-   const selection=JSON.parse(await readFile(join(profile,'runtime-selection.json'),'utf8')),selected=join(profile,'runtimes',selection.id,'runtime');await verifyRuntime(selected,targetName(),manifest);
+   const selection=JSON.parse(await readFile(join(storage,'runtime-selection.json'),'utf8')),selected=join(storage,'runtimes',selection.id,'runtime');await verifyRuntime(selected,targetName(),manifest);
    const image=process.platform==='linux'?await readlink(`/proc/${serverPid}/exe`):process.platform==='win32'?windowsProcessIdentity(serverPid).executable:execFileSync('ps',['-p',String(serverPid),'-o','comm='],{encoding:'utf8'}).trim();
    assert.equal(await realpath(image),await realpath(join(selected,process.platform==='win32'?'openrotmg.exe':'openrotmg')));assert.equal(await hashFile(image),manifest.payload.binarySha256);
    const argv=await processArgv(serverPid);assert(argv.includes('--desktop')&&!/--dev-control|--test-state/.test(argv));
    (report.processes??=[]).push({pid:serverPid,image,health,argv,selection,binarySha256:await hashFile(image)});return view;
   };
-  const stop=async()=>{const pid=serverPid;await page.locator('#show-advanced').click();await page.locator('#stop').click();await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='stopped','durable Stop',650000);assert(!alive(pid));serverPid=undefined;const logs=(await readdir(join(profile,'diagnostics'))).sort();assert((await readFile(join(profile,'diagnostics',logs.at(-1)),'utf8')).includes('shutdown persistence complete'));};
+  const stop=async()=>{const pid=serverPid;await page.locator('#show-advanced').click();await page.locator('#stop').click();await wait(async()=>(await page.evaluate(()=>window.launcher.status())).status==='stopped','durable Stop',650000);assert(!alive(pid));serverPid=undefined;const logs=(await readdir(join(storage,'diagnostics'))).sort();assert((await readFile(join(storage,'diagnostics',logs.at(-1)),'utf8')).includes('shutdown persistence complete'));};
   const close=async()=>{const pid=serverPid,main=app.process().pid,closed=app.waitForEvent('close');await page.locator('#close-window').click();const result=await closed;assert.equal(result.code,0);assert(!alive(main));if(pid)assert(!alive(pid));app=undefined;serverPid=undefined;};
   await launch();
+  check('Legacy operational folders migrate byte-for-byte into server data while player data contains only state and backups',await readFile(join(storage,'Cache/migration-proof'),'utf8')==='legacy cache bytes'&&await readFile(join(storage,'diagnostics/000-legacy.jsonl'),'utf8')==='legacy diagnostic bytes'&&(await readdir(profile)).every(name=>['state','backups'].includes(name)));
+  check('Import account caption has no ellipsis',await page.locator('#import').innerText()==='Import account');
   check('XP home has one Play action, real Realm art, text Settings and no player dashboard or separate finish command',await page.locator('#home-page').isVisible()&&await page.locator('#settings-page').isHidden()&&await page.locator('#play').isVisible()&&await page.locator('#show-settings').innerText()==='Settings'&&await page.locator('#finish-update,#password,#confirmation').count()===0&&await page.locator('.portal').evaluate(img=>img.complete&&img.naturalWidth===16));
   check('Custom XP caption keeps named minimize, maximize and save-and-close controls',await page.locator('.titlebar').isVisible()&&await page.locator('#minimize,#maximize,#close-window').count()===3);
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-advanced').click();
-  check('Logs and their actual diagnostic location live inside selected Settings Advanced',await page.locator('#logs-page').isVisible()&&await page.locator('#diagnostics').textContent()===join(profile,'diagnostics')&&await page.locator('#show-settings').getAttribute('aria-current')==='page'&&await page.locator('#tab-advanced').getAttribute('aria-selected')==='true');
+  check('Logs and their actual diagnostic location live inside selected Settings Advanced',await page.locator('#logs-page').isVisible()&&await page.locator('#diagnostics').textContent()===join(storage,'diagnostics')&&await page.locator('#show-settings').getAttribute('aria-current')==='page'&&await page.locator('#tab-advanced').getAttribute('aria-selected')==='true');
   await page.locator('#log-search').fill('no-such-native-log-row');check('Real packaged logs search visibly filters without deleting technical history',await page.locator('#logs').innerText()==='No matching events.');await page.locator('#log-search').fill('');
   await page.screenshot({path:join(out,'launcher-logs.png')});
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
@@ -130,15 +133,27 @@ async function journey(){
   const saveResult=async(pattern,label)=>wait(async()=>{const error=await page.locator('#error').innerText();if(error)throw Error(`${label}: ${error}`);return pattern.test(await page.locator('#save-result').innerText());},label);
   await page.locator('#show-settings').click();
   check('Backups shortcut selects Settings Backups with backup, restore and save location grouped',await page.locator('#tab-backups').getAttribute('aria-selected')==='true'&&await page.locator('#show-settings').getAttribute('aria-current')==='page'&&await page.locator('#save-location').innerText()===profile);
+  await page.locator('#tab-accounts').click();await page.locator('#load-accounts').click();await wait(async()=>await page.locator('#account-list form').count()>=2,'native account list');
+  const managed=page.locator(`form[data-account="${preview.account}"]`),fields=managed.locator('input');assert.equal(await fields.nth(0).inputValue(),preview.login);assert.equal(await fields.nth(1).inputValue(),legacyPassword);await managed.getByRole('button',{name:'Show password',exact:true}).click();assert.equal(await fields.nth(1).getAttribute('type'),'text');await managed.getByRole('button',{name:'Hide password',exact:true}).click();
+  check('Account management lists actual local usernames and verified remembered passwords and offers the fixed export action',await page.locator('#export-account').innerText()==='Export live account');
+  const managedLogin='managed@local.invalid',managedPassword='native-managed-password';await fields.nth(0).fill(managedLogin);await fields.nth(1).fill(managedPassword);await managed.getByRole('button',{name:'Save changes'}).click();await wait(async()=>/Account updated/.test(await page.locator('#accounts-status').innerText()),'committed account edit');
+  await start();assert.match(await authenticate(managedLogin,managedPassword),/<Chars\b/);assert.match(await authenticate(preview.login,legacyPassword),/<Error/);assert.match(await authenticate(login,secret),/<Chars\b/);await stop();
+  check('Editing username and password durably changes only the selected account while unrelated credentials and progress remain usable',true);
+  await page.locator('#tab-accounts').click();await page.locator('#load-accounts').click();await wait(async()=>await page.locator('#account-list form').count()>=2,'edited account refreshed');assert.equal(await fields.nth(0).inputValue(),managedLogin);assert.equal(await fields.nth(1).inputValue(),managedPassword);await page.screenshot({path:join(out,'launcher-accounts.png')});
+  const original=await page.evaluate(()=>window.launcher.listAccounts()),record=original.find(a=>a.account===preview.account),beforeDuplicate=await hashFile(join(profile,'state/game.db'));const duplicate=await page.evaluate(async({record,login,password})=>{try{await window.launcher.editAccount(record.account,record.expected,login,password);return 'unexpected success';}catch(error){return error.message;}},{record,login,password:managedPassword});assert.notEqual(duplicate,'unexpected success');assert.equal(await hashFile(join(profile,'state/game.db')),beforeDuplicate);
+  check('Duplicate username refusal leaves the real database unchanged and does not bless an unknown save outcome',(await page.evaluate(()=>window.launcher.status())).status==='stopped');
+  await fields.nth(0).fill(preview.login);await fields.nth(1).fill(legacyPassword);await managed.getByRole('button',{name:'Save changes'}).click();await wait(async()=>/Account updated/.test(await page.locator('#accounts-status').innerText()),'restore fixture credentials through account UI');await page.locator('#tab-backups').click();
   await page.locator('#backup').click();await saveResult(/Backup created/,'full backup');
   const backups=join(profile,'backups'),names=(await readdir(backups)).filter(n=>n.includes('-manual-')&&n.endsWith('.sqlite'));assert.equal(names.length,1);const backup=join(backups,names[0]);
+  check('Player data stays save-only after actual import, account edits and backups',(await readdir(profile)).every(name=>['state','backups'].includes(name)));
   report.backup={path:backup,sha256:await hashFile(backup),bytes:(await stat(backup)).size};
   await wait(async()=>await page.locator(`tr[data-backup="${names[0]}"]`).count()===1,'native backup appears in history');
+  await page.locator(`tr[data-backup="${names[0]}"]`).locator('td').nth(2).click();check('Clicking a backup reason cell selects the whole row for restore',await page.locator(`tr[data-backup="${names[0]}"]`).getByRole('radio').isChecked());
   await page.screenshot({path:join(out,'launcher-backups.png')});
   await page.locator('#show-home').click();await choose(secondary);await page.locator('#import').click();await page.locator('#import-preview').waitFor({state:'visible'});assert(await page.locator('#replace-warning').isVisible());await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});await wait(async()=>(await page.evaluate(()=>window.launcher.status())).operation===undefined,'replacement settled');
   await start();assert.match(await authenticate(preview.login,secret),/<Chars\b/);assert.match(await authenticate(preview.login,legacyPassword),/<Error/);assert.match(await authenticate(login,secret),/<Chars\b/);await stop();
   check('Confirmed replacement always sets the displayed default without resetting unrelated accounts',true);
-  await page.locator('#show-settings').click();await page.locator(`tr[data-backup="${names[0]}"]`).getByRole('radio').check();await choose(undefined,1);await page.locator('#restore').click();await saveResult(/Backup restored/,'full selected restore');
+  await page.locator('#show-settings').click();await page.locator(`tr[data-backup="${names[0]}"]`).locator('td').nth(1).click();await choose(undefined,1);await page.locator('#restore').click();await saveResult(/Backup restored/,'full selected restore');
   await start();assert.match(await authenticate(preview.login,legacyPassword),/<Chars\b/);assert.match(await authenticate(preview.login,secret),/<Error/);assert.match(await authenticate(login,secret),/<Chars\b/);await close();
   check('Selected full restore recovers the older custom password, preserves other credentials and original gameplay progress',true);
   await launch();await start();await game.verify(true);await close();await game.close();

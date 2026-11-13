@@ -30,7 +30,7 @@ export class RuntimeUpdates extends EventEmitter{
   private refusedCheck?:{format:1;id:string;kind:'service'|'rejected'|'launcher';message:string;selected:Selection};
   private failureSerial=0;private failure?:UpdateProblem;private phase:UpdateView['phase']='initializing';private message='Preparing explicit installed runtime…';
   constructor(private runtime:Runtime,readonly policy:UpdatePolicy,private confirm:(value:UpdateConfirmation)=>Promise<boolean>){
-    super();this.store=new RuntimeStore(runtime.userData,policy,error=>runtime.blockAmbiguousSave(error));this.fence=new RecoveredRuntimeFence(this.store);runtime.attachUpdates(this);
+    super();this.store=new RuntimeStore(runtime.storage,policy,error=>runtime.blockAmbiguousSave(error),runtime.userData);this.fence=new RecoveredRuntimeFence(this.store);runtime.attachUpdates(this);
     runtime.on('change',()=>{
       if(runtime.view().status==='failed'&&this.phase!=='recovery')this.problem(new UpdateProblem('recovery',runtime.view().message));
       if(this.staged&&!this.quarantined&&!this.task&&runtime.isIdle())void this.applyDeferred();
@@ -148,7 +148,7 @@ export class RuntimeUpdates extends EventEmitter{
   }
   private async writePending(p:Pending){pending(p);await this.store.writeRecord(this.store.path('runtime-pending.json'),p);this.transaction=p;}
   private async archivePending(p:Pending){
-    const directory=join(this.runtime.userData,'runtime-recovery-history');await this.store.container(directory);
+    const directory=join(this.runtime.storage,'runtime-recovery-history');await this.store.container(directory);
     const data=await boundedFile(this.store.path('runtime-pending.json'));demand(equal(pending(JSON.parse(data.toString('utf8'))),p),'Pending runtime record changed before settlement');
     const path=join(directory,`${digest(data)}.pending.json`);demand(!await exists(path),'Pending settlement evidence already exists');await this.store.moveDistinct(this.store.path('runtime-pending.json'),path,'file');await this.store.movedBytes(path,data);this.transaction=undefined;
   }

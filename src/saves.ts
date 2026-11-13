@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp, open, rm, stat, realpath, readdir, lstat } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, rm, stat, realpath, readdir, lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Runtime } from './runtime';
@@ -9,6 +9,13 @@ import {UserMessage} from './user-message';
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
 export type SaveResult = { message: string; path?: string; login?: string; disclosure?: string };
+export type LocalAccount = {account:number;name:string;username:string|null;password:string|null;expected:string};
+export function accountList(value:unknown):LocalAccount[]{
+  const result=value as {accounts:LocalAccount[]};
+  if(!result||Object.keys(result).length!==1||!Array.isArray(result.accounts)||result.accounts.some(a=>!a||Object.keys(a).sort().join(',')!=='account,expected,name,password,username'||!positive(a.account)||typeof a.name!=='string'||!(a.username===null||typeof a.username==='string')||!(a.password===null||typeof a.password==='string')||typeof a.expected!=='string'||!/^[a-f0-9]{64}$/.test(a.expected)))throw Error('Invalid local account authority acknowledgement');
+  if(new Set(result.accounts.map(a=>a.account)).size!==result.accounts.length)throw Error('Duplicate local account acknowledgement');
+  return result.accounts;
+}
 export type BackupFile = { name: string; modified: number; bytes: number };
 export const isBackupName = (name: unknown): name is string => typeof name === 'string' && name.length <= 255 && /\.(sqlite|db)$/.test(name) && !/[<>:"|?*]/.test(name) && !/\p{Cc}/u.test(name) && !name.includes('/') && !name.includes('\\');
 export type SaveDialogs = {
@@ -38,7 +45,7 @@ export class AuthorityUnchangedError extends Error { constructor(message:string,
 
 /** Only server-owned named save commands are reachable here; paths never come from IPC. */
 export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'blockAmbiguousSave'|'authorityStarting'|'authorityClosed'>;
-export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore', paths: string[], password?: string): Promise<unknown> {
+export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore' | 'accounts' | 'account-edit', paths: string[], password?: string): Promise<unknown> {
   const { binary } = runtime.runtimePaths();
   await runtime.authorityStarting(command,binary);
   let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
@@ -83,12 +90,14 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
     } else if (command === 'restore') {
       const value = result as {restored: boolean; backup: string};
       if (!value || Object.keys(value).length !== 2 || value.restored !== true || value.backup !== paths[3]) throw new Error('invalid restore acknowledgement');
+    } else if(command==='accounts'||command==='account-edit'){
+      accountList(result);
     } else {
       const value = result as ImportPreview;
       if (!value || Object.keys(value).length !== 4 || !positive(value.account) || value.login !== `player-${value.account}@local.invalid` || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
     }
   } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
-  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:result});
+  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:command==='accounts'||command==='account-edit'?{accounts:accountList(result).map(({password,...row})=>row)}:result});
   return result;
 }
 function authorityEnvironment() {
@@ -123,7 +132,7 @@ export class SaveControls {
   }
   private async staged<T>(source: string, kind: 'account' | 'snapshot', action: (path: string, modified: string) => Promise<T>): Promise<T> {
     const limit = kind === 'account' ? MAX_ACCOUNT_BYTES : undefined;
-    const parent = join(this.runtime.userData, 'save-staging');
+    const parent = join(this.runtime.storage, 'save-staging');
     await mkdir(parent, {recursive: true, mode: 0o700});
     const directory = await mkdtemp(join(parent, 'selected-'));
     let primary: unknown, completed = false;
@@ -216,6 +225,17 @@ export class SaveControls {
     pending.accept(undefined);
     await pending.outcome;
     return true;
+  }
+  private async requireAccounts(){
+    let bytes:Buffer;try{bytes=await readFile(join(this.runtime.resources,'notices/account-management.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new UserMessage('Install the Server + client update before managing accounts.');throw error;}
+    const value=JSON.parse(bytes.toString('utf8'));if(Object.keys(value).sort().join(',')!=='cli,format,server,storage'||value.format!==1||value.cli!==1||value.storage!==1||typeof value.server!=='string'||!/^[a-f0-9]{40}$/.test(value.server))throw Error('Invalid authenticated account-management capability');
+    if(value.server!==(await readFile(join(this.runtime.resources,'REVISION'),'utf8')).trim())throw Error('Account-management capability does not match the selected server');
+  }
+  listAccounts():Promise<LocalAccount[]>{return this.runtime.stoppedOperation('View local accounts',async()=>{await this.requireAccounts();const {state,data}=this.runtime.runtimePaths();return accountList(await saveAuthority(this.runtime,'accounts',[state,data]));});}
+  editAccount(account:unknown,expected:unknown,username:unknown,password:unknown):Promise<LocalAccount[]>{
+    if(!positive(account)||typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected)||typeof username!=='string'||username.length>245)throw new UserMessage('Refresh the account list and enter a valid username.');
+    const secret=password===''?null:checkedPassword(password,password);
+    return this.runtime.stoppedOperation('Change local account',async()=>{await this.requireAccounts();await this.backupDirectory();const {state,data}=this.runtime.runtimePaths();try{return accountList(await saveAuthority(this.runtime,'account-edit',[state,data,this.backupPath('pre-account-edit')],JSON.stringify({account,expected,username,password:secret})));}catch(error){if(error instanceof AuthorityUnchangedError)throw new UserMessage('Account was not changed. Check the username and backup folder, then refresh the account list. Details are in Advanced → Logs.',{cause:error});throw error;}});
   }
   makeBackup(): Promise<SaveResult> {
     return this.runtime.stoppedOperation('Make backup', async () => {

@@ -1,5 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join } from 'node:path';
+import {execFileSync} from 'node:child_process';
+import {realpathSync} from 'node:fs';
 import {realpath} from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { Runtime } from './runtime';
@@ -13,6 +15,18 @@ import { gameSite } from './game-site';
 import {UserMessage} from './user-message';
 
 app.setName('Open RotMG Single Player');
+const playerData=app.getPath('userData');
+if(app.isPackaged&&app.commandLine.hasSwitch('portable-root')){
+ try{
+  const root=realpathSync(app.commandLine.getSwitchValue('portable-root'));
+  if(realpathSync(playerData)!==realpathSync(join(root,'player data')))throw Error('Portable save path does not match ownership');
+  const native=join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer');
+  const profile=JSON.parse(execFileSync(native,['--launcher-storage',root],{encoding:'utf8',windowsHide:true,timeout:30000})).profile;
+  if(profile!==join(root,'server data','profile'))throw Error('Invalid launcher storage acknowledgement');
+  app.setPath('userData',profile);app.setPath('sessionData',profile);
+  app.commandLine.removeSwitch('user-data-dir');app.commandLine.appendSwitch('user-data-dir',profile);
+ }catch(error){dialog.showErrorBox('Could not prepare launcher storage',String(error));app.exit(1);throw error;}
+}
 // The portable launcher names the save folder; starting this file directly would silently use an unrelated OS profile.
 if (app.isPackaged && !app.commandLine.hasSwitch('user-data-dir')) {
   dialog.showErrorBox('Open the OpenRotMG Singleplayer program', 'Start the game with "OpenRotMG Singleplayer", next to the "player data" and "server data" folders.');
@@ -33,8 +47,8 @@ else {
   const importPassword = 'password';
   app.whenReady().then(async () => {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
-    const userData=process.platform==='win32'?await realpath(app.getPath('userData')):app.getPath('userData');
-    runtime = new Runtime(policy.baseline.root, userData);
+    const userData=app.isPackaged?await realpath(playerData):playerData;
+    runtime = new Runtime(policy.baseline.root, userData,app.isPackaged?await realpath(app.getPath('userData')):app.getPath('userData'));
     site = await gameSite(runtime);
     const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
@@ -73,7 +87,7 @@ else {
       return (async()=>{
         try{
           if(launcherUpdates.busy&&!['launcher:status','runtime:status','update:status','window:minimize','window:maximize',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserMessage('The launcher is updating. Please wait.');
-          if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','save:import','save:confirm-import','save:backup','save:restore'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
+          if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
           return{ok:true,value:await action(...args)};
         }
         catch(error){runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
@@ -112,6 +126,8 @@ else {
       await shell.openExternal(site.url());
     });
     checked('runtime:help', () => shell.openExternal('https://openrotmg.org/export/'));
+    checked('account:list',()=>saves.listAccounts());
+    checked('account:edit',(account,expected,username,password)=>saves.editAccount(account,expected,username,password),args=>args.length===4&&Number.isSafeInteger(args[0])&&Number(args[0])>0&&typeof args[1]==='string'&&/^[a-f0-9]{64}$/.test(args[1])&&typeof args[2]==='string'&&args[2].length<=245&&typeof args[3]==='string'&&Buffer.byteLength(args[3])<=128);
     checked('save:import', () => saves.beginImport());
     checked('save:confirm-import', (expected, replace) => saves.finishImport(expected, importPassword, importPassword, replace), args => args.length === 2 && typeof args[0] === 'string' && /^[a-f0-9]{64}$/.test(args[0]) && typeof args[1] === 'boolean');
     checked('save:cancel-import', () => saves.cancelImport());

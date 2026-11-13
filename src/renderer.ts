@@ -1,5 +1,5 @@
 import type { View } from './runtime';
-import type { ImportPreview, SaveResult, BackupFile } from './saves';
+import type { ImportPreview, SaveResult, BackupFile, LocalAccount } from './saves';
 import type { UpdateView, RuntimeSummary } from './updates';
 import type { LauncherUpdateView } from './launcher-updates';
 declare global {
@@ -9,13 +9,14 @@ declare global {
     launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
     updates():Promise<UpdateView>; checkUpdates():Promise<UpdateView>; retryUpdate():Promise<UpdateView>; recoverRuntime():Promise<UpdateView>; releases():Promise<void>; updatesChanged(callback:(view:UpdateView)=>void):void;
     importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
+    listAccounts():Promise<LocalAccount[]>;editAccount(account:number,expected:string,username:string,password:string):Promise<LocalAccount[]>;
     makeBackup():Promise<SaveResult>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<SaveResult>; openBackupFolder():Promise<SaveResult>; restoreBackup(name?:string):Promise<SaveResult|undefined>;
     changed(callback:(view:View)=>void):void;
   } }
 }
 const element = <T extends HTMLElement>(id:string):T => { const node=document.getElementById(id);if(!node)throw Error('Missing launcher control: '+id);return node as T; };
 const button = (id:string) => element<HTMLButtonElement>(id);
-const pages=['backups','updates','advanced'] as const;
+const pages=['accounts','backups','updates','advanced'] as const;
 type Page = 'home'|typeof pages[number];
 let page:Page='home',runtimeView:View|undefined,updateView:UpdateView|undefined,launcherView:LauncherUpdateView|undefined;
 let preview:ImportPreview|undefined,requesting=false,submitting=false,actionError='',backups:BackupFile[]=[],selectedBackup:string|undefined,backupRequest=0;
@@ -52,6 +53,9 @@ function render(){
   button('client').disabled=busy||v?.status!=='ready';
   const saveBlocked=busy||!v||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
   for(const id of ['import','backup','folder','restore-other','save-folder'])button(id).disabled=saveBlocked;
+  button('load-accounts').disabled=saveBlocked;
+  button('load-accounts').textContent=v?.status==='ready'?'Save & load accounts':'Refresh accounts';
+  element('account-list').querySelectorAll<HTMLInputElement|HTMLButtonElement>('input,button').forEach(control=>{control.disabled=saveBlocked;});
   button('restore').disabled=saveBlocked||!selectedBackup;
   button('check-updates').disabled=busy||!u||['initializing','checking','downloading','activating'].includes(u.phase);
   button('play-installed').hidden=!u?.canPlayInstalled;button('play-installed').disabled=busy||v?.status!=='stopped';
@@ -84,10 +88,12 @@ async function invoke(action:()=>Promise<unknown>){
   try{await action();}catch(error){reportError(error);}finally{requesting=false;render();}
 }
 function showPage(next:Page){
+  element('account-list').replaceChildren();
   page=next;element('home-page').hidden=page!=='home';element('settings-page').hidden=page==='home';
   for(const name of pages){element(`${name}-page`).hidden=page!==name;button(`tab-${name}`).setAttribute('aria-selected',String(page===name));button(`tab-${name}`).tabIndex=page===name?0:-1;}
   button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-settings').setAttribute('aria-current',page!=='home'?'page':'false');
   if(page==='backups')void refreshBackups().catch(reportError);
+  if(page==='accounts')element('accounts-status').textContent=runtimeView?.status==='ready'?'Save & load accounts to manage local logins.':'Refresh accounts to view local logins.';
 }
 async function refreshBackups(){
   const request=++backupRequest,files=await window.launcher.listBackups();if(request!==backupRequest)return;
@@ -96,9 +102,9 @@ async function refreshBackups(){
   for(const file of files){
     const row=document.createElement('tr'),select=document.createElement('td'),date=document.createElement('td'),name=document.createElement('td'),radio=document.createElement('input');
     radio.type='radio';radio.name='backup';radio.checked=file.name===selectedBackup;radio.setAttribute('aria-label',`${new Date(file.modified).toLocaleString()} · ${file.name}`);
-    radio.onchange=()=>{selectedBackup=file.name;render();};select.append(radio);
+    const choose=()=>{radio.checked=true;selectedBackup=file.name;render();};radio.onchange=choose;row.onclick=choose;select.append(radio);
     date.textContent=new Date(file.modified).toLocaleString();name.textContent='Other file';
-    for(const [part,label] of [['manual','Manual backup'],['pre-import','Before import'],['pre-replace','Before replacement'],['pre-restore','Before restore'],['pre-update','Before update'],['pre-start','Before starting'],['recovery-current','After save check']])if(file.name.includes(`-${part}-`)){name.textContent=label;break;}
+    for(const [part,label] of [['manual','Manual backup'],['pre-import','Before import'],['pre-replace','Before replacement'],['pre-restore','Before restore'],['pre-update','Before update'],['pre-start','Before starting'],['pre-account-edit','Before account change'],['recovery-current','After save check']])if(file.name.includes(`-${part}-`)){name.textContent=label;break;}
     row.setAttribute('data-backup',file.name);name.title=`${file.name} · ${file.bytes} bytes`;row.append(select,date,name);list.append(row);
   }
   element('backup-empty').hidden=files.length>0;element('backup-empty').textContent='No backups yet.';render();
@@ -115,6 +121,23 @@ for(const id of ['stop','home-stop'])button(id).onclick=()=>void invoke(async()=
 button('client').onclick=()=>void invoke(()=>window.launcher.client());
 element('client-url').onclick=event=>{event.preventDefault();void invoke(()=>window.launcher.client());};
 button('help').onclick=()=>void invoke(()=>window.launcher.help());
+element('export-account').onclick=event=>{event.preventDefault();void invoke(()=>window.launcher.help());};
+function renderAccounts(accounts:LocalAccount[]){
+  const list=element('account-list');list.replaceChildren();
+  element('accounts-status').textContent=accounts.length?'':'No local accounts yet. Play or import an account first.';
+  for(const account of accounts){
+    const form=document.createElement('form'),title=document.createElement('h4'),userLabel=document.createElement('label'),passwordLabel=document.createElement('label'),username=document.createElement('input'),password=document.createElement('input'),show=document.createElement('button'),save=document.createElement('button'),hint=document.createElement('p');
+    form.className='account';form.setAttribute('data-account',String(account.account));title.textContent=account.name;
+    userLabel.textContent='Username (email)';username.type='email';username.required=true;username.maxLength=245;username.autocomplete='off';username.value=account.username??'';userLabel.append(username);
+    passwordLabel.textContent='Password';password.type='password';password.required=account.username===null;password.autocomplete='new-password';password.maxLength=128;password.value=account.password??'';passwordLabel.append(password);
+    hint.textContent=account.username===null?'Guest account. Set a username and password to sign in.':account.password===null?'Password not saved. Leave blank to keep it, or enter a new password.':'';
+    show.type='button';show.textContent='Show password';show.onclick=()=>{password.type=password.type==='password'?'text':'password';show.textContent=password.type==='password'?'Show password':'Hide password';};
+    save.type='submit';save.textContent='Save changes';form.append(title,userLabel,passwordLabel,show,save,hint);
+    form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('accounts-status').textContent='Account updated. Your progress is unchanged.';await refreshBackups();});};
+    list.append(form);
+  }
+}
+button('load-accounts').onclick=()=>void invoke(async()=>{renderAccounts(await window.launcher.listAccounts());await refreshBackups();});
 button('import').onclick=()=>void invoke(async()=>{
   hidePreview();const selected=await window.launcher.importPlayer();if(!selected)return;
   preview=selected;element('import-summary').textContent=`${selected.name} · ${selected.character_count} characters · ${new Date(selected.exported_at*1000).toLocaleDateString()}`;

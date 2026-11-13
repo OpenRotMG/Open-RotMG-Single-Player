@@ -13,7 +13,7 @@ for(const ending of ['LF','CRLF'])test(`runtime promotion concurrency preserves 
 });
 
 test('runtime-updates workflow requires the three standard native targets and no retired platform/security detours',async()=>{
- const code=await readFile('.github/workflows/runtime-updates-test.yml','utf8'),producer=await readFile('scripts/ci-runtime-inputs.mjs','utf8');assert.match(code,/workflow_dispatch:/);assert.match(code,/os: \[ubuntu-22\.04, windows-2022, macos-15\]/);assert.match(code,/contents: read/);assert.match(code,/npm run test:runtime-updates/);assert(!/self-hosted|intel|notar|no-sandbox|disable-gpu-driver|RUNTIME_MANIFEST_SIGNING_KEY/.test(code));
+ const code=await readFile('.github/workflows/runtime-updates-test.yml','utf8'),producer=await readFile('scripts/ci-runtime-inputs.mjs','utf8');assert.match(code,/workflow_dispatch:/);assert.match(code,/os: \[ubuntu-22\.04, windows-2022, macos-26\]/);assert.match(code,/contents: read/);assert.match(code,/npm run test:runtime-updates/);assert(!/self-hosted|intel|notar|no-sandbox|disable-gpu-driver|RUNTIME_MANIFEST_SIGNING_KEY/.test(code));
  assert.equal((producer.match(/core\.autocrlf=false/g)||[]).length,2,'Clone and each A/C checkout must preserve exact LF-bound data/client hashes on Windows');
  for(const name of ['windows_startup_backup_durable_publication_consumes_staging_and_never_replaces','startup_backup_publication_and_flush_failures_abort_main_before_migration_or_listening','startup_backup_schema21_22_and_23_are_verified_unconditional_and_keep_credentials'])assert(producer.includes(name));assert.match(producer,/command\[1\]='test'/);assert.match(producer,/output\.includes\(name\+' \.\.\. ok'\)/);assert.match(producer,/\['A',a\],\['C',pins\]/);
 });

@@ -1,4 +1,4 @@
-import { spawn, ChildProcessByStdio, SpawnOptions } from 'node:child_process';
+import { spawn, execFileSync, ChildProcessByStdio, SpawnOptions } from 'node:child_process';
 import { Writable } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
 import { EventEmitter } from 'node:events';
@@ -45,10 +45,10 @@ export class Runtime extends EventEmitter {
   readonly diagnostics: string;
   private updates?: RuntimeUpdates;
   private selectedResources: string;
-  constructor(resources: string, readonly userData: string) {
+  constructor(resources: string, readonly userData: string, readonly storage: string = userData) {
     super();
     this.selectedResources = resources;
-    this.diagnostics = join(userData, 'diagnostics');
+    this.diagnostics = join(storage, 'diagnostics');
   }
   get resources() { return this.selectedResources; }
   attachUpdates(updates: RuntimeUpdates) {
@@ -77,8 +77,8 @@ export class Runtime extends EventEmitter {
     this.unsafe = true;
     this.line(String(error));
     if (!this.failureGate) {
-      this.failureGate = (this.updates&&process.platform==='win32'?Promise.resolve():mkdir(this.userData, { recursive: true, mode: 0o700 }))
-        .then(() => this.updates ? this.updates.persistFailure(error) : writeFile(join(this.userData, 'shutdown-failed.json'), JSON.stringify({ at: new Date().toISOString(), error: String(error) }), { mode: 0o600, flush: true }))
+      this.failureGate = (this.updates&&process.platform==='win32'?Promise.resolve():mkdir(this.storage, { recursive: true, mode: 0o700 }))
+        .then(() => this.updates ? this.updates.persistFailure(error) : writeFile(join(this.storage, 'shutdown-failed.json'), JSON.stringify({ at: new Date().toISOString(), error: String(error) }), { mode: 0o600, flush: true }))
         .then(() => undefined, cause => {
           const failure = new Error(`Could not persist shutdown failure: ${cause}. Failure gate is NOT recorded; launcher ownership must be retained.`);
           this.failurePersistenceError = failure;
@@ -112,7 +112,7 @@ export class Runtime extends EventEmitter {
     if(this.updates)await this.updates.prepareDiagnostics();else await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
     await this.updates?.beforeStart(installedOnly);
     if (this.closing && this.updates) throw this.updates.canceledBeforeSpawn();
-    if (await this.exists(join(this.userData, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized()) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
+    if (await this.exists(join(this.storage, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized()) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
     const { binary, data, client: clientPath, state } = this.runtimePaths();
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
     const inventory = JSON.parse(await readFile(join(this.resources, 'inventory.json'), 'utf8')) as { files: string[] };
@@ -125,9 +125,16 @@ export class Runtime extends EventEmitter {
       probe.once('error', error => bad(new Error(`Loopback port ${PORT} unavailable: ${error.message}. No other process was stopped.`)));
       probe.listen(PORT, '127.0.0.1', () => probe.close(error => error ? bad(error) : ok()));
     });
-    const config = join(this.userData, 'desktop-config.json');
+    let operational:Record<string,string>={};
+    if(await this.exists(join(this.resources,'notices/account-management.json'))){
+      const capability=JSON.parse(await readFile(join(this.resources,'notices/account-management.json'),'utf8'));if(capability.format!==1||capability.cli!==1||capability.storage!==1)throw Error('Invalid separate server-storage capability');
+      const root=resolve(this.userData,'..');if(this.storage!==join(root,'server data','profile'))throw Error('Separate server storage requires native portable ownership');
+      const prepared=JSON.parse(execFileSync(join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer'),['--launcher-server-storage',root],{encoding:'utf8',windowsHide:true,timeout:30000}));
+      if(prepared.profile!==join(this.storage,'server-state'))throw Error('Invalid native server-storage acknowledgement');operational={operational_state:prepared.profile};
+    }
+    const config = join(this.storage, 'desktop-config.json');
     await writeFile(config, JSON.stringify({ bind: `127.0.0.1:${PORT}`, origin: this.origin,
-      data, client: clientPath, state,
+      data, client: clientPath, state, ...operational,
       behind_proxy: false, shore_bots: false, bot_llm: false, max_players: 85, realm_seed: 42, ...this.updates?.startupConfig() }, null, 2), { mode: 0o600 });
     await this.updates?.beforeSpawn(binary);
     const name = new Date().toISOString().replaceAll(':', '-');
@@ -252,7 +259,7 @@ export class Runtime extends EventEmitter {
       if (kind === 'recovery' && this.closed) await this.closed;
       await this.verifyFailureGate();
       if (kind !== 'recovery') {
-        if (this.unsafe || (await this.exists(join(this.userData, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized())) throw new Error('Previous shutdown was not verified; save operations are blocked');
+        if (this.unsafe || (await this.exists(join(this.storage, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized())) throw new Error('Previous shutdown was not verified; save operations are blocked');
         if (kind === 'save') await this.updates?.beforeSave();
       }
       return action();
