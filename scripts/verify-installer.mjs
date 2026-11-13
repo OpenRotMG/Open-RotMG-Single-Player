@@ -171,8 +171,8 @@ async function journey(){
   check('A real legacy-shaped profile migration preserves authenticated runtime selection and the original server key while keeping player data save-only',(await readFile(join(storage,'runtime-selection.json'))).equals(legacySelection)&&await hashFile(join(storage,'server-state/server.pem'))===legacyKey&&(await readdir(profile)).every(name=>['state','backups'].includes(name))&&(await readdir(join(profile,'state'))).every(name=>['game.db','game.db-wal','game.db-shm','state.lock','local-passwords.json'].includes(name)));
   await restoreProtection();restoreProtection=undefined;
   const legacySeed=join(out,'legacy-seed.sqlite');await copyFile(join(profile,'state/game.db'),legacySeed);
-  await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
-  await verifyLegacyLauncher({artifact,seed:legacySeed,env,out,report,check,verifyProgress:()=>progress.verify(true),closeGame:()=>progress.close()});
+  await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>progress.verify(true,url),closeGame:()=>progress.close()});
+  await verifyLegacyLauncher({artifact,seed:legacySeed,env,out,report,check,verifyProgress:url=>progress.verify(true,url),closeGame:()=>progress.close()});
   report.status='passed';
  }catch(error){
   if(app)report.launcherOutput={stderr:app.stderr(),stdout:app.stdout()};

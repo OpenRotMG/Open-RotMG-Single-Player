@@ -169,7 +169,8 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       check('native inventory drop committed through normal account API',JSON.stringify(after)===JSON.stringify(expected));
       const shot=join(out,'inventory-dropped.png');await page.screenshot({path:shot});report.screenshots.push(shot);
     },
-    async verify(keepConnected = false) {
+    async verify(keepConnected = false,url) {
+      if(url!==undefined)entryURL=url;
       const name=`reopened-${sequence}`;
       await open(name);
       try{const actual=await account(name);check(`${name}: same synthetic character retains exact changed inventory`,JSON.stringify(actual)===JSON.stringify(expected));}
