@@ -85,7 +85,7 @@ function render(){
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
-function reportError(error:unknown){const info=error instanceof Error&&error.name==='Notice';actionError=info?'':String(error);element('error').setAttribute('class',info?'notice info':'notice error');element('error').setAttribute('role',info?'status':'alert');const message=error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
+function reportError(error:unknown){const notice=error as {name?:unknown;message?:unknown}|null,info=notice?.name==='Notice'&&typeof notice.message==='string';actionError=info?'':String(error);element('error').setAttribute('class',info?'notice info':'notice error');element('error').setAttribute('role',info?'status':'alert');const message=info?notice!.message as string:error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
 async function invoke(action:()=>Promise<unknown>){
   if(requesting)return;
   requesting=true;actionError='';element('error').textContent='';element('import-error').textContent='';render();

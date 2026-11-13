@@ -4,7 +4,11 @@ import type { UpdateView } from './updates';
 async function invoke(channel:string,...args:unknown[]){
   const reply=await ipcRenderer.invoke(channel,...args);
   if(!reply||typeof reply!=='object'||!(Object.keys(reply).length===2||!reply.ok&&Object.keys(reply).length===3&&reply.severity==='info')||typeof reply.ok!=='boolean'||(reply.ok?!Object.hasOwn(reply,'value'):typeof reply.error!=='string'))throw new Error('The launcher returned an invalid reply. Please report this problem.');
-  if(!reply.ok){const error=new Error(reply.error);if(reply.severity==='info')error.name='Notice';throw error;}
+  if(!reply.ok){
+    // contextBridge strips custom Error names, so expected notices cross as plain data.
+    if(reply.severity==='info')throw Object.freeze({name:'Notice',message:reply.error});
+    throw new Error(reply.error);
+  }
   return reply.value;
 }
 contextBridge.exposeInMainWorld('launcher', Object.freeze({

@@ -70,3 +70,5 @@ test('main explicit installed mode is not an arbitrary Start argument or pending
 });
 
 test('native log clipboard validates the exact trusted frame and bounded UTF-8 text',async()=>{const f=await setup(),copy=f.handlers.get('logs:copy');for(const args of [[],[{},'extra'],['x'.repeat(1024*1024+1)],['é'.repeat(600000)]])assert.throws(()=>copy(f.trusted(),...args),/Rejected untrusted IPC/);assert.throws(()=>copy({...f.trusted(),sender:{}},'log'),/Rejected untrusted IPC/);assert.equal((await copy(f.trusted(),'Actual log é 日本')).ok,true);assert.deepEqual(f.calls,[['clipboard','Actual log é 日本']]);});
+
+test('preload carries expected notices as plain data rather than an Error with a lost bridge name',async()=>{let bridge;runInNewContext(await source('preload'),{exports:{},require:()=>({contextBridge:{exposeInMainWorld:(name,value)=>bridge=value},ipcRenderer:{invoke:async()=>({ok:false,error:'Updating. Please wait.',severity:'info'}),on(){}}})});await assert.rejects(bridge.makeBackup(),e=>e.name==='Notice'&&e.message==='Updating. Please wait.'&&Object.getPrototypeOf(e)!==Error.prototype);});
