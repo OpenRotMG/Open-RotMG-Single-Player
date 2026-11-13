@@ -3,6 +3,7 @@ import {randomUUID} from 'node:crypto';
 import {lstat,open,realpath} from 'node:fs/promises';
 import {dirname,isAbsolute,relative,resolve,sep} from 'node:path';
 import {decodeJson,demand,exact,portablePath} from './update-format';
+import {serverCommandPath} from './runtime';
 
 export type MetadataOperation='publish-replace'|'publish-distinct'|'move-distinct'|'create-container';
 export type MetadataRequest={operation:MetadataOperation;root:string;source:string|null;destination:string;kind:'file'|'directory'};
@@ -16,7 +17,7 @@ export async function publishMetadata(binary:string,request:MetadataRequest){
   demand(isAbsolute(binary)&&isAbsolute(request.root),'Metadata binary/root must be absolute');portablePath(request.destination);if(request.source!==null)portablePath(request.source);
   const args=['--desktop-metadata',request.operation,request.root,...(request.source===null?[]:[request.source]),request.destination],env:NodeJS.ProcessEnv={};
   for(const key of ['SystemRoot','WINDIR','TEMP','TMP','HOME','USERPROFILE','LANG'])if(process.env[key])env[key]=process.env[key];
-  const child=spawn(binary,args,{windowsHide:true,env,stdio:['ignore','pipe','pipe']});let output=Buffer.alloc(0),stderr=0,overflow=false,spawnError:Error|undefined,transportError=false;
+  const child=spawn(serverCommandPath(binary),args,{windowsHide:true,env,stdio:['ignore','pipe','pipe']});let output=Buffer.alloc(0),stderr=0,overflow=false,spawnError:Error|undefined,transportError=false;
   child.stdout.on('data',(data:Buffer)=>{if(output.length+data.length>16384)overflow=true;output=Buffer.concat([output,data.subarray(0,Math.max(0,16384-output.length))]);});
   child.stderr.on('data',(data:Buffer)=>{stderr+=data.length;if(stderr>16384)overflow=true;});child.once('error',error=>{spawnError=error;});child.stdout.on('error',()=>{transportError=true;});child.stderr.on('error',()=>{transportError=true;});
   const closed=await new Promise<{code:number|null;signal:string|null}>(ok=>child.once('close',(code,signal)=>ok({code,signal})));

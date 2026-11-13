@@ -5,7 +5,7 @@ import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { access, mkdir, readFile, writeFile, stat, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { RuntimeUpdates } from './updates';
 
@@ -15,6 +15,11 @@ export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
 export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
+
+// Cached runtime paths can reach MAX_PATH; native command syntax avoids false ENOENT without changing Windows policy.
+export function serverCommandPath(binary:string,platform:NodeJS.Platform=process.platform){
+  return platform==='win32'?win32.toNamespacedPath(binary):binary;
+}
 
 export function desktopServerSpawnOptions(platform: NodeJS.Platform, resources: string, env: NodeJS.ProcessEnv, logFd: number): SpawnOptions {
   // Windows libuv otherwise kills this child with the parent's job before its private EOF drain finishes.
@@ -145,7 +150,7 @@ export class Runtime extends EventEmitter {
     // Environment is deliberately small: host bot/proxy/API-key settings cannot enter the consumer child.
     const env: NodeJS.ProcessEnv = { RUST_LOG: 'openrotmg=info,lag=info' };
     for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
-    const child = spawn(binary, ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
+    const child = spawn(serverCommandPath(binary), ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
     this.child = child;this.childClosed = false;this.startSpawned = true;
     this.closed = new Promise((ok) => {
       child.once('error', error => this.fail(new Error(`Server spawn failed: ${error.message}`)));

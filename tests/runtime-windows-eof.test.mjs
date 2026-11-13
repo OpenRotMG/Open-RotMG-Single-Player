@@ -1,11 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,writeFile,readFile} from 'node:fs/promises';
-import {resolve,join} from 'node:path';
+import {mkdir,mkdtemp,writeFile,readFile,copyFile} from 'node:fs/promises';
+import {resolve,join,win32} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
-import {desktopServerSpawnOptions} from '../dist/runtime.js';
+import {desktopServerSpawnOptions,serverCommandPath} from '../dist/runtime.js';
+
+test('server command paths use the Windows namespace without changing POSIX paths',()=>{
+ const binary=win32.join('C:\\OpenRotMG é 日本','server data/profile/runtimes','release-3-'+ 'a'.repeat(64),'runtime/openrotmg.exe');assert.equal(serverCommandPath(binary,'win32'),'\\\\?\\'+binary);for(const platform of ['linux','darwin'])assert.equal(serverCommandPath(binary,platform),binary);
+});
+test('native Windows server commands execute from an existing long Unicode cached path',{skip:process.platform!=='win32'},async()=>{
+ await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/server-command-')),image=join(root,'日本'+ 'x'.repeat(200),'server.exe');await mkdir(resolve(image,'..'));await copyFile(process.execPath,image);assert(image.length>260);assert.equal(execFileSync(serverCommandPath(image),['--version'],{cwd:root,timeout:30000,encoding:'utf8'}).trim(),process.version);
+});
 
 test('runtime Windows job isolation retains private stdin, direct log descriptors, hidden window and referenced ownership',()=>{
   const env={SystemRoot:'owned-system'},expected={cwd:'owned-resources',env,windowsHide:true,stdio:['pipe',42,42]};

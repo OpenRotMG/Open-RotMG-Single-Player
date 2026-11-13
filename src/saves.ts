@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, mkdtemp, open, rm, stat, realpath, readdir, lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { Runtime } from './runtime';
+import { Runtime, serverCommandPath } from './runtime';
 
 import {UserMessage} from './user-message';
 
@@ -49,7 +49,7 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
   const { binary } = runtime.runtimePaths();
   await runtime.authorityStarting(command,binary);
   let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
-  const child = spawn(binary, ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  const child = spawn(serverCommandPath(binary), ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
   const collect = (current: Buffer, bytes: Buffer) => {
     if (current.length + bytes.length > MAX_OUTPUT_BYTES) overflow = true;
     return Buffer.concat([current, bytes.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - current.length))]);
