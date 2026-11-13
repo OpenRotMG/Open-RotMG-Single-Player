@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir,cp,copyFile} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,stat,realpath,readlink,rename,rmdir,cp} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
 import {release,version as osVersion} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -170,9 +170,8 @@ async function journey(){
   check('A fresh extraction with the moved player data folder keeps the identical database and real playable saved progress',true);
   check('A real legacy-shaped profile migration preserves authenticated runtime selection and the original server key while keeping player data save-only',(await readFile(join(storage,'runtime-selection.json'))).equals(legacySelection)&&await hashFile(join(storage,'server-state/server.pem'))===legacyKey&&(await readdir(profile)).every(name=>['state','backups'].includes(name))&&(await readdir(join(profile,'state'))).every(name=>['game.db','game.db-wal','game.db-shm','state.lock','local-passwords.json'].includes(name)));
   await restoreProtection();restoreProtection=undefined;
-  const legacySeed=join(out,'legacy-seed.sqlite');await copyFile(join(profile,'state/game.db'),legacySeed);
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>progress.verify(true,url),closeGame:()=>progress.close()});
-  await verifyLegacyLauncher({artifact,seed:legacySeed,env,out,report,check,verifyProgress:url=>progress.verify(true,url),closeGame:()=>progress.close()});
+  await verifyLegacyLauncher({artifact,env,out,report,check});
   report.status='passed';
  }catch(error){
   if(app)report.launcherOutput={stderr:app.stderr(),stdout:app.stdout()};
