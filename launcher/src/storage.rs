@@ -47,7 +47,9 @@ pub(super) fn server(root:&Path)->Result<PathBuf,String>{
 #[cfg(test)] mod tests {
     use super::*;
     #[test] fn migration_keeps_save_and_lock_inodes_and_is_repeatable() {
-        let root = crate::tests::fixture();
+        let fixture = crate::tests::fixture();
+        let root = fixture.portable_canonicalize().unwrap();
+        if fixture != root {assert!(prepare(&fixture).is_err());}
         fs::create_dir(root.join("player data/state")).unwrap();
         fs::write(root.join("player data/state/game.db"), b"save").unwrap();
         fs::write(root.join("player data/runtime-selection.json"), b"selection").unwrap();
