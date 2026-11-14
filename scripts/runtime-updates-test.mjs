@@ -81,7 +81,7 @@ async function journey(){
  };
  const stop=async()=>{await page.evaluate(()=>window.launcher.stop());assert.equal((await view()).status,'stopped');assert.equal((await view()).pid,undefined);assert.match((await view()).message,/exit 0/);ownedServer=undefined;};
  const observe=async({page:gamePage,context})=>{
-  const session=await context.newCDPSession(gamePage);assetObservers.push(observeRuntimeAssets({session,assets:report.assets,errors:report.errors,bodyTasks,origin:clientOrigin}));await session.send('Network.enable',{maxTotalBufferSize:268435456,maxResourceBufferSize:134217728});
+  const session=await context.newCDPSession(gamePage);assetObservers.push(observeRuntimeAssets({session,assets:report.assets,errors:report.errors,bodyTasks,origin:clientOrigin}));await session.send('Network.enable',{maxTotalBufferSize:268435456,maxResourceBufferSize:134217728,enableDurableMessages:true});
  };
  try{
   // Git blobs bind the reviewed case across native checkout line endings; actual file bytes remain separate evidence.

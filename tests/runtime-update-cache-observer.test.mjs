@@ -49,7 +49,7 @@ test('runtime-update-cache-observer follows the actual presentation origin, not 
  const f=fixture('http://127.0.0.1:47832');f.response({url:'http://127.0.0.1:47831/launcher.js'});f.finish();assert.deepEqual(f.calls,[]);f.response({url:'http://127.0.0.1:47832/launcher.js'});f.finish();await f.body();assert.equal(f.assets.length,1);assert.equal(f.assets[0].url,'http://127.0.0.1:47832/launcher.js');assert.deepEqual(f.errors,[]);
 });
 test('runtime-update-cache-observer keeps unavailable body an explicit failure, not a successful asset',async()=>{
- const f=fixture();f.response();f.finish();f.bodies.get('warm').reject(Error('body unavailable'));await Promise.all(f.bodyTasks);assert.equal(f.assets.length,1);assert.equal(f.assets[0].body,'unavailable');assert.equal(f.assets[0].sha256,undefined);assert.deepEqual(f.errors,['Observed asset body unavailable: Error: body unavailable']);
+ const f=fixture();f.response();f.finish();f.bodies.get('warm').reject(Error('body unavailable'));await Promise.all(f.bodyTasks);assert.equal(f.assets.length,1);assert.equal(f.assets[0].body,'unavailable');assert.equal(f.assets[0].sha256,undefined);assert.deepEqual(f.errors,[`Observed asset body unavailable (${f.assets[0].url}): Error: body unavailable`]);
 });
 test('runtime-update-cache-observer ignores unrelated bodies and bounds retained requests with an explicit failure',()=>{
  const f=fixture();for(const url of ['http://example.invalid/launcher.js','http://127.0.0.1:47831/health','http://127.0.0.1:47831/legacy-api/char/list']){f.response({url});f.finish();}assert.deepEqual(f.calls,[]);

@@ -15,7 +15,7 @@ export function observeRuntimeAssets({session,assets,errors,bodyTasks,origin}){
   if(!state?.item||state.reading)return;state.reading=true;const item=state.item;record(requestId,'bodyReadRequested');
   bodyTasks.push(session.send('Network.getResponseBody',{requestId}).then(value=>{
    record(requestId,'bodyResolved');item.sha256=createHash('sha256').update(Buffer.from(value.body,value.base64Encoded?'base64':'utf8')).digest('hex');item.body='received';
-  },error=>{record(requestId,'bodyRejected');item.body='unavailable';errors.push('Observed asset body unavailable: '+String(error));}));
+  },error=>{record(requestId,'bodyRejected');item.body='unavailable';errors.push(`Observed asset body unavailable (${item.url}): ${String(error)}`);}));
  };
  session.on('Network.requestServedFromCache',event=>{
   const state=record(event.requestId,'requestServedFromCache');if(!state)return;state.servedFromCache=true;if(state.item)state.item.servedFromCache=true;
