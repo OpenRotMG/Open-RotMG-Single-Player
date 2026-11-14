@@ -1,6 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell, dialog, clipboard } from 'electron';
 import { join } from 'node:path';
-import { rm } from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {realpathSync} from 'node:fs';
 import {realpath} from 'node:fs/promises';
@@ -48,8 +47,6 @@ else {
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
   app.whenReady().then(async () => {
     const userData=app.isPackaged?await realpath(playerData):playerData,storage=app.isPackaged?await realpath(app.getPath('userData')):app.getPath('userData');
-    // Releases before 1.0.3 cached separately downloaded servers here; the server now always ships inside this build.
-    for(const name of ['runtimes','runtime-staging','runtime-manifests'])await rm(join(storage,name),{recursive:true,force:true});
     runtime = new Runtime(join(process.resourcesPath,'runtime'), userData, storage);
     await runtime.loadSettings();
     site = await gameSite(runtime);
