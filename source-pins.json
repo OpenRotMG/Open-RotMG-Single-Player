@@ -1,10 +1,10 @@
 {
   "server": {
     "repository": "https://github.com/dginovker/Open-RotMG-Server",
-    "commit": "4d7fc6576642650aed82520a9d25e7b3b83062eb",
+    "commit": "ae9fbc2900e008cc221a0f8b5c26c90b2f6c4d75",
     "dataSha256": "e977c963746e287e861b36a060b2deab60f908113c1f950029c5a356940f9de9",
     "upstream": "https://github.com/OpenRotMG/Open-RotMG-Server",
-    "commitCount": 2623
+    "commitCount": 2626
   },
   "client": {
     "repository": "https://github.com/dginovker/Open-RotMG-Client",

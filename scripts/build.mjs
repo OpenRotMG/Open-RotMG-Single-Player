@@ -26,7 +26,7 @@ if(input.runtimeRelease!==undefined){
  const pins=JSON.parse(await readFile('source-pins.json','utf8')),capabilities=JSON.parse(await readFile('runtime-capabilities.json','utf8'));
  exact(capabilities,'format,server,minLauncher,clientNamespace,save'+(Object.hasOwn(capabilities,'desktopMetadata')?',desktopMetadata':'')+(Object.hasOwn(capabilities,'accountManagement')?',accountManagement':''),'explicit source runtime capabilities');
  launcherVersion(capabilities.minLauncher);assert(versionAtLeast(JSON.parse(await readFile('package.json')).version,capabilities.minLauncher),'Source runtime requires a newer launcher');
- if(Object.hasOwn(capabilities,'accountManagement'))assert.equal(capabilities.accountManagement,1,'Invalid local account management declaration');
+ if(Object.hasOwn(capabilities,'accountManagement'))assert([1,2].includes(capabilities.accountManagement),'Invalid local account management declaration');
  if(Object.hasOwn(capabilities,'desktopMetadata'))assert([0,1].includes(capabilities.desktopMetadata),'Invalid bundled metadata declaration');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
  assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&saveCompatibility(capabilities.save)&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
  const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace,desktopMetadata:capabilities.desktopMetadata,accountManagement:capabilities.accountManagement,save:capabilities.save});

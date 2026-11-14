@@ -10,7 +10,7 @@ Stop and Close/Quit request durable shutdown through a private pipe. A launcher 
 
 Import uses the registered email from a password-free account export and a confirmed local password (default `password`). Older exports without an email must be exported again; no synthetic login is substituted. Existing accounts keep their passwords unless explicitly replaced. Import/restore stop the server and validate privately staged input through the bundled server's `--local-save` authority. Replacements and restores require a verified full pre-operation backup. Full local snapshots in `player data/backups/` include all accounts and original local credentials, not downloaded assets, logs or control files. Manual snapshots accumulate without automatic deletion. Keep backups private.
 
-Accounts uses the selected server's named `--local-save` commands under the existing lifecycle reservation and StateLock. Edits use an account/credential precondition and verified full pre-backup. The private save-side password vault retains known credentials by verifier digest; only a matching Argon2 verification permits display, including after restore. Passwords never enter argv or durable lifecycle acknowledgements. Unknown old passwords are not guessed or silently reset.
+Accounts uses the selected server's named `--local-save` commands under the existing lifecycle reservation and StateLock. Edits use an account/credential precondition and verified full pre-backup. Passwords remain salted Argon2 hashes in SQLite and are never returned to Accounts. Native startup and account operations remove legacy readable caches under StateLock. New passwords travel only through private stdin, never argv or durable lifecycle acknowledgements.
 
 ## Native builds and tests
 

@@ -5,14 +5,15 @@ import { randomUUID } from 'node:crypto';
 import { Runtime, serverCommandPath } from './runtime';
 
 import {UserMessage} from './user-message';
+import {requireLocalFeatures} from './settings';
 
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
 export type SaveResult = { message: string; path?: string; login?: string; disclosure?: string };
-export type LocalAccount = {account:number;name:string;username:string|null;password:string|null;expected:string};
+export type LocalAccount = {account:number;name:string;username:string|null;expected:string};
 export function accountList(value:unknown):LocalAccount[]{
   const result=value as {accounts:LocalAccount[]};
-  if(!result||Object.keys(result).length!==1||!Array.isArray(result.accounts)||result.accounts.some(a=>!a||Object.keys(a).sort().join(',')!=='account,expected,name,password,username'||!positive(a.account)||typeof a.name!=='string'||!(a.username===null||typeof a.username==='string')||!(a.password===null||typeof a.password==='string')||typeof a.expected!=='string'||!/^[a-f0-9]{64}$/.test(a.expected)))throw Error('Invalid local account authority acknowledgement');
+  if(!result||Object.keys(result).length!==1||!Array.isArray(result.accounts)||result.accounts.some(a=>!a||Object.keys(a).sort().join(',')!=='account,expected,name,username'||!positive(a.account)||typeof a.name!=='string'||!(a.username===null||typeof a.username==='string')||typeof a.expected!=='string'||!/^[a-f0-9]{64}$/.test(a.expected)))throw Error('Invalid local account authority acknowledgement');
   if(new Set(result.accounts.map(a=>a.account)).size!==result.accounts.length)throw Error('Duplicate local account acknowledgement');
   return result.accounts;
 }
@@ -98,7 +99,7 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
       if (!value || Object.keys(value).length !== 4 || !positive(value.account) || !validLogin(value.login) || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
     }
   } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
-  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:command==='accounts'||command==='account-edit'?{accounts:accountList(result).map(({password,...row})=>row)}:result});
+  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:command==='accounts'||command==='account-edit'?{accounts:accountList(result)}:result});
   return result;
 }
 function authorityEnvironment() {
@@ -181,6 +182,8 @@ export class SaveControls {
     let deliver!: (preview: ImportPreview | undefined) => void, reject!: (error: unknown) => void;
     const preview = new Promise<ImportPreview | undefined>((ok, bad) => { deliver = ok; reject = bad; });
     const outcome = this.runtime.stoppedOperation('Import player', async () => {
+      await requireLocalFeatures(this.runtime.resources);
+      try{if(!(await lstat(join(this.runtime.runtimePaths().state,'game.db'))).isFile())throw Error('Local save is not a regular file');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new UserMessage('Click Play once before importing so a full backup can be made.');throw error;}
       const source = await this.dialogs.choose('account', this.backups);
       if (!source) return undefined;
       return this.staged(source, 'account', async path => {
@@ -230,11 +233,7 @@ export class SaveControls {
     await pending.outcome;
     return true;
   }
-  private async requireAccounts(){
-    let bytes:Buffer;try{bytes=await readFile(join(this.runtime.resources,'notices/account-management.json'));}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new UserMessage('Install the Server + client update before managing accounts.');throw error;}
-    const value=JSON.parse(bytes.toString('utf8'));if(Object.keys(value).sort().join(',')!=='cli,format,server,storage'||value.format!==1||value.cli!==1||value.storage!==1||typeof value.server!=='string'||!/^[a-f0-9]{40}$/.test(value.server))throw Error('Invalid authenticated account-management capability');
-    if(value.server!==(await readFile(join(this.runtime.resources,'REVISION'),'utf8')).trim())throw Error('Account-management capability does not match the selected server');
-  }
+  private requireAccounts(){return requireLocalFeatures(this.runtime.resources);}
   listAccounts():Promise<LocalAccount[]>{return this.runtime.stoppedOperation('View local accounts',async()=>{await this.requireAccounts();const {state,data}=this.runtime.runtimePaths();return accountList(await saveAuthority(this.runtime,'accounts',[state,data]));});}
   editAccount(account:unknown,expected:unknown,username:unknown,password:unknown):Promise<LocalAccount[]>{
     if(!positive(account)||typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected)||typeof username!=='string'||username.length>245)throw new UserMessage('Refresh the account list and enter a valid username.');

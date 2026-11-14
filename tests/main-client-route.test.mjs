@@ -10,11 +10,11 @@ const require=createRequire(import.meta.url);
 for(const [name,eol] of [['LF','\n'],['CRLF','\r\n']]) {
   test(`main registered client action and real preload/renderer wiring (${name})`,async()=>{
     const source=async file=>{const text=(await readFile(file,'utf8')).replace(/\r\n/g,'\n').replace(/\n/g,eol);assert.equal(text.includes('\r\n'),name==='CRLF');return ts.transpileModule(text,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;};
-    const runtimeExports={};runInNewContext(await source('src/runtime.ts'),{exports:runtimeExports,require});
+    const runtimeExports={};runInNewContext(await source('src/runtime.ts'),{exports:runtimeExports,require:id=>id==='./settings'?require('../dist/settings.js'):require(id)});
     const origin=new runtimeExports.Runtime('/owned/resources','/owned/user').origin;assert.equal(origin,'http://127.0.0.1:47831');
     const handlers=new Map(),calls=[],elements=new Map();let ready,changed,status='stopped',pending,openedWindow;
     const view=()=>({status,origin,diagnostics:'owned',logs:[],message:'fixture'});
-    const problems=[];const runtime={reportProblem:error=>problems.push(error),view,on:()=>{},origin:view().origin,clientURL:()=>view().origin+'/',userData:'/owned/user'};
+    const problems=[];const runtime={loadSettings:async()=>{},reportProblem:error=>problems.push(error),view,on:()=>{},origin:view().origin,clientURL:()=>view().origin+'/',userData:'/owned/user'};
     class BrowserWindow {
       constructor(){openedWindow=this;this.webContents={mainFrame:{url:pathToFileURL('/owned/dist/index.html').href},setWindowOpenHandler(){},on(){},session:{setPermissionRequestHandler(){},webRequest:{onBeforeRequest(){}}}};}
       on(){} loadURL(){} isDestroyed(){return false;}

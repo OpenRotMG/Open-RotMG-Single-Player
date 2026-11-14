@@ -6,7 +6,7 @@ declare global {
   interface Window { launcher: {
     copyLogs(text:string):Promise<void>;
     minimize():Promise<void>; maximize():Promise<void>; close():Promise<void>;
-    status():Promise<View>; start():Promise<void>; startInstalled():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
+    status():Promise<View>; setBots(enabled:boolean):Promise<void>; start():Promise<void>; startInstalled():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
     launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
     updates():Promise<UpdateView>; checkUpdates():Promise<UpdateView>; retryUpdate():Promise<UpdateView>; recoverRuntime():Promise<UpdateView>; releases():Promise<void>; updatesChanged(callback:(view:UpdateView)=>void):void;
     importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,password:string,confirmation:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
@@ -25,7 +25,7 @@ const statusMessages:Record<View['status'],string>={stopped:'Stopped',starting:'
 function updateMessage(){
   const u=updateView;if(!u)return 'Loading…';
   if(u.progress&&['checking','downloading','activating'].includes(u.phase))return u.message;
-  if(u.needsStart)return 'Play will prepare the game.';
+  if(u.needsStart)return 'Ready to start.';
   const messages:Record<UpdateView['phase'],string>={initializing:'Loading…',checking:'Checking…',downloading:'Downloading update…',staged:'Update downloaded. Save and stop to prepare it.',activating:'Backing up and preparing…',ready:'Up to date.',unavailable:'Cannot connect. Try again.',service:'Could not check. Try again.',rejected:'Update could not be verified. See Advanced → Logs.',launcher:'A newer launcher is required.',recovery:'Check your save before continuing.',canceled:'Canceled. Play when you are ready.'};
   // Playable readiness alone says nothing about whether the public release was checked.
   return u.phase==='ready'?(u.message==='Matches the published server + client release.'?'Up to date.':u.installed?.kind==='source'?'Source build.':'Ready.'):messages[u.phase];
@@ -46,13 +46,15 @@ function render(){
   const recovery=u?.phase==='recovery'||u?.phase==='initializing'||v?.status==='failed';
   button('play').disabled=busy||recovery||!u;
   button('play').textContent=v?.status==='starting'?'Preparing…':v?.status==='ready'?'Open game':u?.canPlayInstalled?'Play installed game':'Play';
-  element('message').textContent=v?.closing?'Saving and closing…':v?.status==='failed'||u?.phase==='recovery'?'Last save unconfirmed.':v?.status==='starting'?'Checking your save…':v?.status==='stopping'?'Saving your progress…':u?.needsStart?'Play will prepare the game.':!u||u.phase==='initializing'?'Loading…':'';
+  element('message').textContent=v?.closing?'Saving and closing…':v?.status==='failed'||u?.phase==='recovery'?'Last save unconfirmed.':v?.status==='starting'?'Checking your save…':v?.status==='stopping'?'Saving your progress…':u?.needsStart?'':!u||u.phase==='initializing'?'Loading…':'';
   element('progress').hidden=!v||!['starting','stopping'].includes(v.status);
   button('home-recovery').hidden=!u?.canRecover;button('home-recovery').disabled=busy||v?.pid!==undefined;
   button('home-stop').hidden=v?.status!=='ready';button('home-stop').disabled=busy;
   button('start').disabled=busy||v?.status!=='stopped'||recovery;
   button('stop').disabled=busy||!v||!['starting','ready'].includes(v.status);
   button('client').disabled=busy||v?.status!=='ready';
+  element<HTMLInputElement>('bots-enabled').checked=v?.botsEnabled===true;
+  element<HTMLInputElement>('bots-enabled').disabled=busy||v?.status!=='stopped'||recovery;
   const saveBlocked=busy||!v||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
   for(const id of ['accounts-import','backup','folder','restore-other','save-folder'])button(id).disabled=saveBlocked;
   button('load-accounts').disabled=saveBlocked;
@@ -116,10 +118,11 @@ async function play(installed=false){if(runtimeView?.status!=='ready'){if(instal
 function result(value:SaveResult|undefined,target='save-result'){if(value){element(target).textContent=[value.message,value.disclosure].filter(Boolean).join('\n');element(target).title=value.path??'';}}
 async function saveAction(action:()=>Promise<SaveResult|undefined>,target='save-result'){element(target).textContent='';result(await action(),target);await refreshBackups();}
 button('import').onclick=()=>showPage('accounts');
-button('show-home').onclick=()=>showPage('home');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-advanced').onclick=()=>showPage('advanced');
+button('show-home').onclick=()=>showPage('home');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-updates').onclick=()=>showPage('updates');
 for(const name of pages){button(`tab-${name}`).onclick=()=>showPage(name);button(`tab-${name}`).onkeydown=event=>{const index=pages.indexOf(name),next=event.key==='ArrowRight'?(index+1)%pages.length:event.key==='ArrowLeft'?(index+pages.length-1)%pages.length:event.key==='Home'?0:event.key==='End'?pages.length-1:undefined;if(next!==undefined){event.preventDefault();showPage(pages[next]);button(`tab-${pages[next]}`).focus();}};}
 button('play').onclick=()=>void invoke(()=>play(Boolean(updateView?.canPlayInstalled)));
 button('start').onclick=()=>void invoke(()=>window.launcher.start());
+element<HTMLInputElement>('bots-enabled').onchange=event=>{const enabled=(event.target as HTMLInputElement).checked;void invoke(async()=>{await window.launcher.setBots(enabled);runtimeView=await window.launcher.status();});};
 for(const id of ['stop','home-stop'])button(id).onclick=()=>void invoke(async()=>{await window.launcher.stop();await refreshBackups();});
 button('client').onclick=()=>void invoke(()=>window.launcher.client());
 element('client-url').onclick=event=>{event.preventDefault();void invoke(()=>window.launcher.client());};
@@ -133,11 +136,11 @@ function renderAccounts(accounts:LocalAccount[]){
     const form=document.createElement('form'),title=document.createElement('h4'),userLabel=document.createElement('label'),passwordLabel=document.createElement('label'),username=document.createElement('input'),password=document.createElement('input'),show=document.createElement('button'),save=document.createElement('button'),hint=document.createElement('p');
     form.className='account';form.setAttribute('data-account',String(account.account));title.textContent=account.name;
     userLabel.textContent='Username (email)';username.type='email';username.required=true;username.maxLength=245;username.autocomplete='off';username.value=account.username??'';userLabel.append(username);
-    passwordLabel.textContent='Password';password.type='password';password.required=account.username===null;password.autocomplete='new-password';password.maxLength=128;password.value=account.password??'';passwordLabel.append(password);
-    hint.textContent=account.username===null?'Guest account. Set a username and password to sign in.':account.password===null?'Password not saved. Leave blank to keep it, or enter a new password.':'';
-    show.type='button';show.textContent='Show password';show.onclick=()=>{password.type=password.type==='password'?'text':'password';show.textContent=password.type==='password'?'Show password':'Hide password';};
+    passwordLabel.textContent='New password';password.type='password';password.required=account.username===null;password.autocomplete='new-password';password.maxLength=128;password.value='';password.placeholder=account.username===null?'Choose a password':'Enter a new password to change it';passwordLabel.append(password);
+    hint.textContent=account.username===null?'Guest account. Set a username and password to sign in.':'';
+    show.type='button';show.textContent='Show new password';show.onclick=()=>{password.type=password.type==='password'?'text':'password';show.textContent=password.type==='password'?'Show new password':'Hide new password';};
     save.type='submit';save.textContent='Save changes';form.append(title,userLabel,passwordLabel,show,save,hint);
-    form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('accounts-status').textContent='Account updated. Your progress is unchanged.';await refreshBackups();});};
+    form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('accounts-status').textContent='';await refreshBackups();});};
     list.append(form);
   }
 }
@@ -173,7 +176,7 @@ button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await 
 for(const id of ['technical','log-filter','log-search'])element(id).addEventListener(id==='log-search'?'input':'change',renderLogs);
 button('copy-logs').onclick=()=>void (async()=>{element('copy-result').textContent='';try{await window.launcher.copyLogs(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){reportError(error);}})();
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
-function updateClock(){for(const [name,p,active]of [['runtime',updateView?.progress,Boolean(updateView&&['checking','downloading','activating'].includes(updateView.phase))],['launcher',launcherView?.progress,Boolean(launcherView&&['checking','downloading','installing'].includes(launcherView.phase))]]as const){const age=p?Math.max(0,Math.floor((Date.now()-p.updatedAt)/1000)):0;element(name+'-progress-age').textContent=active&&p?(age>=3?'Last progress '+age+'s ago.':'Working. Percentages describe the current step.') :'';}}
+function updateClock(){for(const [name,p,active]of [['runtime',updateView?.progress,Boolean(updateView&&['checking','downloading','activating'].includes(updateView.phase))],['launcher',launcherView?.progress,Boolean(launcherView&&['checking','downloading','installing'].includes(launcherView.phase))]]as const){const age=p?Math.max(0,Math.floor((Date.now()-p.updatedAt)/1000)):0;element(name+'-progress-age').textContent=active&&p?(age>=3?'Last progress '+age+'s ago.':'') :'';}}
 setInterval(updateClock,1000);
 window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.updatesChanged(view=>{updateView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
 void invoke(async()=>{runtimeView=await window.launcher.status();updateView=await window.launcher.updates();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});

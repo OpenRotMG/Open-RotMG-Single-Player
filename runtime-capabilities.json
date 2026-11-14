@@ -1,10 +1,10 @@
 {
   "format": 1,
-  "server": "4d7fc6576642650aed82520a9d25e7b3b83062eb",
-  "minLauncher": "1.0.1",
+  "server": "ae9fbc2900e008cc221a0f8b5c26c90b2f6c4d75",
+  "minLauncher": "1.0.2",
   "clientNamespace": 1,
   "desktopMetadata": 1,
-  "accountManagement": 1,
+  "accountManagement": 2,
   "save": {
     "cli": 1,
     "read": [21, 22, 23],

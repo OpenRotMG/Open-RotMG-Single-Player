@@ -51,7 +51,7 @@ export class RuntimeUpdates extends EventEmitter{
   startup():Promise<UpdateView>{
     demand(!this.initialization,'Runtime updates already initialized');
     this.initialization=this.runtime.idleOperation('Prepare installed runtime',()=>this.initializeOwned());
-    this.initialization.catch(error=>this.problem(error));return this.check();
+    return this.initialization.then(()=>this.view(),error=>{this.problem(error);return this.view();});
   }
   private async initializeOwned(){
     const value=await this.store.initialize();this.current=value.selected;this.committed=value.selected;
@@ -64,7 +64,9 @@ export class RuntimeUpdates extends EventEmitter{
     this.runtime.selectResources(this.store.root(value.selected.id));
     if(this.transaction&&this.transaction.phase!=='selected')throw new UpdateProblem('recovery','Interrupted startup/update is pending. No automatic migration replay, prior-runtime fallback or restore is permitted; use explicit recovery.');
     if(!this.transaction)await this.fence.requireClean(select(value.selected));
-    this.update('ready',`Game version ${value.selected.version} is installed. Updates have not been checked yet.`);
+    if(this.refusedCheck){this.failure=new UpdateProblem(this.refusedCheck.kind,this.refusedCheck.message);this.update(this.refusedCheck.kind,this.refusedCheck.message);}
+    else if(!this.transaction&&Math.max(await this.store.authenticatedFloor(),...(await this.store.profile()).attempts.map(a=>a.sequence))>value.selected.sequence){this.failure=new UpdateProblem('rejected','A newer runtime was previously authenticated. Check for updates or explicitly play the installed game.');this.update('rejected',this.failure.message);}
+    else this.update('ready',`Game version ${value.selected.version} is installed. Updates are checked only when requested.`);
   }
   private async recordRefusal(error?:UpdateProblem){
     const path=this.store.path('runtime-check-refusal.json');
@@ -182,7 +184,9 @@ export class RuntimeUpdates extends EventEmitter{
     await this.initialized();if(installedOnly&&this.task)await this.task;
     if(this.transaction){demand(!installedOnly&&this.transaction.phase==='selected'&&this.transaction.failureSha256===null,'Pending migration/recovery forbids installed-version play or automatic replay');}
     else if(!installedOnly){
-      await this.check();if(this.failure&&this.failure.kind!=='unavailable')throw this.failure;
+      if(this.task)await this.task;
+      if(this.refusedCheck)throw new UpdateProblem(this.refusedCheck.kind,'A prior refused check remains unresolved: '+this.refusedCheck.message+'. Explicit Play installed version is required.');
+      if(this.failure&&this.failure.kind!=='unavailable')throw this.failure;
       if(this.failure?.kind==='unavailable'){
         const floor=Math.max(await this.store.authenticatedFloor(),...(await this.store.profile()).attempts.map(a=>a.sequence));
         demand(!this.refusedCheck&&floor<=this.current!.sequence,'A prior refused check or newer authenticated runtime remains unresolved while offline; use explicit Play installed version, not automatic old-code fallback');
