@@ -67,7 +67,6 @@ async function journey(){
   await page.screenshot({path:join(out,'launcher-updates.png')});
   check('Importing before the first Play explains how to make the required backup',/Click Play once/.test(await page.evaluate(()=>window.launcher.importPlayer().then(()=>'',error=>error.message))));
   await play();
-  check('Every start makes a verified full backup before opening the save',(await backups()).some(name=>name.includes('-pre-start-')));
   await page.locator('#import').click();await wait(async()=>await page.locator('#accounts-import').isEnabled(),'accounts ready');
   await choose(portable);await page.locator('#accounts-import').click();await page.locator('#import-preview').waitFor({state:'visible'});
   check('Import keeps the editable default password',await page.locator('#import-password').inputValue()==='password');
@@ -87,7 +86,9 @@ async function journey(){
   await page.screenshot({path:join(out,'launcher-advanced.png')});
   check('Opening the launcher, playing, importing and backing up never touched the network',(await offlineAttempts()).length===0);
   await close();
-  await launch();const reopened=await play();await game.verify(false,reopened.clientURL);
+  await launch();const reopened=await play();
+  check('Every start with a save makes a verified full backup before opening it',(await backups()).some(name=>name.includes('-pre-start-')));
+  await game.verify(false,reopened.clientURL);
   check('Reopening the same folder keeps character progress offline',(await offlineAttempts()).length===0);
   await close();
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>game.verify(true,url),closeGame:()=>game.close()});
