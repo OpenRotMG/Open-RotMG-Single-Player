@@ -53,7 +53,7 @@ function render(){
   button('start').disabled=busy||v?.status!=='stopped'||recovery;
   button('stop').disabled=busy||!v||!['starting','ready'].includes(v.status);
   button('client').disabled=busy||v?.status!=='ready';
-  element<HTMLInputElement>('bots-enabled').checked=v?.botsEnabled===true;
+  if(!requesting)element<HTMLInputElement>('bots-enabled').checked=v?.botsEnabled===true;
   element<HTMLInputElement>('bots-enabled').disabled=busy||v?.status!=='stopped'||recovery;
   const saveBlocked=busy||!v||!['stopped','ready'].includes(v.status)||!u?.canManageSaves;
   for(const id of ['accounts-import','backup','folder','restore-other','save-folder'])button(id).disabled=saveBlocked;
