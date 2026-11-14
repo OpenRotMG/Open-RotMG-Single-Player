@@ -55,7 +55,7 @@ async function journey(){
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   if(manifest.save.write===23)check('The exported fixture includes collection_sources, which the old bundled server rejected',Object.hasOwn(JSON.parse(await readFile(portable,'utf8')),'collection_sources'));
-  const secret='password';let userData;
+  const secret='native-import-password';let userData;
   await mkdir(join(profile,'Cache'));await writeFile(join(profile,'Cache/migration-proof'),'legacy cache bytes');await mkdir(join(profile,'diagnostics'));await writeFile(join(profile,'diagnostics/000-legacy.jsonl'),'legacy diagnostic bytes');
   const launch=async()=>{
    // Keep the real embedded production policy and key; only service availability is controlled in the owned main inspector.
@@ -75,6 +75,7 @@ async function journey(){
   };
   const choose=async(path,confirm)=>app.evaluate((_electron,{path,confirm})=>{const f=globalThis.runtimeUpdateTest;if(path!==undefined){f.allowedFiles.push(path);f.choices.push(path);}if(confirm!==undefined)f.confirms.push(confirm);},{path,confirm});
   const openImport=async()=>{await page.locator('#show-home').click();await page.locator('#import').click();assert(await page.locator('#accounts-page').isVisible());await page.locator('#accounts-import').click();await page.locator('#import-preview').waitFor({state:'visible'});};
+  const confirmImport=async()=>{await page.locator('#import-password').fill(secret);await page.locator('#import-confirmation').fill(secret);await page.locator('#import-confirm').click();};
   const start=async()=>{
    await page.locator('#show-home').click();await page.locator('#play').click();await wait(async()=>packagedChildReady(await page.evaluate(()=>window.launcher.status())),'actual installed child readiness',650000);
    const view=await page.evaluate(()=>window.launcher.status()),health=await(await fetch(view.origin+'/health')).json();serverPid=view.pid;assert.equal(health.process,serverPid);
@@ -122,13 +123,13 @@ async function journey(){
   const beforeCancel=await hashFile(join(profile,'state/game.db')),beforeBackups=await readdir(join(profile,'backups'));
   await page.keyboard.press('Escape');await page.locator('#import-preview').waitFor({state:'hidden'});
   check('Escape awaits authority cancellation without changing save bytes or backups',await hashFile(join(profile,'state/game.db'))===beforeCancel&&JSON.stringify(await readdir(join(profile,'backups')))===JSON.stringify(beforeBackups));
-  await choose(portable);await openImport();await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});await wait(async()=>(await page.locator('#accounts-status').innerText())==='Account imported.','committed import feedback in Accounts');assert.equal(await page.locator('#error').innerText(),'');
+  await choose(portable);await openImport();await page.locator('#import-password').fill(secret);await page.locator('#import-confirmation').fill('mismatch-password');await page.locator('#import-confirm').click();await wait(async()=>/passwords do not match/.test(await page.locator('#import-error').innerText()),'password mismatch rejected before import');assert(await page.locator('#import-preview').isVisible());await confirmImport();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});await wait(async()=>(await page.locator('#accounts-status').innerText())==='Account imported.','committed import feedback in Accounts');assert.equal(await page.locator('#error').innerText(),'');
   view=await start();
   assert.equal(await page.locator('#client-url').getAttribute('href'),new URL(view.clientURL).origin+'/');
   check('The home screen never contains imported credentials or a success summary',await page.locator('#account-login,#imported-account,#home-result').count()===0);
   await page.screenshot({path:join(out,'launcher-ready.png')});
   game=await nativeGame({out,origin:new URL(view.clientURL).origin,clientURL:view.clientURL,env,check,report,normalCache:true,credentials:{guid:login,password:secret}});await game.mutate();await stop();await game.close();
-  check('Installed native game authenticates the fixed default, makes a real progress transaction and durably stops',true);
+  check('Installed native game authenticates the chosen import password, makes a real progress transaction and durably stops',true);
   const secondary=join(out,'secondary-account.json'),other=JSON.parse(await readFile(portable,'utf8'));other.name='XPSecond';other.email='xp-second@example.invalid';other.name_chosen=true;assert.notEqual(other.origin.namespace,'f'.repeat(64));other.origin.namespace='f'.repeat(64);await writeFile(secondary,JSON.stringify(other));
   const state=join(profile,'state'),legacyPassword='native-legacy-local-credential',preview=JSON.parse(execFileSync(binary,['--local-save','preview',state,data,secondary],{env,timeout:30000}));
   execFileSync(binary,['--local-save','import',state,data,secondary,join(out,'secondary-pre-import.sqlite'),preview.expected],{env,input:legacyPassword,timeout:30000});
@@ -153,9 +154,9 @@ async function journey(){
   await wait(async()=>await page.locator(`tr[data-backup="${names[0]}"]`).count()===1,'native backup appears in history');
   await page.locator(`tr[data-backup="${names[0]}"]`).locator('td').nth(2).click();check('Clicking a backup reason cell selects the whole row for restore',await page.locator(`tr[data-backup="${names[0]}"]`).getByRole('radio').isChecked());
   await page.screenshot({path:join(out,'launcher-backups.png')});
-  await choose(secondary);await openImport();assert(await page.locator('#replace-warning').isVisible());await page.locator('#import-confirm').click();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});await wait(async()=>(await page.evaluate(()=>window.launcher.status())).operation===undefined,'replacement settled');
+  await choose(secondary);await openImport();assert(await page.locator('#replace-warning').isVisible());await confirmImport();await page.locator('#import-preview').waitFor({state:'hidden',timeout:60000});await wait(async()=>(await page.evaluate(()=>window.launcher.status())).operation===undefined,'replacement settled');
   await start();assert.match(await authenticate(preview.login,secret),/<Chars\b/);assert.match(await authenticate(preview.login,legacyPassword),/<Error/);assert.match(await authenticate(login,secret),/<Chars\b/);await stop();
-  check('Confirmed replacement always sets the displayed default without resetting unrelated accounts',true);
+  check('Confirmed replacement uses the chosen password without resetting unrelated accounts',true);
   await page.locator('#show-settings').click();await page.locator(`tr[data-backup="${names[0]}"]`).locator('td').nth(1).click();await choose(undefined,1);await page.locator('#restore').click();await saveResult(/Backup restored/,'full selected restore');
   await start();assert.match(await authenticate(preview.login,legacyPassword),/<Chars\b/);assert.match(await authenticate(preview.login,secret),/<Error/);assert.match(await authenticate(login,secret),/<Chars\b/);await close();
   check('Selected full restore recovers the older custom password, preserves other credentials and original gameplay progress',true);

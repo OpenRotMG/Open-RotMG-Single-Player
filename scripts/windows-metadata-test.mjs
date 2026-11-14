@@ -6,14 +6,14 @@ import {RuntimeStore,select,boundedFile,generation} from '../dist/update-store.j
 import {WindowsMetadataPublication} from '../dist/update-publication.js';
 import {digest,hashFile,verifyRuntime,verifyCapabilities} from '../dist/update-format.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
-import {Runtime} from '../dist/runtime.js';
+import {Runtime,serverCommandPath} from '../dist/runtime.js';
 import {RuntimeUpdates} from '../dist/updates.js';
 import {discover} from '../dist/update-network.js';
 import {runtimeFixture} from './runtime-update-fixture.mjs';
 
 assert.equal(process.platform,'win32','Actual Windows metadata gate only');assert.equal(process.env.GITHUB_ACTIONS,'true','Requires dedicated standard native runner');
 await mkdir('.qa/windows-metadata',{recursive:true});const out=await mkdtemp(resolve('.qa/windows-metadata/run-')),launcher=JSON.parse(await readFile('package.json')).version,inputs=JSON.parse(await readFile('.qa/runtime-inputs/native-inputs.json')),bundle=inputs.C,identity=await verifyRuntime(bundle,'win32-x64');await verifyCapabilities(bundle,identity.pins,1,1,1);const binary=join(bundle,'openrotmg.exe'),report={status:'running',out,checks:[],processes:[],errors:[],scope:'Actual Windows metadata publication/close/order; not an executed power-loss test or whole fresh-profile/OS-ancestor durability claim'};
-const originalSpawn=childProcess.spawn;childProcess.spawn=function(file,args,options){const child=originalSpawn(file,args,options);if(file===binary&&args[0]==='--desktop-metadata'){const item={pid:child.pid,binary,operation:args[1],root:args[2],arguments:args.slice(3)};report.processes.push(item);child.once('close',(code,signal)=>Object.assign(item,{code,signal,closed:true}));}return child;};
+const originalSpawn=childProcess.spawn;childProcess.spawn=function(file,args,options){const child=originalSpawn(file,args,options);if(file===serverCommandPath(binary)&&args[0]==='--desktop-metadata'){const item={pid:child.pid,binary,operation:args[1],root:args[2],arguments:args.slice(3)};report.processes.push(item);child.once('close',(code,signal)=>Object.assign(item,{code,signal,closed:true}));}return child;};
 const check=name=>report.checks.push(name),root=await mkdir(join(out,'private ROOT ü'),{mode:0o700}).then(()=>realpath(join(out,'private ROOT ü'))),faults=[];
 let serviceFixture;
 const publisher=()=>new WindowsMetadataPublication(root,async()=>binary,error=>faults.push(error.message));
