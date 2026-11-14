@@ -1,24 +1,18 @@
 # Development
 
-This is an unreleased source preview. The package bundles the compiled server, client, Ruffle, game data and sound. The browser requires WebGL 2; unavailable graphics produce an explicit error. No sandbox or GPU-blocklist bypass flags are shipped.
+The app bundles the compiled server, client, Ruffle, game data and sound. Everything runs on this computer; the only network request is **Settings → Updates → Check for updates**, which the player clicks. The browser requires WebGL 2.
 
-## Saves and shutdown
+## Saves
 
-Packaged builds run from the portable ZIP: the `OpenRotMG Singleplayer` launcher passes `--user-data-dir=<ZIP folder>/player data`, and the packaged app refuses to start without it. The app separates that save path from Electron's `server data/profile` userData before Chromium starts. Saves remain in `player data/state/`, backups in `player data/backups/`; diagnostics, runtime controls and downloads belong to the profile. The capable desktop server uses its separate operational directory for keys and logs. The server uses loopback port 47831 and reports a conflict without stopping its owner.
+The portable launcher passes `--user-data-dir=<folder>/player data`; the app refuses to start without it. Saves are in `player data/state/`, backups in `player data/backups/`. Electron caches, settings and diagnostics live in `server data/profile/`.
 
-Stop and Close/Quit request durable shutdown through a private pipe. A launcher crash also closes that pipe so the server can drain. Failed shutdowns are not save success: the launcher blocks mutation and records `shutdown-failed.json`. If that record cannot be written, it keeps ownership and shows the error. Preserve the save and diagnostics for investigation. Never delete `state/state.lock` to override a running server.
+Every Play makes and verifies a full backup before the server opens the save. Import, account edits and restore also make a verified full backup first, through the bundled server's `--local-save` commands. Passwords stay salted Argon2 hashes and travel only through private stdin.
 
-Import uses the registered email from a password-free account export and a confirmed local password (default `password`). Older exports without an email must be exported again; no synthetic login is substituted. Existing accounts keep their passwords unless explicitly replaced. Import/restore stop the server and validate privately staged input through the bundled server's `--local-save` authority. Replacements and restores require a verified full pre-operation backup. Full local snapshots in `player data/backups/` include all accounts and original local credentials, not downloaded assets, logs or control files. Manual snapshots accumulate without automatic deletion. Keep backups private.
+Close and **Save & stop** ask the server to drain through a private pipe. A failed shutdown blocks save actions until the launcher is reopened; the server's state lock prevents two servers using one save. Never delete `state/state.lock`.
 
-Accounts uses the selected server's named `--local-save` commands under the existing lifecycle reservation and StateLock. Edits use an account/credential precondition and verified full pre-backup. Passwords remain salted Argon2 hashes in SQLite and are never returned to Accounts. Native startup and account operations remove legacy readable caches under StateLock. New passwords travel only through private stdin, never argv or durable lifecycle acknowledgements.
+## Build
 
-## Native builds and tests
-
-Build tools: Node 22.23.2/npm and the repository-pinned Rust toolchain for the server. Electron 45.2.1, Forge 8.0.1, TypeScript 5.9.3 and Playwright 1.64.1 are locked dependencies. Build on the target OS and architecture.
-
-The manual `Native Phase 1 package tests` workflow builds the exact `source-pins.json` inputs. Preview pins explicitly name reviewed contributor forks; official upstream pins and fresh validation are required before a consumer release. There is no implicit origin substitution.
-
-For a local build, prepare the pinned clean sources, verified client assets and native server. Set `OPENROTMG_BUILD_INPUTS` to an absolute JSON file with these fields:
+Build on the target OS with Node 22.23.2 and the server's pinned Rust toolchain. Set `OPENROTMG_BUILD_INPUTS` to an absolute JSON file describing the pinned sources in `source-pins.json`:
 
 ```json
 {
@@ -33,21 +27,14 @@ For a local build, prepare the pinned clean sources, verified client assets and 
 }
 ```
 
-The receipt identifies the exact server `head`, `dirty:false` and binary `sha256`. The build verifies these identities and the pinned asset trees rather than substituting missing inputs.
+On GitHub Actions, `node scripts/ci-inputs.mjs` clones and builds these. Then:
 
 ```sh
 npm ci
-npm run package
+npm test
+npm run make   # out/make/openrotmg-singleplayer-VERSION-TARGET.zip
 ```
 
-Retain the entire `out/Open RotMG Single Player-PLATFORM-ARCH/` directory, including Electron licenses and runtime notices. `npm run package:test` drives the packaged launcher and actual game, including inventory mutation, restart, connected-parent crash and failure cases. Its explicit managed-browser and dedicated-CI modes are test infrastructure, not consumer capabilities. Receipts and screenshots stay in ignored `.qa/` output.
-
-`npm run test:e2e -- ARTIFACT` runs the portable release gate (same as `verify:release`), requiring the adjacent installer receipt and a private display/session. Native chooser/confirmation fixtures belong only to the attached test process; no renderer path override ships.
-
-## Validation limits
-
-Native packaged gameplay and save persistence have passed on Ubuntu x64, Windows x64 and Apple Silicon macOS. Windows also has a passing application-scoped offline journey. These results cover different source revisions and test scopes, not an all-platform pass of the current head.
-
-Actual OS-default-browser routing, Intel Mac gameplay, Mac offline enforcement and clean-machine installers remain unqualified. Signing/notarization and distribution checks are also unfinished. There is no consumer release.
+Release steps and the end-to-end check are in [portable-zip.md](portable-zip.md).
 
 AGPL-3.0-only launcher. See LICENSE and NOTICES.md for server, client, Ruffle, Electron and asset notices.

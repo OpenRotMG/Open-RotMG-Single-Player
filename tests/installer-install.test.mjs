@@ -5,9 +5,8 @@ import {execFileSync} from 'node:child_process';
 import {resolve,join} from 'node:path';
 import {portableZip,portableFolder} from '../scripts/make-zip.mjs';
 import {installArtifact,installedPaths} from '../scripts/installer-install.mjs';
-import {protectInstallation,assertInstallationProtected} from '../scripts/native-boundaries.mjs';
 
-test('portable ZIP extracts to exactly the launcher, README.txt, empty player data and protected server data (unit content, not a production app)',{skip:process.platform!=='linux'},async()=>{
+test('portable ZIP extracts to exactly the launcher, README.txt, empty player data and server data (unit content, not a production app)',{skip:process.platform!=='linux'},async()=>{
  await mkdir('.qa/unit',{recursive:true});const out=await mkdtemp(resolve('.qa/unit/portable-')),input=join(out,'package'),launcher=join(out,'launcher');
  await mkdir(join(input,'resources'),{recursive:true});await writeFile(join(input,'resources/unit'),'unit package content');
  await writeFile(launcher,'#!/bin/sh\n');await chmod(launcher,0o755);
@@ -15,7 +14,6 @@ test('portable ZIP extracts to exactly the launcher, README.txt, empty player da
  const root=join(out,'extracted é 日本');const installed=await installArtifact(zip,root,out);const paths=installedPaths(installed.path);
  assert.equal(await readFile(join(paths.server,'resources/unit'),'utf8'),'unit package content');assert.equal((await stat(paths.launcher)).mode&0o111,0o111);
  assert.match(await readFile(join(installed.path,'README.txt'),'utf8'),/player data/);
- await protectInstallation(paths.server);if(process.getuid()!==0)await assertInstallationProtected(paths.server,paths.resources);
  await writeFile(join(paths.player,'save'),'player data stays writable');
  await assert.rejects(installArtifact(zip,root,out),/EEXIST/);await assert.rejects(installArtifact(zip,join(out,'..','unowned'),out),/run-owned/);
  assert.deepEqual([...new Set(execFileSync('unzip',['-Z1',zip],{encoding:'utf8'}).trim().split('\n').map(line=>line.split('/')[0]))].sort(),[portableFolder]);

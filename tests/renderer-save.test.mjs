@@ -10,7 +10,7 @@ test('bots default off, change only on a click, and cannot change while a game i
 test('Play waits for owned startup and never opens the game after failure',async()=>{
  const f=await rendererFixture();let ready;f.launcher.start=()=>new Promise(resolve=>ready=resolve);f.element('play').onclick();assert(f.element('play').disabled);assert.deepEqual(f.calls,[]);ready();await tick();assert.deepEqual(f.calls,[['client']]);
  f.calls.length=0;f.launcher.start=async()=>{throw Error('startup refused');};f.element('play').onclick();await tick();assert.deepEqual(f.calls,[]);assert.match(f.element('error').textContent,/startup refused/);
- f.change({status:'ready',clientURL:'http://127.0.0.1:47832/_runtime/'+'a'.repeat(64)+'/'});f.element('client-url').onclick({preventDefault(){}});await tick();assert.deepEqual(f.calls,[['client']]);assert.equal(f.element('client-url').textContent,'http://127.0.0.1:47832/');
+ f.calls.length=0;f.change({status:'ready'});f.element('play').onclick();await tick();assert.deepEqual(f.calls,[['client']]);assert.equal(f.element('play').textContent,'Open game');
 });
 test('home import only navigates to Accounts; import uses exported email and two independently revealable passwords',async()=>{
  const f=await rendererFixture();f.element('import').onclick();assert.equal(f.element('accounts-page').hidden,false);assert(!f.element('import-preview').open);await tick();
@@ -27,5 +27,5 @@ test('Escape cancels preview; failed consumed commit keeps its error without cla
 test('restore cancellation leaves no home credential card and Close disables all mutations',async()=>{
  const f=await rendererFixture();f.launcher.listBackups=async()=>[{name:'first.sqlite',modified:1700000000000,bytes:42}];f.element('show-backups').onclick();await tick();assert.equal(f.element('backup-list').children.length,1);assert.equal(f.element('restore').disabled,false);
  f.launcher.restoreBackup=async name=>{f.calls.push(name);return undefined;};f.element('restore').onclick();await tick();assert.deepEqual(f.calls,['first.sqlite']);assert(!f.elements.has('imported-account'));
- f.change({closing:true,operation:'Import player'});for(const id of ['play','start','stop','client','accounts-import','backup','folder','restore','restore-other','save-folder'])assert(f.element(id).disabled,id);assert(!f.element('import-preview').open);
+ f.change({closing:true,operation:'Import player'});for(const id of ['play','accounts-import','backup','folder','restore','restore-other','save-folder'])assert(f.element(id).disabled,id);assert(!f.element('import-preview').open);
 });

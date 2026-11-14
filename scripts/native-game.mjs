@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { setTimeout as delay } from 'node:timers/promises';
 import assert from 'node:assert/strict';
-import {openNativeEdge,openNativeOwnedEdge} from './native-edge.mjs';
 
 export function accountResponses(page,{origin,normalCache,onNavigation,onVerify,onCharacters,onError}){
  let generation=0,expectedURL;const requests=new WeakMap(),paths=['/legacy-api/account/verify','/legacy-api/char/list'];
@@ -23,9 +22,9 @@ export function accountResponses(page,{origin,normalCache,onNavigation,onVerify,
 }
 
 const fixtureCredentials = { guid:'backup-true@example.invalid', password:'backup-fixture-password' };
-export async function nativeGame({out,origin,env,check,report,ownedEdge,credentials = fixtureCredentials,normalCache = false,clientURL = origin,onPage}) {
+export async function nativeGame({out,origin,env,check,report,credentials = fixtureCredentials,normalCache = false,clientURL = origin,onPage}) {
   const mode=process.env.OPENROTMG_TEST_BROWSER_MODE;
-  assert(['vps-managed','ci-playwright','ci-edge','ci-owned-edge'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed, ci-playwright, ci-edge or ci-owned-edge explicitly');assert((mode==='ci-owned-edge')===!!ownedEdge,'ci-owned-edge requires only the prepared owned policy image');
+  assert(['vps-managed','ci-playwright'].includes(mode),'Select OPENROTMG_TEST_BROWSER_MODE=vps-managed or ci-playwright explicitly');
   if(mode!=='vps-managed')assert(process.env.GITHUB_ACTIONS==='true','CI browser modes are restricted to GitHub Actions owned runners');
   else {
     assert(process.env.PI_BROWSER_TOOLS, 'PI_BROWSER_TOOLS must select the managed browser helper directory');
@@ -45,7 +44,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
   const open = async name => {
     const owner=`single-player-package:${out}:${sequence++}`;
     const profile=join(out,'game-profile-'+sequence);
-    let browser,context,page,chrome,edgeClose,errors='',consoleLog=[];
+    let browser,context,page,chrome,errors='',consoleLog=[];
     if(mode==='vps-managed') {
       const probe=createServer();await new Promise(ok=>probe.listen(0,'127.0.0.1',ok));const port=probe.address().port;await new Promise(ok=>probe.close(ok));
       chrome=spawn(process.execPath,[join(process.env.PI_BROWSER_TOOLS,'launch-browser.mjs'),`--remote-debugging-port=${port}`,`--user-data-dir=${profile}`,'--ozone-platform=x11','--window-size=1280,960','--window-position=0,0','--no-first-run','--no-default-browser-check',...JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS ?? '[]'),'about:blank'],{
@@ -59,9 +58,6 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
       (report.browsers??=[]).push({...receipt,argv});
       browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);
       context=browser.contexts()[0];page=context.pages()[0];assert(page,'Managed browser must create its initial owned page');
-    } else if(mode==='ci-edge'||mode==='ci-owned-edge') {
-      const options={owner,profile,env,report};({browser,context,page,close:edgeClose}=mode==='ci-owned-edge'?await openNativeOwnedEdge(options,ownedEdge):await openNativeEdge(options));
-      check(`${name}: actual CI Edge argv has no sandbox bypass`,!/--no-sandbox|--disable-setuid-sandbox/.test(report.browsers.at(-1).argv));
     } else {
       const args=['--remote-debugging-pipe',`--user-data-dir=${profile}`,'--no-first-run','--no-default-browser-check','--window-size=1280,960',...(process.platform==='linux'?['--ozone-platform=x11']:[]),...JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS ?? '[]')];
       context=await chromium.launchPersistentContext(profile,{headless:false,chromiumSandbox:true,ignoreDefaultArgs:true,args,env,timeout:30000});
@@ -77,10 +73,10 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
     report.gameBrowserVersion=browser.version();
     if(onPage)await onPage({page,browser,context,pid:report.browsers.at(-1).pid});
     // Playwright request interception disables HTTP caching; cache qualification observes normal requests instead.
-    if(mode!=='ci-owned-edge'&&!normalCache)await page.route('**/*',route=>{
+    if(!normalCache)await page.route('**/*',route=>{
       const url=new URL(route.request().url());
-      if(url.origin===origin)return route.continue();
-      (report.blockedBrowserRequests??=[]).push(url.origin);return route.abort('blockedbyclient');
+      if(url.origin===origin||['data:','blob:','chrome-extension:'].includes(url.protocol))return route.continue();
+      (report.blockedBrowserRequests??=[]).push({url:url.href.slice(0,300),frame:route.request().frame().url()});return route.abort('blockedbyclient');
     });
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
@@ -94,8 +90,7 @@ export async function nativeGame({out,origin,env,check,report,ownedEdge,credenti
         const cdp=await browser.newBrowserCDPSession();await cdp.send('Browser.close');await browser.close();
         const deadline=Date.now()+10000;while(chrome.exitCode===null&&Date.now()<deadline)await delay(100);
         assert(chrome.exitCode===0,`Browser cleanup did not exit cleanly: ${chrome.exitCode}`);
-      }else if(mode==='ci-edge'||mode==='ci-owned-edge')await edgeClose();
-      else await context.close({timeout:10000});}catch(error){failures.push(error);}
+      }else await context.close({timeout:10000});}catch(error){failures.push(error);}
       try{await writeFile(join(out,`${name}-browser.log`),errors+'\n'+JSON.stringify(consoleLog,null,2));}catch(error){failures.push(error);}
       if(failures.length)throw new AggregateError(failures,failures.map(error=>String(error.stack??error)).join('\n'));
     };
