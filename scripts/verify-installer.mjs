@@ -76,7 +76,8 @@ async function journey(){
   await page.screenshot({path:join(out,'launcher-accounts.png')});
   const before=await play();
   game=await nativeGame({out,origin:new URL(before.clientURL).origin,clientURL:before.clientURL,env,check,report,credentials:{guid:login,password:'password'}});await game.mutate();
-  check('The game page made no request outside this computer',!report.blockedBrowserRequests?.length);
+  // Chromium's own start page may fetch Google assets before navigation; only the game page is ours.
+  check('The game page made no request outside this computer',!(report.blockedBrowserRequests??[]).some(request=>request.frame.startsWith(new URL(before.clientURL).origin)));
   await game.close();
   await page.locator('#show-backups').click();const count=(await backups()).length;await page.locator('#backup').click();await wait(async()=>(await backups()).length===count+1,'manual backup');
   check('Back up now writes a full local backup',true);

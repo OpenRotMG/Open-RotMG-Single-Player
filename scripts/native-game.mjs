@@ -76,7 +76,7 @@ export async function nativeGame({out,origin,env,check,report,credentials = fixt
     if(!normalCache)await page.route('**/*',route=>{
       const url=new URL(route.request().url());
       if(url.origin===origin||['data:','blob:','chrome-extension:'].includes(url.protocol))return route.continue();
-      (report.blockedBrowserRequests??=[]).push(url.href.slice(0,300));return route.abort('blockedbyclient');
+      (report.blockedBrowserRequests??=[]).push({url:url.href.slice(0,300),frame:route.request().frame().url()});return route.abort('blockedbyclient');
     });
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
     page.on('pageerror',error=>consoleLog.push({type:'pageerror',text:String(error)}));
