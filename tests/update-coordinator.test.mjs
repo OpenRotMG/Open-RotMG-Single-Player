@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Runtime} from '../dist/runtime.js';
 
-import {digest} from '../dist/update-format.js';
+import {digest,UpdateProblem} from '../dist/update-format.js';
 import {runtimeFixture} from '../scripts/runtime-update-fixture.mjs';
 import {directory,unitRuntime,manifestFor} from './update-fixture.mjs';
 
@@ -23,6 +23,10 @@ test('startup makes no update requests; explicit repeated requests coalesce and 
 });
 test('Play preparation only verifies installed files and takes no network update action',async t=>{
  const f=await setup(t);await f.updates.startup();await f.runtime.idleOperation('Explicit Play preparation',()=>f.updates.beforeStart(false));assert.equal(f.fixture.requests.length,0);assert.equal(f.updates.view().needsStart,true);await f.runtime.close();
+});
+for(const newer of [false,true])test(`verified explicit update retires its old refusal only when no newer authenticated floor remains (${newer})`,async t=>{
+ const f=await setup(t);f.fixture.set('good');await f.updates.startup();await f.updates.check();const current=f.updates.current,p=f.updates.transaction;await f.updates.recordRefusal(new UpdateProblem('rejected','previous candidate refusal'));f.updates.transaction={...p,phase:'starting',pid:123};f.updates.captureNative=async p=>({pending:{...p,nativeAck:{protocol:1,operation:'pre-migration',process:123,backup:join(f.runtime.userData,'backups',p.migrationName),sha256:null,source_schema:null,target_schema:22,outcome:'no-game-db'}},backup:null});f.runtime.ownsLiveChild=pid=>pid===123;f.runtime.status='starting';if(newer)t.mock.method(f.updates.store,'authenticatedFloor',async()=>current.sequence+1);
+ await f.updates.ready({pid:123,healthProcess:123,listenerSeen:true,resources:f.updates.store.root(current.id),binary:f.runtime.runtimePaths().binary});const path=join(f.runtime.userData,'runtime-check-refusal.json');if(newer)assert.match(await readFile(path,'utf8'),/previous candidate refusal/);else await assert.rejects(readFile(path),{code:'ENOENT'});
 });
 test('selected startup blocks import before the chooser, preserves pending evidence and explains the missing Start',async t=>{
  const f=await setup(t);f.fixture.set('good');await f.updates.startup();await f.updates.check();const path=join(f.runtime.userData,'runtime-pending.json'),before=await readFile(path);let chosen=false;

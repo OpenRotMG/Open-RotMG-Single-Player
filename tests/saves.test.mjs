@@ -143,9 +143,9 @@ test('save staging cleanup preserves primary validation error and secondary clea
  await assert.rejects(f.saves.beginImport(),error=>/specific authority validation failure/.test(error.cause.cause.cause.message)&&/cleanup failed.*injected cleanup denied/.test(error.message));
 });
 test('save Close refuses accurately when an owned operation fails instead of swallowing its error',posix,async()=>{
- const f=await fixture();let release;f.dialogs.choose=()=>new Promise(ok=>release=ok);
+ const f=await fixture();let release,entered;const choosing=new Promise(resolve=>entered=resolve);f.dialogs.choose=()=>new Promise(ok=>{release=ok;entered();});
  const preview=f.saves.beginImport().then(()=>assert.fail('missing input accepted'),error=>error);
- await delay(10);const close=f.runtime.close();release(join(f.root,'missing'));
+ await choosing;const close=f.runtime.close();release(join(f.root,'missing'));
  await assert.rejects(close,/ENOENT/);assert.match(String(await preview),/ENOENT/);assert.equal(f.runtime.view().closing,false);assert.equal(f.runtime.view().status,'stopped');
 });
 test('save staging refuses a file that grows during the private copy before invoking authority',posix,async t=>{

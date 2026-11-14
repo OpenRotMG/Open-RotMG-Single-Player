@@ -243,7 +243,9 @@ export class RuntimeUpdates extends EventEmitter{
       const receipt:Receipt={format:1,id:randomUUID(),kind:'transition',markerSha256:this.startAuthorization.receipt.markerSha256,previousSha256:this.startAuthorization.sha256,from:p.from,to:p.to,pendingId:p.id,fenceId:this.serverActivity.id,proof:{pending:p,nativeAck:p.nativeAck,readiness:{pid:proof.pid,healthProcess:proof.healthProcess,listenerSeen:true,binarySha256:this.current.binarySha256,selected:p.to}}};
       await this.fence.publish(receipt,'active',this.serverActivity);this.serverActivity=await this.fence.activity();this.assertReadinessOwner(proof);
     }
-    this.assertReadinessOwner(proof);await this.archivePending(p);this.committed=this.current;
+    this.assertReadinessOwner(proof);
+    if(p.kind==='update'&&!equal(p.from,p.to)&&Math.max(await this.store.authenticatedFloor(),...(await this.store.profile()).attempts.map(a=>a.sequence))<=this.current.sequence){await this.recordRefusal();this.failure=undefined;}
+    await this.archivePending(p);this.committed=this.current;
   }
   exposedReady(){
     this.startingPending=undefined;
