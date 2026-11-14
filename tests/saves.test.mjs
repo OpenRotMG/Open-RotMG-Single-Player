@@ -5,7 +5,7 @@ import fs, {mkdir,mkdtemp,writeFile,readFile,readdir,stat,chmod} from 'node:fs/p
 import {join,resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Runtime} from '../dist/runtime.js';
-import {SaveControls,saveAuthority,checkedPassword,importPreview,snapshotPreview,isBackupName} from '../dist/saves.js';
+import {SaveControls,saveAuthority,accountList,checkedPassword,importPreview,snapshotPreview,isBackupName} from '../dist/saves.js';
 
 // This executable tests transport/lifecycle only, never claims Rust save or packaged acceptance.
 const executable=String.raw`#!${process.execPath}
@@ -35,9 +35,9 @@ else if(command==='import'||command==='replace'){
 else process.exit(9);
 `;
 async function fixture(){
- await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/saves-')),resources=join(root,'resources'),user=join(root,'user');await mkdir(resources);await mkdir(user);
+ await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/saves-')),resources=join(root,'resources'),user=join(root,'user');await mkdir(resources);await mkdir(user);await mkdir(join(user,'state'));await writeFile(join(user,'state/game.db'),'synthetic non-SQLite presence');
  const control=async value=>writeFile(join(resources,'control.json'),JSON.stringify(value));await control({});
- await writeFile(join(resources,'openrotmg'),executable,{mode:0o700});
+ await writeFile(join(resources,'openrotmg'),executable,{mode:0o700});await mkdir(join(resources,'notices'));await writeFile(join(resources,'REVISION'),'a'.repeat(40));await writeFile(join(resources,'notices/account-management.json'),JSON.stringify({format:1,server:'a'.repeat(40),cli:2,storage:1}));
  const source=join(root,'selected.json');await writeFile(source,JSON.stringify({email:'player-1@local.invalid',name:'Original account'}));
  const runtime=new Runtime(resources,user);let chosen=source,confirm=true,opened;
  const dialogs={choose:async()=>chosen,confirmRestore:async()=>confirm,openFolder:async path=>{opened=path;return '';}};
@@ -52,14 +52,15 @@ test('save preview and snapshot metadata are required, not invented',()=>{
  for(const [value,confirmation] of [['short','other'],['abcd','abcd'],['12345\n','12345\n'],['é'.repeat(65),'é'.repeat(65)],['abc\ud800','abc\ud800']])assert.throws(()=>checkedPassword(value,confirmation),/password/);
  assert.equal(checkedPassword('é'.repeat(64),'é'.repeat(64)),'é'.repeat(64));
 });
-test('account authority returns known passwords only to its caller, never the durable lifecycle acknowledgement',posix,async()=>{
- const f=await fixture(),secret='private-local-credential',row={account:1,name:'Guest1',username:'player@local.invalid',password:secret,expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});let proof;f.runtime.authorityClosed=async value=>{proof=value;};const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.equal(value.accounts[0].password,secret);assert(!JSON.stringify(proof).includes(secret));assert.equal(proof.ack.accounts[0].username,row.username);
+test('account authority and lifecycle acknowledgements contain no passwords or verifiers',posix,async()=>{
+ const f=await fixture(),row={account:1,name:'Guest1',username:'player@local.invalid',expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});let proof;f.runtime.authorityClosed=async value=>{proof=value;};const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.deepEqual(value.accounts,[row]);assert.equal(proof.ack.accounts[0].username,row.username);assert.throws(()=>accountList({accounts:[{...row,password:'private-local-credential'}]}),/acknowledgement/);await fs.unlink(join(f.resources,'notices/account-management.json'));
  await assert.rejects(f.saves.listAccounts(),/Server \+ client update/);assert.equal(f.runtime.view().status,'stopped');
 });
 test('save native chooser cancellation changes no save or backups',posix,async()=>{
  const f=await fixture();f.choose(undefined);assert.equal(await f.saves.beginImport(),undefined);assert.equal(await f.saves.restoreBackup(),undefined);
- assert.deepEqual(await readdir(f.user),[]);assert.equal(f.runtime.view().operation,undefined);
+ assert.deepEqual(await readdir(f.user),['state']);assert.equal(f.runtime.view().operation,undefined);
 });
+test('first import is refused before the chooser until a local save exists for the mandatory backup',posix,async()=>{const f=await fixture();await fs.unlink(join(f.user,'state/game.db'));let chosen=false;f.dialogs.choose=async()=>{chosen=true;return f.source;};await assert.rejects(f.saves.beginImport(),/Click Play.*backup/);assert.equal(chosen,false);assert.equal(f.runtime.view().operation,undefined);});
 test('save privately staged input is bound through confirmation, passwords absent from argv and outcome',posix,async()=>{
  const f=await fixture();const preview=await f.saves.beginImport();assert.equal(preview.name,'Original account');
  await writeFile(f.source,'CHANGED EXTERNAL FILE');

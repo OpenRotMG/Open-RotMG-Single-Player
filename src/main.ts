@@ -51,6 +51,7 @@ else {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
     const userData=app.isPackaged?await realpath(playerData):playerData;
     runtime = new Runtime(policy.baseline.root, userData,app.isPackaged?await realpath(app.getPath('userData')):app.getPath('userData'));
+    await runtime.loadSettings();
     site = await gameSite(runtime);
     const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
@@ -93,7 +94,7 @@ else {
         try{
           if(closing&&!['launcher:status','runtime:status','update:status','logs:copy','window:minimize','window:maximize'].includes(channel))throw new UserNotice('The launcher is closing. Please wait.');
           if(launcherUpdates.busy&&!['launcher:status','runtime:status','update:status','window:minimize','window:maximize','logs:copy','save:location',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserNotice('The launcher is updating. Please wait.');
-          if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
+          if(launcherUpdates.view().blocked&&['runtime:start','runtime:start-installed','runtime:client','runtime:bots','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
           return{ok:true,value:await action(...args)};
         }
         catch(error){if(error instanceof UserNotice)return{ok:false,error:error.message,severity:'info'};runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
@@ -104,6 +105,7 @@ else {
     checked('window:maximize', () => { if(window!.isMaximized())window!.unmaximize();else window!.maximize(); });
     checked('window:close', () => window!.close());
     checked('runtime:status', view);
+    checked('runtime:bots',enabled=>runtime.setBots(enabled as boolean),args=>args.length===1&&typeof args[0]==='boolean');
     checked('runtime:start', () => runtime.start());
     checked('runtime:start-installed', () => {
       if(!updates.view().canPlayInstalled)throw new Error('Explicit installed-version play requires a rejected/unavailable check, verified stopped selection and no pending ambiguity');

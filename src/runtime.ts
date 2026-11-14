@@ -8,11 +8,12 @@ import { constants } from 'node:fs';
 import { join, resolve, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import type { RuntimeUpdates } from './updates';
+import {LocalSettings,requireLocalFeatures} from './settings';
 
 export type AuthorityCompletion = {command:string;binary:string;code:number;outcome:'success'|'unchanged';ack:unknown};
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; consoleLog?:string; operation?: string; closing: boolean };
+export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; consoleLog?:string; operation?: string; closing: boolean; botsEnabled:boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
 
@@ -50,12 +51,16 @@ export class Runtime extends EventEmitter {
   readonly diagnostics: string;
   private updates?: RuntimeUpdates;
   private selectedResources: string;
+  private settings:LocalSettings;
   constructor(resources: string, readonly userData: string, readonly storage: string = userData) {
     super();
     this.selectedResources = resources;
+    this.settings=new LocalSettings(storage);
     this.diagnostics = join(storage, 'diagnostics');
   }
   get resources() { return this.selectedResources; }
+  async loadSettings(){await this.settings.load();}
+  setBots(enabled:boolean){return this.idleOperation('Configure local bots',async()=>{if(enabled)await requireLocalFeatures(this.resources);await this.settings.setBots(enabled);this.reportUpdate('Local bots '+(enabled?'enabled':'disabled')+' for the next game start.');});}
   attachUpdates(updates: RuntimeUpdates) {
     if (this.updates || this.boot || this.operation || this.child || this.closing) throw new Error('Runtime update coordinator must attach before startup');
     this.updates = updates;
@@ -69,7 +74,7 @@ export class Runtime extends EventEmitter {
   async authorityStarting(command:string,binary:string) { await this.updates?.authorityStarting(command,binary); }
   async authorityClosed(completion:AuthorityCompletion) { await this.updates?.authorityClosed(completion); }
   view(): View {
-    return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics, operation: this.operationName, closing: this.closing };
+    return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics, operation: this.operationName, closing: this.closing, botsEnabled:this.settings.bots };
   }
   private update(status: Status, message: string) { this.status = status; this.message = message; this.emit('change', this.view()); }
   private line(text: string) {
@@ -116,6 +121,8 @@ export class Runtime extends EventEmitter {
   }
   private async startOwned(installedOnly: boolean) {
     if(this.updates)await this.updates.prepareDiagnostics();else await mkdir(this.diagnostics, { recursive: true, mode: 0o700 });
+    await this.settings.load();
+    if(this.settings.bots)await requireLocalFeatures(this.resources);
     await this.updates?.beforeStart(installedOnly);
     if (this.closing && this.updates) throw this.updates.canceledBeforeSpawn();
     if (await this.exists(join(this.storage, 'shutdown-failed.json')) && !await this.updates?.failureAuthorized()) throw new Error('Previous server shutdown was not verified; see shutdown-failed.json');
@@ -133,7 +140,7 @@ export class Runtime extends EventEmitter {
     });
     let operational:Record<string,string>={};
     if(await this.exists(join(this.resources,'notices/account-management.json'))){
-      const capability=JSON.parse(await readFile(join(this.resources,'notices/account-management.json'),'utf8'));if(capability.format!==1||capability.cli!==1||capability.storage!==1)throw Error('Invalid separate server-storage capability');
+      const capability=JSON.parse(await readFile(join(this.resources,'notices/account-management.json'),'utf8'));if(capability.format!==1||![1,2].includes(capability.cli)||capability.storage!==1)throw Error('Invalid separate server-storage capability');
       const root=resolve(this.userData,'..');if(this.storage!==join(root,'server data','profile'))throw Error('Separate server storage requires native portable ownership');
       const prepared=JSON.parse(execFileSync(join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer'),['--launcher-server-storage',root],{encoding:'utf8',windowsHide:true,timeout:30000}));
       if(prepared.profile!==join(this.storage,'server-state'))throw Error('Invalid native server-storage acknowledgement');operational={operational_state:prepared.profile};
@@ -141,7 +148,7 @@ export class Runtime extends EventEmitter {
     const config = join(this.storage, 'desktop-config.json');
     await writeFile(config, JSON.stringify({ bind: `127.0.0.1:${PORT}`, origin: this.origin,
       data, client: clientPath, state, ...operational,
-      behind_proxy: false, shore_bots: false, bot_llm: false, max_players: 85, realm_seed: 42, ...this.updates?.startupConfig() }, null, 2), { mode: 0o600 });
+      behind_proxy: false, shore_bots: this.settings.bots, bot_llm: false, max_players: 85, realm_seed: 42, ...this.updates?.startupConfig() }, null, 2), { mode: 0o600 });
     await this.updates?.beforeSpawn(binary);
     const name = new Date().toISOString().replaceAll(':', '-');
     // Direct inherited file descriptors retain EOF-drain diagnostics even if Electron crashes.
@@ -217,7 +224,7 @@ export class Runtime extends EventEmitter {
         if (response.ok) {
           const health = await response.json() as { process: number; bots: number; bot_dialogue: { enabled: boolean } };
           if (health.process !== child.pid) throw new Error(`Readiness PID mismatch: expected ${child.pid}, received ${health.process}`);
-          if (health.bots !== 0 || health.bot_dialogue.enabled) throw new Error('Unsafe consumer health: bots/LLM enabled');
+          if (!Number.isInteger(health.bots)||health.bots<0||(!this.settings.bots&&health.bots!==0)||health.bot_dialogue.enabled) throw new Error('Local server health does not match the configured bots/disabled language service');
           if (this.listenerSeen) {
             await this.updates?.ready({pid:child.pid!,binary,resources:this.resources,healthProcess:health.process,listenerSeen:true});
             if (!this.ownsLiveChild(child.pid!) || this.unsafe || this.expectedStop || this.status !== 'starting') throw new Error('Owned server changed during durable startup bookkeeping; no playable-ready success is claimed');

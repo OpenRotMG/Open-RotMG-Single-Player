@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   maximize: () => invoke('window:maximize'),
   close: () => invoke('window:close'),
   status: () => invoke('runtime:status'),
+  setBots:(enabled:boolean)=>invoke('runtime:bots',enabled),
   start: () => invoke('runtime:start'),
   startInstalled: () => invoke('runtime:start-installed'),
   launcherUpdates: () => invoke('launcher:status'),
