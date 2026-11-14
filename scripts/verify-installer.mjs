@@ -78,7 +78,7 @@ async function journey(){
   game=await nativeGame({out,origin:new URL(before.clientURL).origin,clientURL:before.clientURL,env,check,report,credentials:{guid:login,password:'password'}});await game.mutate();
   check('The game page made no request outside this computer',!report.blockedBrowserRequests?.length);
   await game.close();
-  await page.locator('#tab-backups').click();const count=(await backups()).length;await page.locator('#backup').click();await wait(async()=>(await backups()).length===count+1,'manual backup');
+  await page.locator('#show-backups').click();const count=(await backups()).length;await page.locator('#backup').click();await wait(async()=>(await backups()).length===count+1,'manual backup');
   check('Back up now writes a full local backup',true);
   await page.locator('#tab-advanced').click();await page.locator('#bots-enabled').check();await wait(async()=>(await status()).botsEnabled,'bots enabled');
   check('Local bots are off by default and the setting is saved explicitly',JSON.parse(await readFile(join(storage,'launcher-settings.json'),'utf8')).bots===true);
