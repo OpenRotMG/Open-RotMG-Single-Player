@@ -2,7 +2,7 @@ import {cp,mkdir,mkdtemp,readFile,writeFile,rm,rename,stat} from 'node:fs/promis
 import {isAbsolute,join,resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import {assembleRuntime} from './runtime-payload.mjs';
-import {boundedFile,exact,hashFile,integer,targetName,verifyManifest,verifyRuntime,saveCompatibility} from '../dist/update-format.js';
+import {boundedFile,exact,hashFile,integer,targetName,verifyManifest,verifyRuntime,saveCompatibility,launcherVersion,versionAtLeast} from '../dist/update-format.js';
 import {extractRuntime} from '../dist/update-archive.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 
@@ -24,7 +24,8 @@ if(input.runtimeRelease!==undefined){
  baseline={format:1,mode:'release',identitySha256:value.payload.identitySha256,startupBackup:1,clientNamespace:1,manifest:manifest.toString('base64'),signature:signature.toString('base64')};
 }else{
  const pins=JSON.parse(await readFile('source-pins.json','utf8')),capabilities=JSON.parse(await readFile('runtime-capabilities.json','utf8'));
- exact(capabilities,'format,server,clientNamespace,save'+(Object.hasOwn(capabilities,'desktopMetadata')?',desktopMetadata':'')+(Object.hasOwn(capabilities,'accountManagement')?',accountManagement':''),'explicit source runtime capabilities');
+ exact(capabilities,'format,server,minLauncher,clientNamespace,save'+(Object.hasOwn(capabilities,'desktopMetadata')?',desktopMetadata':'')+(Object.hasOwn(capabilities,'accountManagement')?',accountManagement':''),'explicit source runtime capabilities');
+ launcherVersion(capabilities.minLauncher);assert(versionAtLeast(JSON.parse(await readFile('package.json')).version,capabilities.minLauncher),'Source runtime requires a newer launcher');
  if(Object.hasOwn(capabilities,'accountManagement'))assert.equal(capabilities.accountManagement,1,'Invalid local account management declaration');
  if(Object.hasOwn(capabilities,'desktopMetadata'))assert([0,1].includes(capabilities.desktopMetadata),'Invalid bundled metadata declaration');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
  assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&saveCompatibility(capabilities.save)&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
