@@ -3,6 +3,7 @@ module.exports = {
   makers: [],
   packagerConfig: {
     asar: true,
+    icon: 'src/assets/app-icon',
     prune: true,
     executableName: 'openrotmg-single-player',
     extraResource: ['runtime','launcher/THIRD-PARTY-NOTICES.txt'],

@@ -10,7 +10,7 @@ test('runtime versions show authenticated counts, never invent future counts or 
 });
 test('pending preparation uses Play while both UI and named Start preserve startup/recovery guards',async()=>{
  const f=await rendererFixture();f.update({phase:'staged',message:'Authenticated runtime selected; guarded startup pending',canManageSaves:false,needsStart:true});
- for(const id of ['import','backup','folder','restore','restore-other'])assert(f.element(id).disabled,id);assert.equal(f.element('play').disabled,false);assert.match(f.element('message').textContent,/Play will prepare/);assert.doesNotMatch(f.element('message').textContent,/STAGED|Authenticated|guarded|runtime/);assert.match(f.element('logs').textContent,/guarded startup pending/);
+ for(const id of ['accounts-import','backup','folder','restore','restore-other'])assert(f.element(id).disabled,id);assert.equal(f.element('play').disabled,false);assert.match(f.element('message').textContent,/Play will prepare/);assert.doesNotMatch(f.element('message').textContent,/STAGED|Authenticated|guarded|runtime/);assert.match(f.element('logs').textContent,/guarded startup pending/);
  f.element('play').onclick();await tick();assert.deepEqual(f.calls,[['start'],['client']]);
  f.update({phase:'recovery',canRecover:true,needsStart:false});assert(f.element('play').disabled);assert.equal(f.element('home-recovery').hidden,false);f.change({status:'failed',pid:42});assert(f.element('home-recovery').disabled);assert(f.element('recover-runtime').disabled);
 });

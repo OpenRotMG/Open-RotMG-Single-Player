@@ -36,7 +36,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   listAccounts:()=>invoke('account:list'),
   editAccount:(account:number,expected:string,username:string,password:string)=>invoke('account:edit',account,expected,username,password),
   importPlayer: () => invoke('save:import'),
-  confirmImport: (expected: string, replace: boolean) => invoke('save:confirm-import', expected, replace),
+  confirmImport: (expected: string, password: string, confirmation: string, replace: boolean) => invoke('save:confirm-import', expected, password, confirmation, replace),
   cancelImport: () => invoke('save:cancel-import'),
   makeBackup: () => invoke('save:backup'),
   openBackupFolder: () => invoke('save:folder'),

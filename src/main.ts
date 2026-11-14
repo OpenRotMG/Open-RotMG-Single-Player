@@ -13,8 +13,10 @@ import {LauncherStore} from './launcher-store';
 import { RELEASES_PAGE,targetName } from './update-format';
 import { gameSite } from './game-site';
 import {UserMessage,UserNotice} from './user-message';
+import {desktopName,installDesktopIcon} from './desktop-icon';
 
 app.setName('Open RotMG Single Player');
+if(process.platform==='linux'){app.setDesktopName(desktopName);app.commandLine.appendSwitch('class',desktopName.slice(0,-8));}
 const playerData=app.getPath('userData');
 if(app.isPackaged&&app.commandLine.hasSwitch('portable-root')){
  try{
@@ -45,7 +47,6 @@ else {
   const view = () => ({...runtime.view(),consoleLog,clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
-  const importPassword = 'password';
   app.whenReady().then(async () => {
     const policy = createUpdatePolicy(process.resourcesPath, app.getVersion());
     const userData=app.isPackaged?await realpath(playerData):playerData;
@@ -61,7 +62,8 @@ else {
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
     launcherUpdates.on('log',message=>runtime.reportUpdate('Launcher: '+message));
     await launcherUpdates.startup();
-    window = new BrowserWindow({ width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
+    if(root&&process.platform==='linux')await installDesktopIcon(process.env.XDG_DATA_HOME??join(app.getPath('home'),'.local/share'),join(root,'OpenRotMG Singleplayer'),join(__dirname,'assets/app-icon.png'));
+    window = new BrowserWindow({ icon:join(__dirname,'assets/app-icon.png'), width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     window.webContents.on('will-navigate', event => event.preventDefault());
@@ -134,7 +136,7 @@ else {
     checked('account:list',()=>saves.listAccounts());
     checked('account:edit',(account,expected,username,password)=>saves.editAccount(account,expected,username,password),args=>args.length===4&&Number.isSafeInteger(args[0])&&Number(args[0])>0&&typeof args[1]==='string'&&/^[a-f0-9]{64}$/.test(args[1])&&typeof args[2]==='string'&&args[2].length<=245&&typeof args[3]==='string'&&Buffer.byteLength(args[3])<=128);
     checked('save:import', () => saves.beginImport());
-    checked('save:confirm-import', (expected, replace) => saves.finishImport(expected, importPassword, importPassword, replace), args => args.length === 2 && typeof args[0] === 'string' && /^[a-f0-9]{64}$/.test(args[0]) && typeof args[1] === 'boolean');
+    checked('save:confirm-import', (expected, password, confirmation, replace) => saves.finishImport(expected, password, confirmation, replace), args => args.length === 4 && typeof args[0] === 'string' && /^[a-f0-9]{64}$/.test(args[0]) && typeof args[1] === 'string' && typeof args[2] === 'string' && Buffer.byteLength(args[1]) <= 128 && Buffer.byteLength(args[2]) <= 128 && typeof args[3] === 'boolean');
     checked('save:cancel-import', () => saves.cancelImport());
     checked('save:backup', () => saves.makeBackup());
     checked('save:folder', () => saves.openBackupFolder());

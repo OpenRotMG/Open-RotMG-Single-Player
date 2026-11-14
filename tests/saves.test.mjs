@@ -14,7 +14,7 @@ const [flag,command,...args]=process.argv.slice(2),control=JSON.parse(fs.readFil
 if(flag!=='--local-save')process.exit(8);
 const fail=(outcome,error)=>{console.log(JSON.stringify({protocol:1,operation:command,outcome,error,...control.failureEnvelope}));console.error('diagnostic only; never phase evidence');process.exitCode=2;};
 fs.appendFileSync('calls.jsonl',JSON.stringify({command,args})+'\n');
-const identity=()=>{const input=fs.readFileSync(args[2]);return {account:1,login:'player-1@local.invalid',replaced:!!control.replaced,disclosure:'Personal progress only.',exported_at:1700000000,name:input.toString(),character_count:3,expected:crypto.createHash('sha256').update(input).update(control.identity||'').digest('hex')};};
+const identity=()=>{const input=fs.readFileSync(args[2]);return {account:1,login:'player-1@local.invalid',replaced:!!control.replaced,disclosure:'Personal progress only.',exported_at:1700000000,name:JSON.parse(input).name,character_count:3,expected:crypto.createHash('sha256').update(input).update(control.identity||'').digest('hex')};};
 if(control.signal){process.kill(process.pid,'SIGTERM');}
 else if(control.overflow){process.stdout.write('x'.repeat(70000));}
 else if(control.invalid){console.log('not JSON');}
@@ -38,7 +38,7 @@ async function fixture(){
  await mkdir('.qa/unit',{recursive:true});const root=await mkdtemp(resolve('.qa/unit/saves-')),resources=join(root,'resources'),user=join(root,'user');await mkdir(resources);await mkdir(user);
  const control=async value=>writeFile(join(resources,'control.json'),JSON.stringify(value));await control({});
  await writeFile(join(resources,'openrotmg'),executable,{mode:0o700});
- const source=join(root,'selected.json');await writeFile(source,'Original account');
+ const source=join(root,'selected.json');await writeFile(source,JSON.stringify({email:'player-1@local.invalid',name:'Original account'}));
  const runtime=new Runtime(resources,user);let chosen=source,confirm=true,opened;
  const dialogs={choose:async()=>chosen,confirmRestore:async()=>confirm,openFolder:async path=>{opened=path;return '';}};
  const saves=new SaveControls(runtime,dialogs);
@@ -64,7 +64,7 @@ test('save privately staged input is bound through confirmation, passwords absen
  const f=await fixture();const preview=await f.saves.beginImport();assert.equal(preview.name,'Original account');
  await writeFile(f.source,'CHANGED EXTERNAL FILE');
  const outcome=await f.saves.finishImport(preview.expected,'secret-value','secret-value',false);
- assert.equal(outcome.login,preview.login);assert.deepEqual(JSON.parse(await readFile(join(f.resources,'imported.json'),'utf8')),{bytes:'Original account',secretLength:12});
+ assert.equal(outcome.login,preview.login);assert.deepEqual(JSON.parse(await readFile(join(f.resources,'imported.json'),'utf8')),{bytes:JSON.stringify({email:'player-1@local.invalid',name:'Original account'}),secretLength:12});
  const calls=await readFile(join(f.resources,'calls.jsonl'),'utf8');assert(!calls.includes('secret-value'));assert(!JSON.stringify(outcome).includes('secret-value'));
  assert(!calls.includes(f.source),'only private stage path reaches authority');
  assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);

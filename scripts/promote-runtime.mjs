@@ -4,13 +4,14 @@ import {execFileSync} from 'node:child_process';
 import {mkdir,readFile,writeFile,readdir,lstat} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {extractRuntime} from '../dist/update-archive.js';
-import {digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities,minimumRuntimeLauncher} from '../dist/update-format.js';
+import {digest,hashFile,REPOSITORY,TARGETS,verifyManifest,verifyRuntime,verifyCapabilities,minimumRuntimeLauncher,launcherVersion,versionAtLeast} from '../dist/update-format.js';
 import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
 import {requireAvailableRuntimeSequence,requirePromotionSource,requireNativePromotionRun,requireUnsignedResume,requireFirstUnsignedResume,requireRuntimeDraftReservation,requireUnsignedRuntimeDraft,requireRuntimeAssetBytes,runtimeDraftBody} from './runtime-release-history.mjs';
 
 assert.equal(process.env.GITHUB_ACTIONS,'true','Promotion is restricted to the trusted-main hosted workflow');
 const head=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim();assert.equal(process.env.GITHUB_REF,'refs/heads/main');assert.equal(process.env.GITHUB_SHA,head);assert.equal(execFileSync('git',['status','--porcelain','--untracked-files=no'],{encoding:'utf8'}).trim(),'');
-const pins=JSON.parse(await readFile('source-pins.json')),launcher=JSON.parse(await readFile('package.json')).version,save=JSON.parse(await readFile('runtime-capabilities.json')).save,minimum=minimumRuntimeLauncher(save,pins);
+const pins=JSON.parse(await readFile('source-pins.json')),launcher=JSON.parse(await readFile('package.json')).version,capabilities=JSON.parse(await readFile('runtime-capabilities.json')),save=capabilities.save,minimum=capabilities.minLauncher;
+launcherVersion(minimum);assert(versionAtLeast(minimum,minimumRuntimeLauncher(save,pins))&&versionAtLeast(launcher,minimum),'Explicit runtime protocol minimum is outside the compatible launcher range');
 const json=async path=>JSON.parse(await readFile(path,'utf8'));
 async function files(root){const result=[];async function walk(path){const info=await lstat(path);assert(!info.isSymbolicLink(),'Artifact links are not trusted');if(info.isDirectory())for(const name of await readdir(path))await walk(join(path,name));else{assert(info.isFile());result.push(path);assert(result.length<=10000);}}await walk(root);return result;}
 const api=(...args)=>execFileSync('gh',['api',...args],{maxBuffer:1024*1024});

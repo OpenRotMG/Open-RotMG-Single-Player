@@ -26,9 +26,10 @@ export type SaveDialogs = {
 const MAX_ACCOUNT_BYTES = 32 * 1024 * 1024, MAX_OUTPUT_BYTES = 64 * 1024;
 const positive = (value: unknown) => Number.isSafeInteger(value) && Number(value) > 0;
 const count = (value: unknown) => Number.isSafeInteger(value) && Number(value) >= 0;
+const validLogin=(value:unknown):value is string=>typeof value==='string'&&value.length<=254&&/^[^\s@]+@[^\s@]+$/.test(value)&&!/[\p{Cc}]/u.test(value);
 export function importPreview(value: unknown): ImportPreview {
   const p = value as ImportPreview;
-  if (!p || Object.keys(p).length !== 8 || !positive(p.account) || typeof p.login !== 'string' || p.login !== `player-${p.account}@local.invalid` || typeof p.replaced !== 'boolean' || typeof p.disclosure !== 'string' || (!positive(p.exported_at) || p.exported_at > 8_640_000_000_000) || typeof p.name !== 'string' || !count(p.character_count) || typeof p.expected !== 'string' || !/^[a-f0-9]{64}$/.test(p.expected)) throw new Error('Invalid authority import preview; expected account/login/date/name/count/precondition metadata');
+  if (!p || Object.keys(p).length !== 8 || !positive(p.account) || typeof p.login !== 'string' || !validLogin(p.login) || typeof p.replaced !== 'boolean' || typeof p.disclosure !== 'string' || (!positive(p.exported_at) || p.exported_at > 8_640_000_000_000) || typeof p.name !== 'string' || !count(p.character_count) || typeof p.expected !== 'string' || !/^[a-f0-9]{64}$/.test(p.expected)) throw new Error('Invalid authority import preview; expected account/login/date/name/count/precondition metadata');
   return p;
 }
 export function snapshotPreview(value: unknown): SnapshotPreview {
@@ -94,7 +95,7 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
       accountList(result);
     } else {
       const value = result as ImportPreview;
-      if (!value || Object.keys(value).length !== 4 || !positive(value.account) || value.login !== `player-${value.account}@local.invalid` || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
+      if (!value || Object.keys(value).length !== 4 || !positive(value.account) || !validLogin(value.login) || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
     }
   } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
   await runtime.authorityClosed({command,binary,code,outcome:'success',ack:command==='accounts'||command==='account-edit'?{accounts:accountList(result).map(({password,...row})=>row)}:result});
@@ -184,9 +185,12 @@ export class SaveControls {
       if (!source) return undefined;
       return this.staged(source, 'account', async path => {
         const { state, data } = this.runtime.runtimePaths();
+        const email=JSON.parse(await readFile(path,'utf8')).email;
+        if(!validLogin(email))throw new UserMessage('This export has no valid account email. Export your registered account again.');
         let metadata:ImportPreview;
         try{metadata=importPreview(await saveAuthority(this.runtime, 'preview', [state, data, path]));}
         catch(error){if(error instanceof AuthorityUnchangedError)throw new AuthorityUnchangedError('The installed server could not read this save. Check Server + client updates, then choose the file again. Your local save was not changed.',{cause:error});throw error;}
+        if(metadata.login!==email)throw new UserMessage('Install the Server + client update before importing with the exported email.');
         if (this.runtime.view().closing) return undefined;
         const confirmation = new Promise<Confirmation | undefined>(accept => { this.pending = {preview: metadata, accept, outcome}; });
         deliver(metadata);
