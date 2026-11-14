@@ -43,7 +43,7 @@ async function journey(){
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   const launch=async()=>{
    // Any attempt to leave this computer fails the test: the game must work offline and only check for updates on request.
-   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:paths.executable,profile:storage,env,policy:{},setupMain:`globalThis.offlineAttempts=[];const original=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(!/^http:\\/\\/127\\.0\\.0\\.1:/.test(value)){globalThis.offlineAttempts.push(value);throw new TypeError('Offline test refused '+value);}return original(url,...rest);};`}));
+   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:paths.executable,profile:paths.player,env,policy:{},setupMain:`globalThis.offlineAttempts=[];const original=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(!/^http:\\/\\/127\\.0\\.0\\.1:/.test(value)){globalThis.offlineAttempts.push(value);throw new TypeError('Offline test refused '+value);}return original(url,...rest);};`}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.locator('#play').isEnabled()),'launcher ready');
   };
   const offlineAttempts=()=>app.evaluate(()=>globalThis.offlineAttempts);
