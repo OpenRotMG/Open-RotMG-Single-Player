@@ -75,7 +75,7 @@ export async function nativeGame({out,origin,env,check,report,credentials = fixt
     // Playwright request interception disables HTTP caching; cache qualification observes normal requests instead.
     if(!normalCache)await page.route('**/*',route=>{
       const url=new URL(route.request().url());
-      if(url.origin===origin)return route.continue();
+      if(url.origin===origin||['data:','blob:'].includes(url.protocol))return route.continue();
       (report.blockedBrowserRequests??=[]).push(url.origin);return route.abort('blockedbyclient');
     });
     page.on('console',message=>consoleLog.push({type:message.type(),text:message.text()}));
