@@ -1,16 +1,7 @@
 import {lstat,mkdir,readFile,rename,writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
-import {UserMessage} from './user-message';
 
-export async function requireLocalFeatures(resources:string){
-  let bytes:Buffer;
-  try{bytes=await readFile(join(resources,'notices/account-management.json'));}
-  catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;throw new UserMessage('Install the Server + client update before importing, managing passwords or enabling bots.');}
-  const value=JSON.parse(bytes.toString('utf8'));
-  if(value.cli===1)throw new UserMessage('Install the Server + client update before importing, managing passwords or enabling bots.');
-  if(Object.keys(value).sort().join(',')!=='cli,format,server,storage'||value.format!==1||value.cli!==2||value.storage!==1||value.server!==(await readFile(join(resources,'REVISION'),'utf8')).trim())throw Error('Invalid local account and settings capability');
-}
 export class LocalSettings {
   private readonly path:string;
   bots=false;

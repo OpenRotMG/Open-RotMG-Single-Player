@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { Runtime, serverCommandPath } from './runtime';
 
 import {UserMessage} from './user-message';
-import {requireLocalFeatures} from './settings';
 
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
@@ -46,10 +45,9 @@ export function checkedPassword(value: unknown, confirmation: unknown): string {
 export class AuthorityUnchangedError extends Error { constructor(message:string,options?:ErrorOptions) { super(message,options);this.name='AuthorityUnchangedError'; } }
 
 /** Only server-owned named save commands are reachable here; paths never come from IPC. */
-export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'blockAmbiguousSave'|'authorityStarting'|'authorityClosed'>;
+export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'blockAmbiguousSave'>;
 export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore' | 'accounts' | 'account-edit', paths: string[], password?: string): Promise<unknown> {
   const { binary } = runtime.runtimePaths();
-  await runtime.authorityStarting(command,binary);
   let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
   const child = spawn(serverCommandPath(binary), ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
   const collect = (current: Buffer, bytes: Buffer) => {
@@ -80,7 +78,6 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
     const failure = result as {protocol: number; operation: string; outcome: string; error: string};
     if (!failure || Object.keys(failure).length !== 4 || failure.protocol !== 1 || failure.operation !== command || !['unchanged', 'unknown'].includes(failure.outcome) || typeof failure.error !== 'string' || !failure.error.trim() || Buffer.byteLength(failure.error) > MAX_OUTPUT_BYTES) throw unverified(`exit=${code}; invalid failure envelope (protocol/operation/outcome/error)`);
     if (failure.outcome === 'unknown') throw unverified(`exit=${code}; ${failure.error}`);
-    await runtime.authorityClosed({command,binary,code,outcome:'unchanged',ack:failure});
     throw new AuthorityUnchangedError(`Save authority ${command} failed (exit ${code}) at ${binary}: ${failure.error}. Destination game save unchanged; output/backup files may exist. No output success is claimed.`);
   }
   try {
@@ -99,7 +96,6 @@ export async function saveAuthority(runtime: SaveAuthorityRuntime, command: 'pre
       if (!value || Object.keys(value).length !== 4 || !positive(value.account) || !validLogin(value.login) || typeof value.replaced !== 'boolean' || typeof value.disclosure !== 'string') throw new Error('invalid import acknowledgement');
     }
   } catch (error) { throw unverified(`invalid success acknowledgement: ${String(error)}`); }
-  await runtime.authorityClosed({command,binary,code,outcome:'success',ack:command==='accounts'||command==='account-edit'?{accounts:accountList(result)}:result});
   return result;
 }
 function authorityEnvironment() {
@@ -182,7 +178,6 @@ export class SaveControls {
     let deliver!: (preview: ImportPreview | undefined) => void, reject!: (error: unknown) => void;
     const preview = new Promise<ImportPreview | undefined>((ok, bad) => { deliver = ok; reject = bad; });
     const outcome = this.runtime.stoppedOperation('Import player', async () => {
-      await requireLocalFeatures(this.runtime.resources);
       try{if(!(await lstat(join(this.runtime.runtimePaths().state,'game.db'))).isFile())throw Error('Local save is not a regular file');}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')throw new UserMessage('Click Play once before importing so a full backup can be made.');throw error;}
       const source = await this.dialogs.choose('account', this.backups);
       if (!source) return undefined;
@@ -192,8 +187,8 @@ export class SaveControls {
         if(!validLogin(email))throw new UserMessage('This export has no valid account email. Export your registered account again.');
         let metadata:ImportPreview;
         try{metadata=importPreview(await saveAuthority(this.runtime, 'preview', [state, data, path]));}
-        catch(error){if(error instanceof AuthorityUnchangedError)throw new AuthorityUnchangedError('The installed server could not read this save. Check Server + client updates, then choose the file again. Your local save was not changed.',{cause:error});throw error;}
-        if(metadata.login!==email)throw new UserMessage('Install the Server + client update before importing with the exported email.');
+        catch(error){if(error instanceof AuthorityUnchangedError)throw new UserMessage('This file could not be read as an exported account. Your local save was not changed.',{cause:error});throw error;}
+        if(metadata.login!==email)throw new Error(`Import preview login ${metadata.login} differs from the exported email`);
         if (this.runtime.view().closing) return undefined;
         const confirmation = new Promise<Confirmation | undefined>(accept => { this.pending = {preview: metadata, accept, outcome}; });
         deliver(metadata);
@@ -233,12 +228,11 @@ export class SaveControls {
     await pending.outcome;
     return true;
   }
-  private requireAccounts(){return requireLocalFeatures(this.runtime.resources);}
-  listAccounts():Promise<LocalAccount[]>{return this.runtime.stoppedOperation('View local accounts',async()=>{await this.requireAccounts();const {state,data}=this.runtime.runtimePaths();return accountList(await saveAuthority(this.runtime,'accounts',[state,data]));});}
+  listAccounts():Promise<LocalAccount[]>{return this.runtime.stoppedOperation('View local accounts',async()=>{const {state,data}=this.runtime.runtimePaths();return accountList(await saveAuthority(this.runtime,'accounts',[state,data]));});}
   editAccount(account:unknown,expected:unknown,username:unknown,password:unknown):Promise<LocalAccount[]>{
     if(!positive(account)||typeof expected!=='string'||!/^[a-f0-9]{64}$/.test(expected)||typeof username!=='string'||username.length>245)throw new UserMessage('Refresh the account list and enter a valid username.');
     const secret=password===''?null:checkedPassword(password,password);
-    return this.runtime.stoppedOperation('Change local account',async()=>{await this.requireAccounts();await this.backupDirectory();const {state,data}=this.runtime.runtimePaths();try{return accountList(await saveAuthority(this.runtime,'account-edit',[state,data,this.backupPath('pre-account-edit')],JSON.stringify({account,expected,username,password:secret})));}catch(error){if(error instanceof AuthorityUnchangedError)throw new UserMessage('Account was not changed. Check the username and backup folder, then refresh the account list. Details are in Advanced → Logs.',{cause:error});throw error;}});
+    return this.runtime.stoppedOperation('Change local account',async()=>{await this.backupDirectory();const {state,data}=this.runtime.runtimePaths();try{return accountList(await saveAuthority(this.runtime,'account-edit',[state,data,this.backupPath('pre-account-edit')],JSON.stringify({account,expected,username,password:secret})));}catch(error){if(error instanceof AuthorityUnchangedError)throw new UserMessage('Account was not changed. Check the username and backup folder, then refresh the account list. Details are in Advanced → Logs.',{cause:error});throw error;}});
   }
   makeBackup(): Promise<SaveResult> {
     return this.runtime.stoppedOperation('Make backup', async () => {

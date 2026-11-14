@@ -1,38 +1,35 @@
-import {cp,mkdir,mkdtemp,readFile,writeFile,rm,rename,stat} from 'node:fs/promises';
+import {cp,mkdir,readFile,writeFile,rm,chmod,lstat} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
 import {isAbsolute,join,resolve} from 'node:path';
 import assert from 'node:assert/strict';
-import {assembleRuntime} from './runtime-payload.mjs';
-import {boundedFile,exact,hashFile,integer,targetName,verifyManifest,verifyRuntime,saveCompatibility,launcherVersion,versionAtLeast} from '../dist/update-format.js';
-import {extractRuntime} from '../dist/update-archive.js';
-import {MANIFEST_PUBLIC_KEY} from '../dist/update-policy.js';
+import {tree,clientFiles,sha256} from './assets.mjs';
 
-assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Set OPENROTMG_BUILD_INPUTS to an absolute explicit build-input JSON (see README)');
-const input=JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8'));
-let baseline;
-if(input.runtimeRelease!==undefined){
- exact(input.runtimeRelease,'manifest,signature,archive','promoted release build inputs');
- const release=input.runtimeRelease;for(const key of ['manifest','signature','archive'])assert(isAbsolute(release[key]),`Absolute promoted ${key} required`);
- const manifest=await boundedFile(release.manifest,64*1024),signature=await boundedFile(release.signature,64),launcher=JSON.parse(await readFile('package.json','utf8')).version;
- const value=verifyManifest(manifest,signature,MANIFEST_PUBLIC_KEY,undefined,undefined,targetName(),launcher,'https://github.com');
- assert.equal((await stat(release.archive)).size,value.payload.bytes,'Promoted archive byte length mismatch');
- assert.equal(await hashFile(release.archive),value.payload.sha256,'Promoted archive digest differs; no recompilation/recompression substitution is allowed');
- await mkdir('.qa',{recursive:true});const stage=await mkdtemp(resolve('.qa/release-baseline-'));
- try{
-  await extractRuntime(release.archive,join(stage,'runtime'),targetName(),value.payload.expandedBytes);await verifyRuntime(join(stage,'runtime'),targetName(),value);
-  await rm('runtime',{recursive:true,force:true});await rename(join(stage,'runtime'),resolve('runtime'));
- }finally{await rm(stage,{recursive:true});}
- baseline={format:1,mode:'release',identitySha256:value.payload.identitySha256,startupBackup:1,clientNamespace:1,manifest:manifest.toString('base64'),signature:signature.toString('base64')};
-}else{
- const pins=JSON.parse(await readFile('source-pins.json','utf8')),capabilities=JSON.parse(await readFile('runtime-capabilities.json','utf8'));
- exact(capabilities,'format,server,minLauncher,clientNamespace,save'+(Object.hasOwn(capabilities,'desktopMetadata')?',desktopMetadata':'')+(Object.hasOwn(capabilities,'accountManagement')?',accountManagement':''),'explicit source runtime capabilities');
- launcherVersion(capabilities.minLauncher);assert(versionAtLeast(JSON.parse(await readFile('package.json')).version,capabilities.minLauncher),'Source runtime requires a newer launcher');
- if(Object.hasOwn(capabilities,'accountManagement'))assert([1,2].includes(capabilities.accountManagement),'Invalid local account management declaration');
- if(Object.hasOwn(capabilities,'desktopMetadata'))assert([0,1].includes(capabilities.desktopMetadata),'Invalid bundled metadata declaration');exact(capabilities.save,'cli,read,write,startupBackup','source save capabilities');
- assert(capabilities.format===1&&capabilities.server===pins.server.commit&&capabilities.save.cli===1&&saveCompatibility(capabilities.save)&&integer(capabilities.save.startupBackup,0,1)&&integer(capabilities.clientNamespace,0,1),'Unsupported explicit source capabilities');
- const prepared=await assembleRuntime(input,pins,resolve('runtime'),{startupBackup:capabilities.save.startupBackup,clientNamespace:capabilities.clientNamespace,desktopMetadata:capabilities.desktopMetadata,accountManagement:capabilities.accountManagement,save:capabilities.save});
- baseline={format:1,mode:'source',identitySha256:prepared.identitySha256,startupBackup:prepared.startupBackup,clientNamespace:prepared.clientNamespace};
+// Bundles the pinned server, client and Ruffle into the app so the portable ZIP needs nothing else to play offline.
+export async function assembleRuntime(input,pins,destination){
+ for(const key of ['serverSource','serverBinary','clientSource','preparedClient','serverBuildReceipt'])assert(isAbsolute(input[key]),`Absolute ${key} required`);
+ for(const[path,pin]of[[input.serverSource,pins.server],[input.clientSource,pins.client]]){
+  const git=(...args)=>execFileSync('git',['-C',path,...args],{encoding:'utf8'}).trim();assert.equal(git('rev-parse','HEAD'),pin.commit,'Source HEAD differs from frozen pin');assert.equal(git('status','--porcelain','--untracked-files=no'),'','Tracked source must be clean');
+  assert.equal(Number(git('rev-list','--count',pin.commit)),pin.commitCount,'Source commit count differs from its full Git history');
+ }
+ assert.equal(input.platform,process.platform,'Build input must be native platform');assert.equal(input.arch,process.arch,'Build input must be native architecture');
+ assert(!(await lstat(input.serverBinary)).isSymbolicLink(),'Binary must be regular, not symlink');assert.equal(sha256(await readFile(input.serverBinary)),input.serverBinarySha256,'Compiled binary identity mismatch');
+ const receipt=JSON.parse(await readFile(input.serverBuildReceipt,'utf8'));assert.equal(receipt.head,pins.server.commit,'Build receipt source must match frozen pin');assert.equal(receipt.dirty,false,'Build receipt must be from clean committed source');assert.equal(receipt.sha256,input.serverBinarySha256,'Build receipt must identify this exact binary');
+ assert.equal((await tree(input.serverSource,['data'])).sha256,pins.server.dataSha256,'Runtime data identity mismatch');
+ const client=await tree(input.preparedClient,clientFiles);assert.equal(client.sha256,pins.client.preparedSha256,'Prepared client identity mismatch');
+ const lock=JSON.parse(await readFile(join(input.clientSource,'ruffle/lock.json'),'utf8'));assert.equal(lock.version,pins.ruffle.version);assert.equal(lock.sourceCommit,pins.ruffle.sourceCommit);assert.equal(lock.bundleSha256,pins.ruffle.bundleSha256);assert(Object.keys(client.files).some(n=>n.endsWith('.wasm')),'Bundled Ruffle WASM required');
+ await rm(destination,{recursive:true,force:true});await mkdir(join(destination,'client'),{recursive:true});await cp(join(input.serverSource,'data'),join(destination,'data'),{recursive:true});
+ for(const file of clientFiles)await cp(join(input.preparedClient,file),join(destination,'client',file),{recursive:true});
+ const binary=process.platform==='win32'?'openrotmg.exe':'openrotmg';await cp(input.serverBinary,join(destination,binary));await chmod(join(destination,binary),0o755);await writeFile(join(destination,'REVISION'),pins.server.commit+'\n');
+ await mkdir(join(destination,'notices'),{recursive:true});await cp(join(input.serverSource,'LICENSE'),join(destination,'notices/SERVER-AGPL-3.0'));await cp(join(input.clientSource,'LICENSE'),join(destination,'notices/CLIENT-GPL-3.0'));await cp(join(input.clientSource,'ruffle/lock.json'),join(destination,'notices/ruffle-lock.json'));
+ for(const name of Object.keys(client.files).filter(n=>/license|notice|copying/i.test(n)))await cp(join(input.preparedClient,name),join(destination,'notices',name.replaceAll('/','-')));
+ for(const file of ['NOTICES.md','LICENSE'])await cp(file,join(destination,'notices',file));
+ await writeFile(join(destination,'notices/source-pins.json'),JSON.stringify(pins,null,2)+'\n');
+ const packaged=await tree(destination,['data','client','notices',binary,'REVISION']);await writeFile(join(destination,'inventory.json'),JSON.stringify({files:Object.keys(packaged.files),sha256:packaged.files},null,2));
+ await writeFile(join(destination,'build-identity.json'),JSON.stringify({pins,platform:process.platform,arch:process.arch,binarySha256:input.serverBinarySha256,buildReceiptSha256:sha256(await readFile(input.serverBuildReceipt)),assetsSha256:packaged.sha256},null,2));
 }
-await writeFile('dist/runtime-baseline.json',JSON.stringify(baseline,null,2)+'\n');
+
+assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Set OPENROTMG_BUILD_INPUTS to an absolute build-input JSON (see docs/development.md)');
+await assembleRuntime(JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8')),JSON.parse(await readFile('source-pins.json','utf8')),resolve('runtime'));
 await cp('.qa/renderer/renderer.js','dist/renderer.js');for(const file of ['index.html','style.css','game.html','game.css'])await cp(`src/${file}`,`dist/${file}`);
 await cp('src/assets','dist/assets',{recursive:true});
-console.log(`Prepared explicit ${baseline.mode} baseline ${process.platform}/${process.arch}; identity ${baseline.identitySha256}`);
+console.log(`Bundled pinned server and client for ${process.platform}/${process.arch}`);

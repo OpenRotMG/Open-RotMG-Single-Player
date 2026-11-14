@@ -1,19 +1,19 @@
 OpenRotMG Singleplayer
 
-Extract the ZIP, open its folder, then open "OpenRotMG Singleplayer". Click Play.
+Extract the ZIP, open its folder, then open "OpenRotMG Singleplayer". Click Play. Everything needed is in this folder; no internet connection is required.
 
 Settings contains Accounts, Backups, Updates and Advanced. Close the launcher to save and stop.
 
 player data: your saves and backups. Passwords are stored as salted one-way hashes.
-server data: application files, updates, settings, caches, logs and server keys. Don't change files inside it.
+server data: the game, its server and client, settings, caches, logs and server keys. Don't change files inside it.
 Keep the program and both folders together, in a short local path outside OneDrive or other cloud sync.
 
-Updates: Settings > Updates > Launcher > Update and reopen. The game saves before the launcher reopens. Game updates have their own control.
-If upgrading from launcher 0.1.3 or older, save/stop and close first, extract the new ZIP separately, then copy your existing player data over its empty player data folder. Keep the old folder until your progress is confirmed.
+Updates: only when you click Settings > Updates > Check for updates, then Update and reopen. The game saves before it reopens.
+If upgrading from version 0.1.3 or older, close the game first, extract the new ZIP separately, then copy your existing player data over its empty player data folder. Keep the old folder until your progress is confirmed.
 
 To import your live account, export at https://openrotmg.org/export/ then use Settings > Accounts > Import account. Your exported email is kept; choose and confirm a local password (default: password). Replacement requires confirmation; existing accounts are not automatically reset. Your game progress stays local.
 
-Accounts lists local accounts and lets you change their login email or enter a new password. Existing passwords cannot be displayed. Each import and account change makes a verified full backup first. Older readable password caches are removed under the save lock when the game starts or Accounts loads.
+Accounts lists local accounts and lets you change their login email or enter a new password. Existing passwords cannot be displayed. Each Play, import and account change makes a verified full backup first.
 
 The OS binaries are unsigned, so your computer may require first-launch approval. Only approve software you obtained from the official download:
 - Windows may show "Windows protected your PC": More info > Run anyway, if your security policy permits it.

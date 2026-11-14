@@ -53,8 +53,7 @@ test('save preview and snapshot metadata are required, not invented',()=>{
  assert.equal(checkedPassword('é'.repeat(64),'é'.repeat(64)),'é'.repeat(64));
 });
 test('account authority and lifecycle acknowledgements contain no passwords or verifiers',posix,async()=>{
- const f=await fixture(),row={account:1,name:'Guest1',username:'player@local.invalid',expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});let proof;f.runtime.authorityClosed=async value=>{proof=value;};const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.deepEqual(value.accounts,[row]);assert.equal(proof.ack.accounts[0].username,row.username);assert.throws(()=>accountList({accounts:[{...row,password:'private-local-credential'}]}),/acknowledgement/);await fs.unlink(join(f.resources,'notices/account-management.json'));
- await assert.rejects(f.saves.listAccounts(),/Server \+ client update/);assert.equal(f.runtime.view().status,'stopped');
+ const f=await fixture(),row={account:1,name:'Guest1',username:'player@local.invalid',expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.deepEqual(value.accounts,[row]);assert.throws(()=>accountList({accounts:[{...row,password:'private-local-credential'}]}),/acknowledgement/);
 });
 test('save native chooser cancellation changes no save or backups',posix,async()=>{
  const f=await fixture();f.choose(undefined);assert.equal(await f.saves.beginImport(),undefined);assert.equal(await f.saves.restoreBackup(),undefined);
@@ -80,7 +79,7 @@ test('save confirmation rejects changed token/password/replace arguments without
 });
 test('save preview lifecycle reservation synchronously prevents Start/Stop/backup/restore/doubleclick races',posix,async()=>{
  const f=await fixture();const first=f.saves.beginImport();
- await assert.rejects(f.runtime.start(),/verified stopped/);await assert.rejects(f.runtime.stop(),/operation/);
+ await assert.rejects(f.runtime.start(),/Start requires a stopped server/);await assert.rejects(f.runtime.stop(),/operation/);
  await assert.rejects(f.saves.makeBackup(),/operation/);await assert.rejects(f.saves.restoreBackup(),/operation/);await assert.rejects(f.saves.beginImport(),/operation/);
  await first;await f.saves.cancelImport();assert.equal(f.runtime.view().operation,undefined);
 });
@@ -121,16 +120,16 @@ test('save location opener uses only the owned profile and propagates OS failure
 });
 test('save close awaits owned child work, cancels pending preview, and refuses new Start synchronously',posix,async()=>{
  const f=await fixture();await f.saves.beginImport();let closed=false;const close=f.runtime.close().then(()=>closed=true);
- await delay(20);assert.equal(closed,false);await assert.rejects(f.runtime.start(),/verified stopped/);
+ await delay(20);assert.equal(closed,false);await assert.rejects(f.runtime.start(),/Start requires a stopped server/);
  await f.saves.cancelImport();await close;assert.equal(closed,true);assert.equal(f.runtime.view().closing,true);
 });
 test('save failed durable shutdown aborts before chooser and authority side effects',posix,async()=>{
  const f=await fixture();let chooses=0;f.dialogs.choose=async()=>{chooses++;return f.source;};f.runtime.fail(new Error('shutdown failed'));
- await assert.rejects(f.saves.beginImport(),/Previous operation failed.*shutdown failed/);assert.equal(chooses,0);await assert.rejects(readFile(join(f.resources,'calls.jsonl')),/ENOENT/);await f.runtime.verifyFailureGate();
+ await assert.rejects(f.saves.beginImport(),/not confirmed/);assert.equal(chooses,0);await assert.rejects(readFile(join(f.resources,'calls.jsonl')),/ENOENT/);
 });
 test('save authority bounds output and observes child close; ambiguous mutation blocks replay',posix,async()=>{
- const f=await fixture();await f.control({overflow:true});await assert.rejects(saveAuthority(f.runtime,'preview',[]),/outputLimit=true/);assert.equal(f.runtime.view().status,'failed');await f.runtime.verifyFailureGate();
- const second=await fixture();await second.control({invalid:true});await assert.rejects(saveAuthority(second.runtime,'import',[]),/completion is unverified/);assert.equal(second.runtime.view().status,'failed');await second.runtime.verifyFailureGate();await assert.rejects(second.saves.makeBackup(),/Previous operation failed.*completion is unverified/);
+ const f=await fixture();await f.control({overflow:true});await assert.rejects(saveAuthority(f.runtime,'preview',[]),/outputLimit=true/);assert.equal(f.runtime.view().status,'failed');
+ const second=await fixture();await second.control({invalid:true});await assert.rejects(saveAuthority(second.runtime,'import',[]),/completion is unverified/);assert.equal(second.runtime.view().status,'failed');await assert.rejects(second.saves.makeBackup(),/not confirmed/);
 });
 test('save Close during authority preview does not deadlock on a later confirmation',posix,async()=>{
  const f=await fixture();await f.control({delay:100});const preview=f.saves.beginImport();
@@ -169,7 +168,7 @@ test('save structured unchanged failure is safely retryable after the prerequisi
 });
 test('save unknown/malformed/missing/mismatched failure envelopes durably block replay without stderr guessing',posix,async()=>{
  for(const control of [{unknown:true},{noAck:true},{invalidUtf8:true},{fail:true,failureEnvelope:{protocol:2}},{fail:true,failureEnvelope:{operation:'restore'}},{fail:true,failureEnvelope:{outcome:'rolled-back'}},{fail:true,failureEnvelope:{error:''}},{fail:true,failureEnvelope:{extra:'unexpected'}}]){
-  const f=await fixture();await f.control(control);await assert.rejects(saveAuthority(f.runtime,'import',[]),/completion is unverified/);await f.runtime.verifyFailureGate();assert.equal(f.runtime.view().status,'failed');const marker=await readFile(join(f.user,'shutdown-failed.json'),'utf8');assert.match(marker,/Replay is blocked/);assert(!marker.includes('diagnostic only; never phase evidence'));await assert.rejects(f.saves.makeBackup(),/Previous operation failed/);
+  const f=await fixture();await f.control(control);await assert.rejects(saveAuthority(f.runtime,'import',[]),/completion is unverified/);assert.equal(f.runtime.view().status,'failed');assert.match(f.runtime.view().message,/Replay is blocked/);assert(!f.runtime.view().message.includes('diagnostic only; never phase evidence'));await assert.rejects(f.saves.makeBackup(),/not confirmed/);
  }
 });
 test('save early stdin EPIPE is retryable only after real close and a valid unchanged acknowledgement',posix,async t=>{
@@ -181,5 +180,5 @@ test('save early stdin EPIPE is retryable only after real close and a valid unch
 test('save non-EPIPE stdin failure cannot be rescued by an unchanged acknowledgement',posix,async t=>{
  const f=await fixture();await f.control({fail:true});const original=processes.spawn;
  t.mock.method(processes,'spawn',(...args)=>{const child=original(...args),end=child.stdin.end.bind(child.stdin);child.stdin.end=(...values)=>{process.nextTick(()=>child.stdin.emit('error',Object.assign(Error('stdin I/O failure'),{code:'EIO'})));return end(...values);};return child;});
- await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/completion is unverified/);await f.runtime.verifyFailureGate();assert.equal(f.runtime.view().status,'failed');
+ await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/completion is unverified/);assert.equal(f.runtime.view().status,'failed');
 });
