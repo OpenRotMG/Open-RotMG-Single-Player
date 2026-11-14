@@ -6,7 +6,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import assert from 'node:assert/strict';
 
 export async function updateTestDisplay(out){
- const env={...process.env,XDG_CONFIG_HOME:join(out,'config'),XDG_CACHE_HOME:join(out,'cache'),XDG_DATA_HOME:join(out,'data')};delete env.WAYLAND_DISPLAY;delete env.NODE_OPTIONS;
+ const env={...process.env,XDG_CONFIG_HOME:join(out,'config'),XDG_CACHE_HOME:join(out,'cache'),XDG_DATA_HOME:join(out,'data')};delete env.WAYLAND_DISPLAY;delete env.XDG_SESSION_TYPE;delete env.NODE_OPTIONS;
  if(process.platform!=='linux'){assert.equal(env.GITHUB_ACTIONS,'true','Native non-Linux QA requires a dedicated owned GitHub runner');return{env,proof:{kind:'dedicated native GitHub runner'},close:async()=>{}};}
  assert(env.DBUS_SESSION_BUS_ADDRESS&&!env.DBUS_SESSION_BUS_ADDRESS.includes('/run/user/'),'Updater QA must run in a private dbus-run-session');
  const root=env.OPENROTMG_TEST_TMP_ROOT;assert(root&&isAbsolute(root),'Explicit short owned on-disk TMPDIR root required');await mkdir(root,{recursive:true});const tmp=await mkdtemp(join(root,'upd-'));assert(Buffer.byteLength(tmp)<65);Object.assign(env,{TMPDIR:tmp,TEMP:tmp,TMP:tmp});
