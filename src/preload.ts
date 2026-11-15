@@ -37,7 +37,7 @@ contextBridge.exposeInMainWorld('launcher', Object.freeze({
   listBackups: () => invoke('save:list'),
   saveLocation: () => invoke('save:location'),
   openSaveFolder: () => invoke('save:open-location'),
-  restoreBackup: (name?: string) => name === undefined ? invoke('save:restore') : invoke('save:restore', name),
+  restoreBackup: (name: string) => invoke('save:restore', name),
   changed: (callback: (view: View) => void) => {
     ipcRenderer.on('runtime:changed', (_event, view: View) => callback(view));
   },

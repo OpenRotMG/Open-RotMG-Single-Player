@@ -1,24 +1,15 @@
 OpenRotMG Singleplayer
 
-Extract the ZIP, open its folder, then open "OpenRotMG Singleplayer". Click Play. Everything needed is in this folder; no internet connection is required.
+Extract the ZIP, open its folder, then open "OpenRotMG Singleplayer" and click Play. Everything is in this folder; no internet is needed. Close the launcher to save and stop.
 
-Settings contains Accounts, Backups, Updates and Advanced. Close the launcher to save and stop.
+player data: your saves and backups.
+server data: the game. Don't change files inside it.
+Keep both folders next to the program, in a short local path outside cloud sync.
 
-player data: your saves and backups. Passwords are stored as salted one-way hashes.
-server data: the game, its server and client, settings, caches, logs and server keys. Don't change files inside it.
-Keep the program and both folders together, in a short local path outside OneDrive or other cloud sync.
+Updates: Settings > Updates > Check for updates. From 0.1.3 or older, extract the new ZIP separately and copy your player data into it.
 
-Updates: only when you click Settings > Updates > Check for updates, then Update and reopen. The game saves before it reopens.
-If upgrading from version 0.1.3 or older, close the game first, extract the new ZIP separately, then copy your existing player data over its empty player data folder. Keep the old folder until your progress is confirmed.
+To import your live account, export it at https://openrotmg.org/export/ then use Settings > Accounts > Import account.
 
-To import your live account, export at https://openrotmg.org/export/ then use Settings > Accounts > Import account. Your exported email is kept; choose and confirm a local password (default: password). Replacement requires confirmation; existing accounts are not automatically reset. Your game progress stays local.
+The binaries are not OS-signed. Windows: More info > Run anyway. macOS: System Settings > Privacy & Security > Open Anyway.
 
-Accounts lists local accounts and lets you change their login email or enter a new password. Existing passwords cannot be displayed. Each Play, import and account change makes a verified full backup first.
-
-The OS binaries are unsigned, so your computer may require first-launch approval. Only approve software you obtained from the official download:
-- Windows may show "Windows protected your PC": More info > Run anyway, if your security policy permits it.
-- macOS (Apple Silicon): the program opens in Terminal. If blocked, use System Settings > Privacy & Security > Open Anyway. The game may require its own approval.
-- Linux x64: open "OpenRotMG Singleplayer" in the extracted folder. The filesystem must permit execution.
-Automatic updates verify our publisher signature; they do not disable OS protections or guarantee that security warnings disappear.
-
-Downloads, source code, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases
+Source, licenses and checksums: https://github.com/OpenRotMG/Open-RotMG-Single-Player/releases

@@ -41,8 +41,7 @@ else {
   let saves: SaveControls;
   let launcherUpdates: LauncherUpdates;
   let site: Awaited<ReturnType<typeof gameSite>>;
-  let consoleLog:string|undefined;
-  const view = () => ({...runtime.view(),consoleLog,clientURL:runtime.view().status==='ready'?site.url():undefined});
+  const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
   app.whenReady().then(async () => {
@@ -53,8 +52,6 @@ else {
     const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
     const root=portableRoot?await realpath(portableRoot):undefined;
-    if(root&&userData!==await realpath(join(root,'player data')))throw Error('Launcher update ownership does not match player data');
-    if(root){const operation=app.commandLine.getSwitchValue('launcher-update-health');consoleLog=operation?join(root,'server data/handoff',operation,'console.log'):join(root,'server data/launcher-console.log');}
     const appPolicy=createLauncherPolicy(process.resourcesPath,app.getVersion());
     const store=root?new LauncherStore({root,generation,installed:app.getVersion(),resources:process.resourcesPath,policy:appPolicy,native:join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer')}):undefined;
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
@@ -68,15 +65,15 @@ else {
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== index && !details.url.startsWith(pathToFileURL(__dirname + '/').href) }));
     saves = new SaveControls(runtime, {
-      choose: async (kind, directory) => {
-        const result = await dialog.showOpenDialog(window!, { title: kind === 'account' ? 'Import player: choose your exported account file' : 'Restore full local backup', defaultPath: kind === 'snapshot' ? directory : undefined, properties: ['openFile'], filters: kind === 'account' ? [{name: 'Portable account', extensions: ['json']}] : [{name: 'Full local backup', extensions: ['sqlite', 'db']}] });
+      choose: async () => {
+        const result = await dialog.showOpenDialog(window!, { title: 'Import player: choose your exported account file', properties: ['openFile'], filters: [{name: 'Portable account', extensions: ['json']}] });
         if (result.canceled) return undefined;
         if (result.filePaths.length !== 1) throw new Error('Native save chooser did not return exactly one file');
         return result.filePaths[0];
       },
-      confirmRestore: async (preview, path, modified) => (await dialog.showMessageBox(window!, {
-        type: 'warning', title: 'Replace the full local save?', message: 'Restore all local accounts and original passwords?',
-        detail: `${path}\nFile modified: ${modified}\n${preview.account_count} accounts · ${preview.character_count} characters\nAll current local progress and passwords will be replaced. A backup of your current save must be made and checked first.`,
+      confirmRestore: async (preview, modified) => (await dialog.showMessageBox(window!, {
+        type: 'warning', title: 'Replace the full local save?', message: 'Restore this backup?',
+        detail: `${modified}\n${preview.account_count} accounts · ${preview.character_count} characters\nYour current save is backed up first.`,
         buttons: ['Cancel', 'Restore full local save'], defaultId: 0, cancelId: 0, noLink: true,
       })).response === 1,
       openFolder: path => shell.openPath(path),
@@ -102,13 +99,12 @@ else {
     checked('runtime:start', () => runtime.start());
     checked('launcher:status', () => launcherUpdates.view());
     checked('launcher:check', () => launcherUpdates.check());
-    checked('launcher:download', () => shell.openExternal(launcherUpdates.download()));
     checked('launcher:install', async () => {
       try{
         requireLauncherSaveState(runtime.view());const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
         await Promise.all([saves.cancelImport(),runtime.close()]);requireLauncherSaveState(runtime.view(),true);await site.close();
         launcherUpdates.step('Starting authenticated update helper');await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
-      }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The launcher update did not finish. Keep player data. See Advanced → Logs.');}
+      }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The update did not finish. See Advanced → Logs.');}
       finally{closing=false;}
     });
     checked('launcher:recover', () => launcherUpdates.recover());
@@ -129,12 +125,12 @@ else {
     checked('save:list', () => saves.listBackups());
     checked('save:location', () => runtime.userData);
     checked('save:open-location', () => saves.openSaveFolder());
-    checked('save:restore', name => saves.restoreBackup(name as string | undefined), args => args.length === 0 || args.length === 1 && isBackupName(args[0]));
+    checked('save:restore', name => saves.restoreBackup(name as string), args => args.length === 1 && isBackupName(args[0]));
     runtime.on('change', () => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view()); });
     launcherUpdates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('launcher:changed',view); });
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
     void window.loadURL(index);
-  }).catch(error => { console.error(error);dialog.showErrorBox('The game could not open', 'Keep your player data folder. Please report this problem with server data/launcher-console.log.\n'+String(error)); app.exit(1); });
+  }).catch(error => { console.error(error);dialog.showErrorBox('The game could not open', 'Please report this with server data/launcher-console.log.\n'+String(error)); app.exit(1); });
   async function close() {
     if (closing) return;
     closing = true;
@@ -143,8 +139,8 @@ else {
     catch (error) {
       runtime.reportProblem(error);
       // Keep the app alive while an unconfirmed server may still be writing the save.
-      if (runtime.view().pid) { dialog.showErrorBox('The game could not close normally', 'The launcher will stay open while the server may still be saving. Details are in Advanced → Logs.'); return; }
-      dialog.showErrorBox('The last save was not confirmed', 'Keep your player data folder. The next Play makes and checks a full backup first. Details are in Advanced → Logs.');
+      if (runtime.view().pid) { dialog.showErrorBox('The game could not close normally', 'The server may still be saving. Details are in Advanced → Logs.'); return; }
+      dialog.showErrorBox('The last save was not confirmed', 'The next Play backs up your save first. Details are in Advanced → Logs.');
       quitting = true; app.exit(1);
     } finally { closing = false; }
   }

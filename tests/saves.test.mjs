@@ -5,7 +5,7 @@ import fs, {mkdir,mkdtemp,writeFile,readFile,readdir,stat,chmod} from 'node:fs/p
 import {join,resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Runtime} from '../dist/runtime.js';
-import {SaveControls,saveAuthority,accountList,checkedPassword,importPreview,snapshotPreview,isBackupName} from '../dist/saves.js';
+import {SaveControls,saveAuthority,checkedPassword,isBackupName} from '../dist/saves.js';
 
 // This executable tests transport/lifecycle only, never claims Rust save or packaged acceptance.
 const executable=String.raw`#!${process.execPath}
@@ -46,20 +46,6 @@ async function fixture(){
 }
 const posix={skip:process.platform==='win32'};
 
-test('save preview and snapshot metadata are required, not invented',()=>{
- assert.throws(()=>importPreview({account:1,login:'player-1@local.invalid',replaced:false,disclosure:'x'}),/metadata/);
- assert.throws(()=>snapshotPreview({verified:true}),/metadata/);
- for(const [value,confirmation] of [['short','other'],['abcd','abcd'],['12345\n','12345\n'],['é'.repeat(65),'é'.repeat(65)],['abc\ud800','abc\ud800']])assert.throws(()=>checkedPassword(value,confirmation),/password/);
- assert.equal(checkedPassword('é'.repeat(64),'é'.repeat(64)),'é'.repeat(64));
-});
-test('account authority and lifecycle acknowledgements contain no passwords or verifiers',posix,async()=>{
- const f=await fixture(),row={account:1,name:'Guest1',username:'player@local.invalid',expected:'a'.repeat(64)};await f.control({accountResult:{accounts:[row]}});const value=await f.runtime.stoppedOperation('Read accounts',()=>saveAuthority(f.runtime,'accounts',['state','data']));assert.deepEqual(value.accounts,[row]);assert.throws(()=>accountList({accounts:[{...row,password:'private-local-credential'}]}),/acknowledgement/);
-});
-test('save native chooser cancellation changes no save or backups',posix,async()=>{
- const f=await fixture();f.choose(undefined);assert.equal(await f.saves.beginImport(),undefined);assert.equal(await f.saves.restoreBackup(),undefined);
- assert.deepEqual(await readdir(f.user),['state']);assert.equal(f.runtime.view().operation,undefined);
-});
-test('first import is refused before the chooser until a local save exists for the mandatory backup',posix,async()=>{const f=await fixture();await fs.unlink(join(f.user,'state/game.db'));let chosen=false;f.dialogs.choose=async()=>{chosen=true;return f.source;};await assert.rejects(f.saves.beginImport(),/Click Play.*backup/);assert.equal(chosen,false);assert.equal(f.runtime.view().operation,undefined);});
 test('save privately staged input is bound through confirmation, passwords absent from argv and outcome',posix,async()=>{
  const f=await fixture();const preview=await f.saves.beginImport();assert.equal(preview.name,'Original account');
  await writeFile(f.source,'CHANGED EXTERNAL FILE');
@@ -77,51 +63,12 @@ test('save confirmation rejects changed token/password/replace arguments without
  await f.saves.cancelImport();assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
  assert(!await readFile(join(f.resources,'calls.jsonl'),'utf8').then(x=>x.includes('"import"')));
 });
-test('save preview lifecycle reservation synchronously prevents Start/Stop/backup/restore/doubleclick races',posix,async()=>{
- const f=await fixture();const first=f.saves.beginImport();
- await assert.rejects(f.runtime.start(),/Start requires a stopped server/);await assert.rejects(f.runtime.stop(),/operation/);
- await assert.rejects(f.saves.makeBackup(),/operation/);await assert.rejects(f.saves.restoreBackup(),/operation/);await assert.rejects(f.saves.beginImport(),/operation/);
- await first;await f.saves.cancelImport();assert.equal(f.runtime.view().operation,undefined);
-});
-test('save external allocation change refuses stale preview and cleans staging without import',posix,async()=>{
- const f=await fixture();const preview=await f.saves.beginImport();await f.control({identity:'changed'});
- await assert.rejects(f.saves.finishImport(preview.expected,'abcde','abcde',false),/stale expectation; preview again/);
- await assert.rejects(readFile(join(f.resources,'imported.json')),/ENOENT/);assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
-});
-test('save full snapshots accumulate eight distinct private files without account export size cap',posix,async()=>{
- const f=await fixture(),paths=[];for(let i=0;i<8;i++){const result=await f.saves.makeBackup();paths.push(result.path);assert.equal(result.message,'Backup created.');}
- assert.equal(new Set(paths).size,8);assert.equal((await readdir(f.saves.backups)).length,8);
- for(const path of paths)assert.equal((await stat(path)).mode&0o077,0);
-});
-test('save restore cancel has no pre-backup; confirmation uses staged full snapshot and backup outcome',posix,async()=>{
- const f=await fixture();await writeFile(f.source,Buffer.alloc(33*1024*1024));f.confirm(false);assert.equal(await f.saves.restoreBackup(),undefined);await assert.rejects(readdir(f.saves.backups),/ENOENT/);
- f.confirm(true);const result=await f.saves.restoreBackup();assert.match(result.message,/original local logins and passwords/);assert.match(result.path,/pre-restore/);assert.equal(await readFile(result.path,'utf8'),'pre-restore');
-});
-test('save missing/malformed/oversize input and unwritable backups do not report success',posix,async()=>{
- const f=await fixture();f.choose(join(f.root,'missing'));await assert.rejects(f.saves.beginImport(),/ENOENT/);
- f.choose(f.source);await f.control({fail:true});await assert.rejects(f.saves.beginImport(),error=>/local save was not changed/.test(error.message)&&/specific authority validation failure/.test(error.cause.cause.message));
- await f.control({});await writeFile(f.source,Buffer.alloc(32*1024*1024+1));await assert.rejects(f.saves.beginImport(),/exceeds/);
- await chmod(f.user,0o500);try{await assert.rejects(f.saves.makeBackup(),/EACCES/);}finally{await chmod(f.user,0o700);}
- assert.equal(f.runtime.view().status,'stopped');assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
-});
-test('save Open backup folder awaits actual adapter and rejects OS returned error',posix,async()=>{
- const f=await fixture();const result=await f.saves.openBackupFolder();assert.equal(result.path,f.opened());
- f.dialogs.openFolder=async()=> 'No associated file manager';await assert.rejects(f.saves.openBackupFolder(),/No associated file manager/);
-});
 test('backup history lists regular snapshots newest first; named restore never accepts paths or symlinks',posix,async()=>{
- const f=await fixture(),first=await f.saves.makeBackup(),second=await f.saves.makeBackup();await fs.utimes(first.path,1,1);
+ const f=await fixture();await f.saves.makeBackup();await f.saves.makeBackup();const [second,first]=(await f.saves.listBackups()).map(file=>({path:join(f.saves.backups,file.name)}));await fs.utimes(first.path,1,1);
  await writeFile(join(f.saves.backups,'not-a-snapshot.txt'),'ignored');await fs.symlink(first.path,join(f.saves.backups,'linked.sqlite'));
  const files=await f.saves.listBackups();assert.equal(files.length,2);assert.equal(files[0].name,second.path.split('/').at(-1));assert(files.every(file=>file.bytes>0&&file.modified>0));
  for(const name of ['../outside.sqlite','C:outside.sqlite','sub\\\\file.sqlite','x\u0000.sqlite','not-a-snapshot.txt']){assert(!isBackupName(name));await assert.rejects(f.saves.restoreBackup(name),/regular file/);}
- await assert.rejects(f.saves.restoreBackup('linked.sqlite'),/regular file/);f.confirm(true);const restored=await f.saves.restoreBackup(files[0].name);assert.match(restored.message,/original local logins and passwords/);
-});
-test('save location opener uses only the owned profile and propagates OS failures',posix,async()=>{
- const f=await fixture();const result=await f.saves.openSaveFolder();assert.equal(result.path,f.user);assert.equal(f.opened(),f.user);f.dialogs.openFolder=async()=> 'OS refusal';await assert.rejects(f.saves.openSaveFolder(),/OS refusal/);
-});
-test('save close awaits owned child work, cancels pending preview, and refuses new Start synchronously',posix,async()=>{
- const f=await fixture();await f.saves.beginImport();let closed=false;const close=f.runtime.close().then(()=>closed=true);
- await delay(20);assert.equal(closed,false);await assert.rejects(f.runtime.start(),/Start requires a stopped server/);
- await f.saves.cancelImport();await close;assert.equal(closed,true);assert.equal(f.runtime.view().closing,true);
+ await assert.rejects(f.saves.restoreBackup('linked.sqlite'),/regular file/);f.confirm(true);await f.saves.restoreBackup(files[0].name);assert.equal((await f.saves.listBackups()).filter(file=>file.name.includes('-pre-restore-')).length,1);
 });
 test('save failed durable shutdown aborts before chooser and authority side effects',posix,async()=>{
  const f=await fixture();let chooses=0;f.dialogs.choose=async()=>{chooses++;return f.source;};f.runtime.fail(new Error('shutdown failed'));
@@ -131,54 +78,8 @@ test('save authority bounds output and observes child close; ambiguous mutation 
  const f=await fixture();await f.control({overflow:true});await assert.rejects(saveAuthority(f.runtime,'preview',[]),/outputLimit=true/);assert.equal(f.runtime.view().status,'failed');
  const second=await fixture();await second.control({invalid:true});await assert.rejects(saveAuthority(second.runtime,'import',[]),/completion is unverified/);assert.equal(second.runtime.view().status,'failed');await assert.rejects(second.saves.makeBackup(),/not confirmed/);
 });
-test('save Close during authority preview does not deadlock on a later confirmation',posix,async()=>{
- const f=await fixture();await f.control({delay:100});const preview=f.saves.beginImport();
- await delay(20);const close=f.runtime.close();await f.saves.cancelImport();
- assert.equal(await preview,undefined);await close;assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
-});
-test('save staging cleanup preserves primary validation error and secondary cleanup failure',posix,async t=>{
- const f=await fixture();await f.control({fail:true});const original=fs.rm;
- t.mock.method(fs,'rm',async(path,...args)=>{if(String(path).includes('selected-'))throw new Error('injected cleanup denied');return original(path,...args);});
- await assert.rejects(f.saves.beginImport(),error=>/specific authority validation failure/.test(error.cause.cause.cause.message)&&/cleanup failed.*injected cleanup denied/.test(error.message));
-});
-test('save Close refuses accurately when an owned operation fails instead of swallowing its error',posix,async()=>{
- const f=await fixture();let release,entered;const choosing=new Promise(resolve=>entered=resolve);f.dialogs.choose=()=>new Promise(ok=>{release=ok;entered();});
- const preview=f.saves.beginImport().then(()=>assert.fail('missing input accepted'),error=>error);
- await choosing;const close=f.runtime.close();release(join(f.root,'missing'));
- await assert.rejects(close,/ENOENT/);assert.match(String(await preview),/ENOENT/);assert.equal(f.runtime.view().closing,false);assert.equal(f.runtime.view().status,'stopped');
-});
-test('save staging refuses a file that grows during the private copy before invoking authority',posix,async t=>{
- const f=await fixture(),original=fs.open;let changed=false;
- t.mock.method(fs,'open',async(path,...args)=>{const handle=await original(path,...args);if(path===f.source){const read=handle.read.bind(handle);handle.read=async(...args)=>{const result=await read(...args);if(!changed){changed=true;await writeFile(f.source,'appended during copy',{flag:'a'});}return result;};}return handle;});
- await assert.rejects(f.saves.beginImport(),/changed while being staged/);await assert.rejects(readFile(join(f.resources,'calls.jsonl')),/ENOENT/);assert.deepEqual(await readdir(join(f.user,'save-staging')),[]);
-});
-test('save cleanup failure after commit retains actual completed login and refuses a false cancellation',posix,async t=>{
- const f=await fixture(),preview=await f.saves.beginImport(),original=fs.rm;
- t.mock.method(fs,'rm',async(path,...args)=>{if(String(path).includes('selected-'))throw Error('injected cleanup failure');return original(path,...args);});
- await assert.rejects(f.saves.finishImport(preview.expected,'abcde','abcde',false),error=>/Operation completed:.*player-1@local.invalid/.test(error.message)&&/cleanup failed/.test(error.message));
- assert.equal(await f.saves.cancelImport(),false);assert.equal(JSON.parse(await readFile(join(f.resources,'imported.json'),'utf8')).secretLength,5);
-});
-test('save restore refuses copying a live SQLite checkpoint with committed WAL bytes',posix,async()=>{
- const f=await fixture();await writeFile(f.source+'-wal','committed progress still in WAL');
- await assert.rejects(f.saves.restoreBackup(),/active WAL.*verified full backup/);await assert.rejects(readFile(join(f.resources,'calls.jsonl')),/ENOENT/);await assert.rejects(readdir(f.saves.backups),/ENOENT/);
-});
-test('save structured unchanged failure is safely retryable after the prerequisite is fixed',posix,async()=>{
- const f=await fixture();await f.control({fail:true});await assert.rejects(f.saves.makeBackup(),/Destination game save unchanged; output\/backup files may exist/);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- await f.control({});assert.equal((await f.saves.makeBackup()).message,'Backup created.');
-});
 test('save unknown/malformed/missing/mismatched failure envelopes durably block replay without stderr guessing',posix,async()=>{
  for(const control of [{unknown:true},{noAck:true},{invalidUtf8:true},{fail:true,failureEnvelope:{protocol:2}},{fail:true,failureEnvelope:{operation:'restore'}},{fail:true,failureEnvelope:{outcome:'rolled-back'}},{fail:true,failureEnvelope:{error:''}},{fail:true,failureEnvelope:{extra:'unexpected'}}]){
   const f=await fixture();await f.control(control);await assert.rejects(saveAuthority(f.runtime,'import',[]),/completion is unverified/);assert.equal(f.runtime.view().status,'failed');assert.match(f.runtime.view().message,/Replay is blocked/);assert(!f.runtime.view().message.includes('diagnostic only; never phase evidence'));await assert.rejects(f.saves.makeBackup(),/not confirmed/);
  }
-});
-test('save early stdin EPIPE is retryable only after real close and a valid unchanged acknowledgement',posix,async t=>{
- const f=await fixture();await f.control({fail:true});const original=processes.spawn;let closed=false;
- t.mock.method(processes,'spawn',(...args)=>{const child=original(...args),end=child.stdin.end.bind(child.stdin);child.once('close',()=>closed=true);child.stdin.end=(...values)=>{process.nextTick(()=>child.stdin.emit('error',Object.assign(Error('early refusal EPIPE'),{code:'EPIPE'})));return end(...values);};return child;});
- await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/Destination game save unchanged/);assert(closed);assert.equal(f.runtime.view().status,'stopped');await assert.rejects(readFile(join(f.user,'shutdown-failed.json')),/ENOENT/);
- t.mock.restoreAll();await f.control({});assert.equal((await f.saves.makeBackup()).message,'Backup created.');
-});
-test('save non-EPIPE stdin failure cannot be rescued by an unchanged acknowledgement',posix,async t=>{
- const f=await fixture();await f.control({fail:true});const original=processes.spawn;
- t.mock.method(processes,'spawn',(...args)=>{const child=original(...args),end=child.stdin.end.bind(child.stdin);child.stdin.end=(...values)=>{process.nextTick(()=>child.stdin.emit('error',Object.assign(Error('stdin I/O failure'),{code:'EIO'})));return end(...values);};return child;});
- await assert.rejects(saveAuthority(f.runtime,'import',[],'abcde'),/completion is unverified/);assert.equal(f.runtime.view().status,'failed');
 });

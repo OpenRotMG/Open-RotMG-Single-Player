@@ -14,7 +14,7 @@ async function endpoint(child,stderr){
   if(match){const url=new URL(match[1]);assert(url.protocol==='ws:'&&url.hostname==='127.0.0.1'&&url.port&&!url.username&&!url.password&&!url.search&&!url.hash);return url.href;}
   await delay(50);
  }
- throw Error('Owned Electron main inspector did not open before startup; no fixture was injected');
+ throw Error('Electron inspector did not open');
 }
 async function inspector(url){
  const socket=new WebSocket(url);await new Promise((ok,bad)=>{socket.addEventListener('open',ok,{once:true});socket.addEventListener('error',bad,{once:true});});
@@ -54,12 +54,12 @@ export async function launchUpdateTest({executablePath,electronPath=executablePa
     globalThis.runtimeUpdateTest={beforeMain:true,pid:process.pid,allowedFiles:[],choices:[],confirms:[],external:[],dialogs:[]};
     const electron=require('electron'),originalOpen=electron.dialog.showOpenDialog,originalMessage=electron.dialog.showMessageBox;
     electron.dialog.showOpenDialog=async(window,options)=>{
-      if(!['Import player — choose exported account','Import player: choose your exported account file','Restore full local backup'].includes(options.title))return originalOpen(window,options);
+      if(!['Import player: choose your exported account file'].includes(options.title))return originalOpen(window,options);
       const state=globalThis.runtimeUpdateTest,chosen=state.choices.shift();if(chosen===undefined)throw Error('No declared chooser fixture');
       if(chosen===null)return{canceled:true,filePaths:[]};if(!state.allowedFiles.includes(chosen))throw Error('Undeclared chooser path');return{canceled:false,filePaths:[chosen]};
     };
     electron.dialog.showMessageBox=async(window,options)=>{
-      if(!['Local runtime recovery/update','Game update or save recovery','Replace the full local save?'].includes(options.title))return originalMessage(window,options);
+      if(!['Replace the full local save?'].includes(options.title))return originalMessage(window,options);
       const state=globalThis.runtimeUpdateTest,response=state.confirms.shift();if(![0,1].includes(response))throw Error('No declared native confirmation');state.dialogs.push({title:options.title,message:options.message,detail:options.detail,response});return{response};
     };
     electron.dialog.showErrorBox=(title,detail)=>globalThis.runtimeUpdateTest.dialogs.push({kind:'error',title,detail});

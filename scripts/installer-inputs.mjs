@@ -5,7 +5,6 @@ import {openSync,closeSync} from 'node:fs';
 import {join,resolve} from 'node:path';
 import {hashFile,targetName} from '../dist/update-format.js';
 
-// Collects the release assets for one target: the ZIP, its signed-update payload and corresponding source.
 const git=(...args)=>execFileSync('git',args,{encoding:'utf8'}).trim(),json=async path=>JSON.parse(await readFile(path,'utf8'));
 const head=git('rev-parse','HEAD'),target=targetName(),version=(await json('package.json')).version,pins=await json('source-pins.json');
 assert.equal(git('status','--porcelain','--untracked-files=no'),'','Release source must be clean');

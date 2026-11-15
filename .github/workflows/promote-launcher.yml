@@ -1,13 +1,13 @@
-name: Authenticate exact native-qualified launcher draft
+name: Sign launcher draft
 on:
   workflow_dispatch:
     inputs:
       native_run:
-        description: Successful trusted-main portable run at this exact source SHA
+        description: Passing offline-installers run at this commit
         required: true
         type: string
       release_id:
-        description: Existing unpublished launcher-only draft with the exact native payloads
+        description: Draft release with the ZIPs and payloads
         required: true
         type: string
 concurrency:

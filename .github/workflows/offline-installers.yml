@@ -12,7 +12,6 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     env:
-      OPENROTMG_TEST_BROWSER_MODE: ci-playwright
       PI_NATIVE_TEST_CHROME_ARGS: '["--ignore-gpu-blocklist"]'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -23,23 +22,23 @@ jobs:
         with:
           node-version: 22.23.2
           cache: npm
-      - name: Require the hosted Linux runner's display and archive tools
+      - name: Check Linux tools
         if: runner.os == 'Linux'
         run: for tool in Xvfb xauth dbus-run-session unzip zip unshare setpriv; do command -v "$tool"; done
-      - name: Test launcher code
+      - name: Test
         # Parallel macOS spawn tests can inherit a sibling test's flock before exec closes it.
         run: npm ci && npm test && cargo test --locked --manifest-path launcher/Cargo.toml -- --test-threads=1
-      - name: Build the pinned server and client from source
+      - name: Build server and client
         run: node scripts/ci-inputs.mjs
-      - name: Make the portable ZIP with the server, client and Ruffle inside
+      - name: Make ZIP
         run: npm run make
-      - name: Collect release assets and corresponding source
+      - name: Collect assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/installer-inputs.mjs
-      - name: Install CI browser/display test tools (not consumer dependencies)
+      - name: Install test browser
         run: npm exec -- playwright install chromium
-      - name: Play the extracted ZIP offline, then update from the published launcher
+      - name: Play offline and update
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,7 +49,7 @@ jobs:
           export OPENROTMG_LEGACY_ZIP="$RUNNER_TEMP/legacy/openrotmg-singleplayer-1.0.0-$target.zip"
           artifact=$(ls .qa/installer-delivery/openrotmg-singleplayer-*.zip)
           if [ "$RUNNER_OS" = Linux ]; then node scripts/offline-linux.mjs "$artifact"; else npm run verify:release -- "$artifact"; fi
-      - name: Retain delivery and test evidence in Actions only
+      - name: Upload
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

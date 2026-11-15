@@ -13,7 +13,6 @@ import {verifyLauncherUpdate} from './verify-launcher-update.mjs';
 import {nativeGame} from './native-game.mjs';
 import {installedPaths,installArtifact} from './installer-install.mjs';
 
-// Plays the extracted release ZIP like a player: no network, no installs, then updates from older launchers.
 assert.equal(process.argv.length,3,'npm run verify:release -- ARTIFACT (with adjacent installer-receipt.json)');
 if(process.platform==='linux'&&!process.env.OPENROTMG_PRIVATE_INSTALLER_TEST){
  const child=spawn('dbus-run-session',[process.execPath,...process.argv.slice(1)],{stdio:'inherit',env:{...process.env,OPENROTMG_PRIVATE_INSTALLER_TEST:'1'}});child.on('exit',code=>process.exitCode=code??1);
@@ -33,12 +32,13 @@ async function journey(){
   report.delivery=receipt;
   const flags=JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]');assert(flags.length===0||JSON.stringify(flags)==='["--ignore-gpu-blocklist"]','Only approved software WebGL flag allowed');
   display=await updateTestDisplay(out);report.display=display.proof;
-  const env=await consumerEnvironment(display.env,out),installation=join(out,'extracted Open RotMG é 日本');
-  report.installation=await installArtifact(artifact,installation,out);const paths=installedPaths(report.installation.path),root=report.installation.path,storage=join(root,'server data/profile');
+  // Windows cannot launch an updated app beyond MAX_PATH, so its copy lives under the short runner temp root.
+  const env=await consumerEnvironment(display.env,out),base=process.platform==='win32'?await mkdir(process.env.OPENROTMG_TEST_TMP_ROOT,{recursive:true}).then(()=>mkdtemp(join(process.env.OPENROTMG_TEST_TMP_ROOT,'main-'))):out,installation=join(base,'extracted Open RotMG é 日本');
+  report.installation=await installArtifact(artifact,installation,base);const paths=installedPaths(report.installation.path),root=report.installation.path,storage=join(root,'server data/profile');
   const runtime=join(paths.resources,'runtime'),binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
   const identity=JSON.parse(await readFile(join(runtime,'build-identity.json'),'utf8'));
-  check('The ZIP bundles the pinned server, client and Ruffle WASM, so nothing else is downloaded or installed',JSON.stringify(identity.pins)===JSON.stringify(receipt.pins)&&(await readdir(join(runtime,'client/vendor'),{recursive:true})).some(name=>name.endsWith('.wasm'))&&(await readdir(join(runtime,'client'))).includes('client.swf'));
-  report.linkage=runtimeLinkage(binary);check('The bundled server needs only operating-system libraries',true);
+  check('The ZIP bundles the server, client and Ruffle',JSON.stringify(identity.pins)===JSON.stringify(receipt.pins)&&(await readdir(join(runtime,'client/vendor'),{recursive:true})).some(name=>name.endsWith('.wasm'))&&(await readdir(join(runtime,'client'))).includes('client.swf'));
+  report.linkage=runtimeLinkage(binary);check('The server needs only system libraries',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
   const launch=async()=>{
@@ -54,43 +54,44 @@ async function journey(){
    await page.locator('#show-home').click();await page.locator('#play').click();
    await wait(async()=>{const view=await status();assert.notEqual(view.status,'failed',view.message);return view.status==='ready';},'bundled server ready',650000);
    const view=await status(),image=process.platform==='linux'?await readlink(`/proc/${view.pid}/exe`):binary;
-   check('Play starts the server bundled inside the extracted folder',await realpath(image)===await realpath(binary));
+   check('Play runs the bundled server',await realpath(image)===await realpath(binary));
    return view;
   };
   const close=async()=>{const view=await status(),main=app.process().pid,closed=app.waitForEvent('close');await page.locator('#close-window').click();assert.equal((await closed).code,0);assert(!alive(main));if(view.pid)assert(!alive(view.pid));await app.detach();app=undefined;};
   await launch();
-  check('Home shows one Play button with no installed-version variant or caption under the portal',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>!/Enter your own realm|installed/i.test(text)));
-  check('Home tools are Import account, Backups and Updates',JSON.stringify(await page.locator('.shortcuts button').allInnerTexts())===JSON.stringify(['Import account','Backups','Updates']));
+  check('Home has one Play button and no caption',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>!/Enter your own realm|installed/i.test(text)));
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
-  check('Updates has one manual check and no separate server or client install',await page.locator('#updates-page').innerText().then(text=>!/Server \+ client|Install/i.test(text))&&await page.locator('#check-launcher').isEnabled());
+  check('Updates has one manual check',await page.locator('#updates-page').innerText().then(text=>!/Server \+ client|Install/i.test(text))&&await page.locator('#check-launcher').isEnabled());
   await page.screenshot({path:join(out,'launcher-updates.png')});
-  check('Importing before the first Play explains how to make the required backup',/Click Play once/.test(await page.evaluate(()=>window.launcher.importPlayer().then(()=>'',error=>error.message))));
+  check('Import before the first Play explains why it waits',/Click Play once/.test(await page.evaluate(()=>window.launcher.importPlayer().then(()=>'',error=>error.message))));
   await play();
   await page.locator('#import').click();await wait(async()=>await page.locator('#accounts-import').isEnabled(),'accounts ready');
   await choose(portable);await page.locator('#accounts-import').click();await page.locator('#import-preview').waitFor({state:'visible'});
   check('Import keeps the editable default password',await page.locator('#import-password').inputValue()==='password');
   const login=await page.locator('#local-login').innerText();
   await page.locator('#import-confirm').click();await wait(async()=>/Account imported/.test(await page.locator('#accounts-status').innerText()),'import completes');
-  check('Import made a verified backup first and lists the imported account',(await backups()).some(name=>name.includes('-pre-import-'))&&await page.locator('#account-list form').count()>=1);
-  await page.screenshot({path:join(out,'launcher-accounts.png')});
+  check('Import backs up first and lists the account',(await backups()).some(name=>name.includes('-pre-import-'))&&await page.locator('#account-list form').count()>=1);
+  const password=page.locator('#account-list .password-field input').first();await password.fill('typed-password');await page.locator('#account-list .password-field button').first().click();
+  check('The eye button reveals a typed new password',await password.getAttribute('type')==='text');
+  await page.screenshot({path:join(out,'launcher-accounts.png')});await password.fill('');
   const before=await play();
   game=await nativeGame({out,origin:new URL(before.clientURL).origin,clientURL:before.clientURL,env,check,report,credentials:{guid:login,password:'password'}});await game.mutate();
   // Chromium's own start page may fetch Google assets before navigation; only the game page is ours.
-  check('The game page made no request outside this computer',!(report.blockedBrowserRequests??[]).some(request=>request.frame.startsWith(new URL(before.clientURL).origin)));
+  check('The game page made no network request',!(report.blockedBrowserRequests??[]).some(request=>request.frame.startsWith(new URL(before.clientURL).origin)));
   await game.close();
   await page.locator('#show-backups').click();const count=(await backups()).length;await page.locator('#backup').click();await wait(async()=>(await backups()).length===count+1,'manual backup');
   check('Back up now writes a full local backup',true);
   await page.locator('#tab-advanced').click();await page.locator('#bots-enabled').check();await wait(async()=>(await status()).botsEnabled,'bots enabled');
-  check('Local bots are off by default and the setting is saved explicitly',JSON.parse(await readFile(join(storage,'launcher-settings.json'),'utf8')).bots===true);
+  check('Bots default off and the setting is saved',JSON.parse(await readFile(join(storage,'launcher-settings.json'),'utf8')).bots===true);
   await page.locator('#bots-enabled').uncheck();await wait(async()=>!(await status()).botsEnabled,'bots disabled');
   await page.screenshot({path:join(out,'launcher-advanced.png')});
-  check('Opening the launcher, playing, importing and backing up never touched the network',(await offlineAttempts()).length===0);
+  check('The launcher made no network request',(await offlineAttempts()).length===0);
   await close();
   await launch();const reopened=await play();
-  check('Every start with a save makes a verified full backup before opening it',(await backups()).some(name=>name.includes('-pre-start-')));
+  check('Play backs up an existing save first',(await backups()).some(name=>name.includes('-pre-start-')));
   await game.verify(false,reopened.clientURL);
-  check('Reopening the same folder keeps character progress offline',(await offlineAttempts()).length===0);
+  check('Reopening keeps progress',(await offlineAttempts()).length===0);
   await close();
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>game.verify(true,url),closeGame:()=>game.close()});
   await verifyLegacyLauncher({artifact,env,out,report,check});

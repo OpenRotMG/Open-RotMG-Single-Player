@@ -4,14 +4,14 @@ import { StringDecoder } from 'node:string_decoder';
 import { EventEmitter } from 'node:events';
 import { createServer } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
-import { access, mkdir, readFile, writeFile, stat, open } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile, open } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, resolve, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {LocalSettings} from './settings';
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
-export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; consoleLog?:string; operation?: string; closing: boolean; botsEnabled:boolean };
+export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean; botsEnabled:boolean };
 export const PORT = 47831;
 const READY_MS = 600_000, STOP_MS = 45_000, MAX_LOG = 300;
 
@@ -83,11 +83,6 @@ export class Runtime extends EventEmitter {
     await this.settings.load();
     const { binary, data, client: clientPath, state } = this.runtimePaths();
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
-    const inventory = JSON.parse(await readFile(join(this.resources, 'inventory.json'), 'utf8')) as { files: string[] };
-    for (const file of inventory.files) {
-      if (resolve(this.resources, file) !== join(this.resources, file) || file.startsWith('..')) throw new Error('Invalid bundled asset path');
-      if (!(await stat(join(this.resources, file))).isFile()) throw new Error(`Missing bundled asset: ${file}`);
-    }
     // Each build serves its client under its own path so a browser never reuses an older client from cache.
     this.generation = createHash('sha256').update(await readFile(join(this.resources, 'build-identity.json'))).digest('hex');
     await new Promise<void>((ok, bad) => {
@@ -186,7 +181,7 @@ export class Runtime extends EventEmitter {
     }
     if (this.status === 'stopping' || this.expectedStop) return;
     await this.requestDrain();
-    throw new Error('Server failed to become ready within the 600 second deadline; see diagnostics');
+    throw new Error('Server was not ready after 600 seconds; see diagnostics');
   }
   private async requestDrain() {
     if (!this.child) return;
