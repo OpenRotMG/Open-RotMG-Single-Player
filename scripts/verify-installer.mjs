@@ -114,9 +114,9 @@ async function journey(){
   const broken=join(out,'broken-server');await cp(runtime,broken,{recursive:true});await rm(join(broken,exe));await writeFile(join(broken,exe),'not a program',{mode:0o755});
   await publishServer(broken);await installServer();await page.locator('#show-home').click();await page.locator('#play').click();await page.locator('#problem').waitFor({state:'visible'});
   const shown=await page.locator('#problem').innerText();await page.screenshot({path:join(out,'launcher-problem.png')});
-  check('A server that cannot run shows what failed, what the system said and a next step',shown.includes("Couldn't start the game")&&/refused to run/.test(shown)&&shown.includes('Next step:'));
+  check('A server that cannot run shows what failed, what the system said and a next step',shown.includes("Couldn't start the game")&&/refused to run|closed while starting/.test(shown)&&shown.includes('Next step:'));
   await page.locator('#copy-report').click();const copied=await app.evaluate(({clipboard})=>clipboard.readText());await writeFile(join(out,'report.txt'),copied);
-  check('Copy report has versions, the problem and recent events without home folders',/^launcher: \d/m.test(copied)&&copied.includes('refused to run')&&copied.includes('"event":"problem"')&&!copied.includes(homedir()));
+  check('Copy report has versions, the problem and recent events without home folders',/^launcher: \d/m.test(copied)&&copied.includes("Problem: Couldn't start the game")&&copied.includes('"event":"problem"')&&!copied.includes(homedir()));
   await close();await rm(join(storage,'servers',next),{recursive:true});
   await publishServer(runtime);await installServer();
   const updated=await play(join(storage,'servers',next,exe));await game.verify(false,updated.clientURL);

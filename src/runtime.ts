@@ -43,6 +43,7 @@ export class Runtime extends EventEmitter {
   private closing = false;
   private generation?: string;
   private lastServerError?: string;
+  private lastServerLine?: string;
   failure?: Error;
   readonly origin = `http://127.0.0.1:${PORT}`;
   readonly diagnostics: string;
@@ -91,7 +92,7 @@ export class Runtime extends EventEmitter {
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
     // Each build serves its client under its own path so a browser never reuses an older client from cache.
     const started = performance.now(), buildIdentity = await readFile(join(this.resources, 'build-identity.json'));
-    this.generation = createHash('sha256').update(buildIdentity).digest('hex');this.lastServerError = undefined;this.failure = undefined;
+    this.generation = createHash('sha256').update(buildIdentity).digest('hex');this.lastServerError = undefined;this.lastServerLine = undefined;this.failure = undefined;
     await new Promise<void>((ok, bad) => {
       const probe = createServer();
       probe.once('error', error => bad(new Error(`Loopback port ${PORT} unavailable: ${error.message}. No other process was stopped.`)));
@@ -118,11 +119,15 @@ export class Runtime extends EventEmitter {
     // Environment is deliberately small: host bot/proxy/API-key settings cannot enter the consumer child.
     const env: NodeJS.ProcessEnv = { RUST_LOG: 'openrotmg=info,lag=info' };
     for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
-    const child = spawn(serverCommandPath(binary), ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
+    const expected = JSON.parse(buildIdentity.toString()).binarySha256;
+    let child: ChildProcessByStdio<Writable, null, null>;
+    // Windows reports most refusals synchronously; missing files arrive later as an 'error' event.
+    try { child = spawn(serverCommandPath(binary), ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>; }
+    catch (error) { await log.close(); throw await launchFailure(binary, error as NodeJS.ErrnoException, expected); }
     if (child.pid === undefined) {
       const error = await new Promise<NodeJS.ErrnoException>(ok => child.once('error', ok));
       await log.close();
-      throw await launchFailure(binary, error, JSON.parse(buildIdentity.toString()).binarySha256);
+      throw await launchFailure(binary, error, expected);
     }
     this.emit('event', 'server spawned', {pid: child.pid, server: this.resources});
     this.child = child;
@@ -156,10 +161,11 @@ export class Runtime extends EventEmitter {
           try {
             const entry = JSON.parse(raw), fields = entry.fields;
             if (fields?.message === 'game frontdoor listening') this.listenerSeen = true;
-            if (/^(ERROR|WARN)$/.test(entry.level ?? '')) this.lastServerError = String(fields?.message ?? raw).slice(0, 300);
+            this.lastServerLine = String(fields?.message ?? raw).slice(0, 300);
+            if (/^(ERROR|WARN)$/.test(entry.level ?? '')) this.lastServerError = this.lastServerLine;
             const details = fields ? Object.entries(fields).filter(([key, value]) => key !== 'message' && ['string', 'number', 'boolean'].includes(typeof value) && String(value).length <= 160).map(([key, value]) => `${key}=${value}`).join(' ') : '';
             this.line(`${entry.level ?? 'server'}: ${fields?.message ?? raw}${details ? ' · ' + details : ''}`);
-          } catch { if (/panicked|error/i.test(raw)) this.lastServerError = raw.slice(0, 300); this.line(raw); }
+          } catch { this.lastServerLine = raw.slice(0, 300); if (/panicked|error/i.test(raw)) this.lastServerError = this.lastServerLine; this.line(raw); }
         }
         if (partial.length > 8192) { this.line(partial.slice(0, 8192)); partial = ''; }
       }
@@ -191,7 +197,7 @@ export class Runtime extends EventEmitter {
     }
     if (this.child !== child) {
       const result = await closed;
-      if (result.code !== 0 || !this.expectedStop || this.diskError) throw new Error(`Server exited before listening: code=${result.code}, signal=${result.signal}${this.lastServerError ? `; its last error was: ${this.lastServerError}` : ''}`);
+      if (result.code !== 0 || !this.expectedStop || this.diskError) throw new Error(`The game server closed while starting (exit code ${result.code}${result.signal ? `, ${result.signal}` : ''})${this.lastServerError ?? this.lastServerLine ? `. Its last output: ${this.lastServerError ?? this.lastServerLine}` : ''}`);
       return;
     }
     if (this.status === 'stopping' || this.expectedStop) return;

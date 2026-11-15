@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { mkdir, mkdtemp, copyFile, rm, stat, readdir, lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -34,7 +34,9 @@ export type SaveAuthorityRuntime = Pick<Runtime,'runtimePaths'|'resources'|'bloc
 export async function saveAuthority<T>(runtime: SaveAuthorityRuntime, command: 'preview' | 'import' | 'replace' | 'snapshot' | 'verify-snapshot' | 'restore' | 'accounts' | 'account-edit', paths: string[], password?: string): Promise<T> {
   const { binary } = runtime.runtimePaths();
   let output = Buffer.alloc(0), stderrBytes = 0, overflow = false, spawnError: Error | undefined, pipeError: Error | undefined;
-  const child = spawn(serverCommandPath(binary), ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] });
+  let child: ChildProcessWithoutNullStreams;
+  try { child = spawn(serverCommandPath(binary), ['--local-save', command, ...paths], { cwd: runtime.resources, windowsHide: true, env: authorityEnvironment(), stdio: ['pipe', 'pipe', 'pipe'] }); }
+  catch (error) { throw await launchFailure(binary, error as NodeJS.ErrnoException); }
   const collect = (current: Buffer, bytes: Buffer) => {
     if (current.length + bytes.length > MAX_OUTPUT_BYTES) overflow = true;
     return Buffer.concat([current, bytes.subarray(0, Math.max(0, MAX_OUTPUT_BYTES - current.length))]);
