@@ -7,7 +7,7 @@ pub(super) fn prepare(root: &Path) -> Result<PathBuf, String> {
             return Err(format!("Storage must be an ordinary local directory: {}", directory.display()));
         }
     }
-    owned_directory(root.join("server data/profile"))
+    owned_directory(root.join("server data").join("profile"))
 }
 
 pub(super) fn server(root: &Path) -> Result<PathBuf, String> {
@@ -27,7 +27,7 @@ fn owned_directory(path: PathBuf) -> Result<PathBuf, String> {
         let root = fixture.portable_canonicalize().unwrap();
         if fixture != root {assert!(prepare(&fixture).is_err());}
         let profile = prepare(&root).unwrap();
-        assert_eq!(profile, root.join("server data/profile"));
+        assert_eq!(profile, root.join("server data").join("profile"));
         assert_eq!(prepare(&root).unwrap(), profile);
         assert_eq!(server(&root).unwrap(), profile.join("server-state"));
         fs::remove_dir_all(root).unwrap();
