@@ -4,7 +4,6 @@ import {isAbsolute,join,resolve} from 'node:path';
 import assert from 'node:assert/strict';
 import {tree,clientFiles,sha256} from './assets.mjs';
 
-// Bundles the pinned server, client and Ruffle into the app so the portable ZIP needs nothing else to play offline.
 export async function assembleRuntime(input,pins,destination){
  for(const key of ['serverSource','serverBinary','clientSource','preparedClient','serverBuildReceipt'])assert(isAbsolute(input[key]),`Absolute ${key} required`);
  for(const[path,pin]of[[input.serverSource,pins.server],[input.clientSource,pins.client]]){
@@ -24,7 +23,7 @@ export async function assembleRuntime(input,pins,destination){
  for(const name of Object.keys(client.files).filter(n=>/license|notice|copying/i.test(n)))await cp(join(input.preparedClient,name),join(destination,'notices',name.replaceAll('/','-')));
  for(const file of ['NOTICES.md','LICENSE'])await cp(file,join(destination,'notices',file));
  await writeFile(join(destination,'notices/source-pins.json'),JSON.stringify(pins,null,2)+'\n');
- const packaged=await tree(destination,['data','client','notices',binary,'REVISION']);await writeFile(join(destination,'inventory.json'),JSON.stringify({files:Object.keys(packaged.files),sha256:packaged.files},null,2));
+ const packaged=await tree(destination,['data','client','notices',binary,'REVISION']);
  await writeFile(join(destination,'build-identity.json'),JSON.stringify({pins,platform:process.platform,arch:process.arch,binarySha256:input.serverBinarySha256,buildReceiptSha256:sha256(await readFile(input.serverBuildReceipt)),assetsSha256:packaged.sha256},null,2));
 }
 

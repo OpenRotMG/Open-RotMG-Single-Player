@@ -3,14 +3,14 @@ import {EventEmitter} from 'node:events';
 import {LauncherStore} from './launcher-store';
 import {UserMessage} from './user-message';
 import type {View} from './runtime';
-export function requireLauncherSaveState(runtime:Pick<View,'status'|'pid'|'operation'>,stopped=false){if(!['stopped','ready'].includes(runtime.status)||runtime.operation||runtime.status==='stopped'&&runtime.pid||stopped&&(runtime.status!=='stopped'||runtime.pid))throw new UserMessage('The save is not ready for an update. Finish any running operation. If the game has already stopped, close and reopen the launcher first.');}
+export function requireLauncherSaveState(runtime:Pick<View,'status'|'pid'|'operation'>,stopped=false){if(!['stopped','ready'].includes(runtime.status)||runtime.operation||runtime.status==='stopped'&&runtime.pid||stopped&&(runtime.status!=='stopped'||runtime.pid))throw new UserMessage('Finish the current action before updating.');}
 import {REPOSITORY,Target,decodeJson,demand,integer,launcherVersion,versionAtLeast} from './update-format';
 
 export type LauncherUpdateView={installed:string;available?:string;phase:'idle'|'checking'|'current'|'available'|'error'|'downloading'|'installing'|'recovery';message:string;blocked?:boolean;progress?:UpdateProgress};
 const discovery=`https://api.github.com/repos/${REPOSITORY}/releases?per_page=100`;
 export class LauncherUpdates extends EventEmitter {
   private reporter=new UpdateReporter(value=>{this.state.progress=value;this.state.message=progressText(value);this.changed();},message=>this.emit('log',message));
-  private state:LauncherUpdateView;private task?:Promise<LauncherUpdateView>;private controller?:AbortController;private downloadURL?:string;
+  private state:LauncherUpdateView;private task?:Promise<LauncherUpdateView>;private controller?:AbortController;
   constructor(private installed:string,private target:Target,private request:typeof fetch=fetch,private store?:LauncherStore){super();launcherVersion(installed);this.state={installed,phase:'idle',message:''};}
   view(){return {...this.state};}
   private changed(){this.emit('change',this.view());}
@@ -28,11 +28,10 @@ export class LauncherUpdates extends EventEmitter {
   async prune(){demand(this.store,'Missing portable launcher authority');await this.store.prune();}
   async recover(){demand(this.store&&!this.busy,'Launcher files cannot be checked during an update');await this.store.recover();this.state={installed:this.installed,phase:'idle',message:'Launcher files checked. The interrupted update was not replayed.',blocked:false};this.changed();return this.view();}
   failed(error:unknown){this.state.phase=this.state.blocked?'recovery':'error';this.state.message=`Launcher update failed: ${String(error)}`;this.changed();}
-  download(){demand(this.state.phase==='available'&&this.downloadURL,'Check for a newer launcher before downloading');return this.downloadURL;}
   check():Promise<LauncherUpdateView>{
     if(this.task)return this.task;
     demand(!this.busy&&!this.state.blocked,'Finish or check the existing launcher update first');
-    this.downloadURL=undefined;this.state={installed:this.installed,phase:'checking',message:'Checking launcher releases…'};
+    this.state={installed:this.installed,phase:'checking',message:'Checking launcher releases…'};
     const controller=new AbortController();this.controller=controller;
     this.reporter.reset();this.reporter.report('Fetching published launcher releases');const task=this.discover(AbortSignal.any([controller.signal,AbortSignal.timeout(20_000)])).catch(error=>{
       this.state={installed:this.installed,phase:'error',message:`Launcher update check failed: ${error instanceof Error?error.message:String(error)}`};return this.view();
@@ -46,7 +45,7 @@ export class LauncherUpdates extends EventEmitter {
     try{for(;;){const chunk=await reader.read();if(chunk.done){complete=true;break;}size+=chunk.value.byteLength;demand(size<=2*1024*1024,'Launcher release response exceeds 2 MiB');parts.push(chunk.value);}}
     finally{if(!complete)await reader.cancel();reader.releaseLock();}
     const releases=decodeJson(Buffer.concat(parts),2*1024*1024);demand(Array.isArray(releases)&&releases.length<=100,'Invalid launcher release list');
-    let latest:{version:string;url:string}|undefined;
+    let latest:{version:string}|undefined;
     for(const release of releases){
       demand(release&&typeof release==='object','Invalid launcher release record');
       demand(typeof release.draft==='boolean'&&typeof release.prerelease==='boolean','Invalid launcher release visibility');
@@ -60,11 +59,10 @@ export class LauncherUpdates extends EventEmitter {
       demand(Array.isArray(release.assets),'Launcher release assets are missing');
       const name=`openrotmg-singleplayer-${version}-${this.target}.zip`,assets=release.assets.filter((a:{name:string})=>a.name===name);
       demand(assets.length===1&&integer(assets[0].size,1)&&assets[0].browser_download_url===`https://github.com/${REPOSITORY}/releases/download/v${version}/${name}`,'Launcher ZIP is missing or outside the official release');
-      if(!latest||versionAtLeast(version,latest.version))latest={version,url:assets[0].browser_download_url};
+      if(!latest||versionAtLeast(version,latest.version))latest={version};
     }
     demand(latest,'No published launcher release was found');
     const newer=latest.version!==this.installed&&versionAtLeast(latest.version,this.installed);
-    this.downloadURL=newer?latest.url:undefined;
     this.state={installed:this.installed,available:latest.version,phase:newer?'available':'current',message:newer?`Launcher ${latest.version} is available.`:'No newer published launcher.'};return this.view();
   }
 }

@@ -5,7 +5,7 @@ import { resolve, join } from 'node:path';
 import { sha256 } from './assets.mjs';
 import { nativeServerBuild } from './native-server-build.mjs';
 
-assert(process.env.GITHUB_ACTIONS==='true','This build adapter is only for owned native GitHub runners, not VPS builds');
+assert(process.env.GITHUB_ACTIONS==='true','Runs only on GitHub Actions');
 const pins=JSON.parse(await readFile('source-pins.json','utf8'));
 const root=resolve('.qa/ci-inputs');await mkdir(root,{recursive:true});
 const run=(file,args,cwd)=>execFileSync(file,args,{cwd,stdio:'inherit'});

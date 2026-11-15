@@ -3,7 +3,6 @@ import {spawn,execFileSync} from 'node:child_process';
 import {mkdir,readlink,writeFile} from 'node:fs/promises';
 import {connect} from 'node:net';
 import {resolve,dirname} from 'node:path';
-// Runs the release journey with no network route at all, proving the ZIP plays offline on Linux.
 
 assert(process.platform==='linux','The network-namespace gate is Linux only');
 const namespace=await readlink('/proc/self/ns/net');

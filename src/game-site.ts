@@ -3,7 +3,6 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Socket} from 'node:net';
 
-// Presentation lives outside the authenticated runtime; its JS, SWF, assets and save authority stay byte-for-byte unchanged.
 export async function gameSite(runtime:{origin:string;clientURL():string;view():{status:string}},port=47832){
   const [html,css]=await Promise.all(['game.html','game.css'].map(file=>readFile(join(__dirname,file))));
   const target=new URL(runtime.origin),sockets=new Set<Socket>();

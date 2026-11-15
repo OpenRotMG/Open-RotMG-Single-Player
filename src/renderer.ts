@@ -9,7 +9,7 @@ declare global {
     launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
     importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,password:string,confirmation:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
     listAccounts():Promise<LocalAccount[]>;editAccount(account:number,expected:string,username:string,password:string):Promise<LocalAccount[]>;
-    makeBackup():Promise<SaveResult>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<SaveResult>; openBackupFolder():Promise<SaveResult>; restoreBackup(name?:string):Promise<SaveResult|undefined>;
+    makeBackup():Promise<void>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<void>; openBackupFolder():Promise<void>; restoreBackup(name:string):Promise<void>;
     changed(callback:(view:View)=>void):void;
   } }
 }
@@ -36,21 +36,18 @@ function render(){
   if(!requesting)element<HTMLInputElement>('bots-enabled').checked=v?.botsEnabled===true;
   element<HTMLInputElement>('bots-enabled').disabled=busy||v?.status!=='stopped';
   const saveBlocked=busy||!v||!['stopped','ready'].includes(v.status);
-  for(const id of ['accounts-import','backup','folder','restore-other','save-folder'])button(id).disabled=saveBlocked;
+  for(const id of ['accounts-import','backup','folder','save-folder'])button(id).disabled=saveBlocked;
   button('load-accounts').disabled=saveBlocked;
   button('load-accounts').textContent=v?.status==='ready'?'Save & load accounts':'Refresh accounts';
   element('account-list').querySelectorAll<HTMLInputElement|HTMLButtonElement>('input,button').forEach(control=>{control.disabled=saveBlocked;});
   button('restore').disabled=saveBlocked||!selectedBackup;
   button('check-launcher').disabled=busy||!launcherView||launcherView.phase==='checking';
   button('download-launcher').hidden=launcherView?.phase!=='available';button('download-launcher').disabled=requesting||Boolean(v?.closing);
-  element('launcher-update-steps').hidden=launcherView?.phase!=='available';
   button('recover-launcher').hidden=!launcherView?.blocked;button('recover-launcher').disabled=requesting||Boolean(v?.closing);
-  element('diagnostics').textContent=[v?.diagnostics,v?.consoleLog].filter(Boolean).join('\n');
-  element('launcher-version').textContent=launcherView?.installed??'';
+  element('launcher-version').textContent=launcherView?`${launcherView.installed}: launcher, server and client`:'';
   const launcherMessages:Record<LauncherUpdateView['phase'],string>={idle:'',checking:'Checking…',error:'Update did not finish. See Advanced → Logs.',available:'Update available.',current:'Up to date.',downloading:'Downloading and checking…',installing:'Saving and reopening…',recovery:'Check launcher files before playing.'};
   element('launcher-update-message').textContent=launcherView?(['checking','downloading','installing','error'].includes(launcherView.phase)?launcherView.message:launcherMessages[launcherView.phase]):'';
-  const value=launcherView?.progress,bar=element<HTMLProgressElement>('launcher-progress');bar.hidden=!launcherBusy()||!value;if(value&&value.completed!==undefined&&value.total!==undefined){bar.max=value.total;bar.value=value.completed;}else bar.removeAttribute('value');
-  updateClock();
+  const value=launcherView?.progress,bar=element<HTMLProgressElement>('launcher-progress');bar.hidden=!launcherView||!['checking','downloading','installing'].includes(launcherView.phase)||!value;if(value&&value.completed!==undefined&&value.total!==undefined){bar.max=value.total;bar.value=value.completed;}else bar.removeAttribute('value');
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
@@ -66,7 +63,7 @@ function showPage(next:Page){
   for(const name of pages){element(`${name}-page`).hidden=page!==name;button(`tab-${name}`).setAttribute('aria-selected',String(page===name));button(`tab-${name}`).tabIndex=page===name?0:-1;}
   button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-settings').setAttribute('aria-current',page!=='home'?'page':'false');
   if(page==='backups'&&!['downloading','installing'].includes(launcherView?.phase??''))void refreshBackups().catch(reportError);
-  if(page==='accounts'){element('accounts-status').textContent=runtimeView?.status==='ready'?'Save & load accounts to manage local logins.':'';if(runtimeView?.status==='stopped'&&!button('load-accounts').disabled)void invoke(async()=>renderAccounts(await window.launcher.listAccounts()));}
+  if(page==='accounts'){element('accounts-status').textContent='';if(runtimeView?.status==='stopped'&&!button('load-accounts').disabled)void invoke(async()=>renderAccounts(await window.launcher.listAccounts()));}
 }
 async function refreshBackups(){
   const request=++backupRequest,files=await window.launcher.listBackups();if(request!==backupRequest)return;
@@ -84,8 +81,6 @@ async function refreshBackups(){
 }
 function hidePreview(){preview=undefined;for(const id of ['import-password','import-confirmation'])element<HTMLInputElement>(id).value='';const modal=element<HTMLDialogElement>('import-preview');if(modal.open)modal.close();}
 async function play(){if(runtimeView?.status!=='ready')await window.launcher.start();await window.launcher.client();}
-function result(value:SaveResult|undefined,target='save-result'){if(value){element(target).textContent=[value.message,value.disclosure].filter(Boolean).join('\n');element(target).title=value.path??'';}}
-async function saveAction(action:()=>Promise<SaveResult|undefined>,target='save-result'){element(target).textContent='';result(await action(),target);await refreshBackups();}
 button('import').onclick=()=>showPage('accounts');
 button('show-home').onclick=()=>showPage('home');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-updates').onclick=()=>showPage('updates');
 for(const name of pages){button(`tab-${name}`).onclick=()=>showPage(name);button(`tab-${name}`).onkeydown=event=>{const index=pages.indexOf(name),next=event.key==='ArrowRight'?(index+1)%pages.length:event.key==='ArrowLeft'?(index+pages.length-1)%pages.length:event.key==='Home'?0:event.key==='End'?pages.length-1:undefined;if(next!==undefined){event.preventDefault();showPage(pages[next]);button(`tab-${pages[next]}`).focus();}};}
@@ -99,13 +94,12 @@ function renderAccounts(accounts:LocalAccount[]){
   const list=element('account-list');list.replaceChildren();
   element('accounts-status').textContent=accounts.length?'':'No local accounts yet. Play or import an account first.';
   for(const account of accounts){
-    const form=document.createElement('form'),title=document.createElement('h4'),userLabel=document.createElement('label'),passwordLabel=document.createElement('label'),username=document.createElement('input'),password=document.createElement('input'),show=document.createElement('button'),save=document.createElement('button'),hint=document.createElement('p');
+    const form=document.createElement('form'),title=document.createElement('h4'),userLabel=document.createElement('label'),passwordLabel=document.createElement('label'),field=document.createElement('div'),username=document.createElement('input'),password=document.createElement('input'),show=document.createElement('button'),save=document.createElement('button');
     form.className='account';form.setAttribute('data-account',String(account.account));title.textContent=account.name;
     userLabel.textContent='Username (email)';username.type='email';username.required=true;username.maxLength=245;username.autocomplete='off';username.value=account.username??'';userLabel.append(username);
-    passwordLabel.textContent='New password';password.type='password';password.required=account.username===null;password.autocomplete='new-password';password.maxLength=128;password.value='';password.placeholder=account.username===null?'Choose a password':'Enter a new password to change it';passwordLabel.append(password);
-    hint.textContent=account.username===null?'Guest account. Set a username and password to sign in.':'';
-    show.type='button';show.textContent='Show new password';show.onclick=()=>{password.type=password.type==='password'?'text':'password';show.textContent=password.type==='password'?'Show new password':'Hide new password';};
-    save.type='submit';save.textContent='Save changes';form.append(title,userLabel,passwordLabel,show,save,hint);
+    passwordLabel.textContent='New password';password.id=passwordLabel.htmlFor=`account-${account.account}-password`;password.type='password';password.required=account.username===null;password.autocomplete='new-password';password.maxLength=128;password.value='';password.placeholder=account.username===null?'Choose a password':'Leave blank to keep';field.className='password-field';field.append(password,show);
+    show.type='button';show.textContent='👁';show.setAttribute('aria-label','Show password');show.setAttribute('aria-pressed','false');show.onclick=()=>{const visible=password.type==='password';password.type=visible?'text':'password';show.setAttribute('aria-label',(visible?'Hide':'Show')+' password');show.setAttribute('aria-pressed',String(visible));};
+    save.type='submit';save.textContent='Save changes';form.append(title,userLabel,passwordLabel,field,save);
     form.onsubmit=event=>{event.preventDefault();void invoke(async()=>{const rows=await window.launcher.editAccount(account.account,account.expected,username.value,password.value);password.value='';renderAccounts(rows);element('accounts-status').textContent='';await refreshBackups();});};
     list.append(form);
   }
@@ -124,21 +118,17 @@ button('import-confirm').onclick=()=>void invoke(async()=>{
   finally{submitting=false;button('import-confirm').disabled=false;button('import-cancel').disabled=false;}
 });
 for(const [buttonId,inputId,label]of [['show-import-password','import-password','password'],['show-import-confirmation','import-confirmation','confirm password']])button(buttonId).onclick=()=>{const input=element<HTMLInputElement>(inputId),show=input.type==='password';input.type=show?'text':'password';button(buttonId).setAttribute('aria-label',(show?'Hide ':'Show ')+label);button(buttonId).setAttribute('aria-pressed',String(show));};
-const cancelImport=()=>void invoke(async()=>{if(submitting)return;const canceled=await window.launcher.cancelImport();hidePreview();if(!canceled)throw Error('Import was already submitted. Check its outcome in Advanced → Logs before trying again.');});
+const cancelImport=()=>void invoke(async()=>{if(submitting)return;const canceled=await window.launcher.cancelImport();hidePreview();if(!canceled)throw Error('Import was already submitted. See Advanced → Logs.');});
 button('import-cancel').onclick=cancelImport;element<HTMLDialogElement>('import-preview').oncancel=event=>{event.preventDefault();cancelImport();};
-button('backup').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.makeBackup()));
-button('folder').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.openBackupFolder()));
-button('save-folder').onclick=()=>void invoke(()=>saveAction(()=>window.launcher.openSaveFolder(),'location-result'));
-button('restore').onclick=()=>void invoke(async()=>{if(!selectedBackup||!backups.some(file=>file.name===selectedBackup))throw Error('Choose a backup first.');const restored=await window.launcher.restoreBackup(selectedBackup);result(restored);await refreshBackups();});
-button('restore-other').onclick=()=>void invoke(async()=>{const restored=await window.launcher.restoreBackup();result(restored);await refreshBackups();});
+button('backup').onclick=()=>void invoke(async()=>{await window.launcher.makeBackup();await refreshBackups();});
+button('folder').onclick=()=>void invoke(()=>window.launcher.openBackupFolder());
+button('save-folder').onclick=()=>void invoke(()=>window.launcher.openSaveFolder());
+button('restore').onclick=()=>void invoke(async()=>{if(!selectedBackup)throw Error('Choose a backup first.');await window.launcher.restoreBackup(selectedBackup);await refreshBackups();});
 button('check-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.checkLauncher();});
 button('download-launcher').onclick=()=>void invoke(()=>window.launcher.installLauncher());
 button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.recoverLauncher();});
 element('log-search').addEventListener('input',renderLogs);
-button('copy-logs').onclick=()=>void (async()=>{element('copy-result').textContent='';try{await window.launcher.copyLogs(element('logs').textContent!);element('copy-result').textContent='Log copied.';}catch(error){reportError(error);}})();
+button('copy-logs').onclick=()=>void window.launcher.copyLogs(element('logs').textContent!).catch(reportError);
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
-function launcherBusy(){return Boolean(launcherView&&['checking','downloading','installing'].includes(launcherView.phase));}
-function updateClock(){const p=launcherView?.progress,age=p?Math.max(0,Math.floor((Date.now()-p.updatedAt)/1000)):0;element('launcher-progress-age').textContent=launcherBusy()&&p&&age>=3?'Last progress '+age+'s ago.':'';}
-setInterval(updateClock,1000);
 window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
 void invoke(async()=>{runtimeView=await window.launcher.status();launcherView=await window.launcher.launcherUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});

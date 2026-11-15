@@ -1,40 +1,13 @@
 # Development
 
-The app bundles the compiled server, client, Ruffle, game data and sound. Everything runs on this computer; the only network request is **Settings → Updates → Check for updates**, which the player clicks. The browser requires WebGL 2.
-
-## Saves
-
-The portable launcher passes `--user-data-dir=<folder>/player data`; the app refuses to start without it. Saves are in `player data/state/`, backups in `player data/backups/`. Electron caches, settings and diagnostics live in `server data/profile/`.
-
-Every Play makes and verifies a full backup before the server opens the save. Import, account edits and restore also make a verified full backup first, through the bundled server's `--local-save` commands. Passwords stay salted Argon2 hashes and travel only through private stdin.
-
-Close and **Save & stop** ask the server to drain through a private pipe. A failed shutdown blocks save actions until the launcher is reopened; the server's state lock prevents two servers using one save. Never delete `state/state.lock`.
+The ZIP bundles the server, client and Ruffle; only Settings → Updates uses the network. Saves live in `player data/`, the app in `server data/`. Play, import, account edits and restore back up the save first. Never delete `state/state.lock`.
 
 ## Build
 
-Build on the target OS with Node 22.23.2 and the server's pinned Rust toolchain. Set `OPENROTMG_BUILD_INPUTS` to an absolute JSON file describing the pinned sources in `source-pins.json`:
+Build on the target OS. `OPENROTMG_BUILD_INPUTS` names a JSON file with the pinned sources (`node scripts/ci-inputs.mjs` makes it in CI), then `npm ci && npm test && npm run make`.
 
-```json
-{
-  "platform": "linux",
-  "arch": "x64",
-  "serverSource": "/absolute/server",
-  "clientSource": "/absolute/client",
-  "preparedClient": "/absolute/prepared-client",
-  "serverBinary": "/absolute/openrotmg",
-  "serverBinarySha256": "the actual 64-character lowercase SHA256",
-  "serverBuildReceipt": "/absolute/server-artifact.json"
-}
-```
+## Release
 
-On GitHub Actions, `node scripts/ci-inputs.mjs` clones and builds these. Then:
-
-```sh
-npm ci
-npm test
-npm run make   # out/make/openrotmg-singleplayer-VERSION-TARGET.zip
-```
-
-Release steps and the end-to-end check are in [portable-zip.md](portable-zip.md).
-
-AGPL-3.0-only launcher. See LICENSE and NOTICES.md for server, client, Ruffle, Electron and asset notices.
+1. Bump the version in `package.json`, `package-lock.json` and `launcher/Cargo.*`; merge.
+2. Run `offline-installers.yml` on main. It builds and plays each ZIP (Linux with no network) and updates to it from 1.0.0.
+3. Upload each ZIP, `launcher-TARGET.tar.gz` and sources to a draft release whose body has `LAUNCHER_VERSION=X.Y.Z`, run `promote-launcher.yml`, then publish with `make_latest:false` so pre-1.0.3 launchers still find the v1.0.2 server.

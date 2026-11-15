@@ -17,7 +17,7 @@ export async function installArtifact(artifact,root,out){
  else execFileSync('unzip',['-q',artifact,'-d',root],{timeout:120000});
  assert.deepEqual(await readdir(root),[portableFolder],'ZIP must extract into one OpenRotMG Singleplayer folder');
  const path=join(root,portableFolder);
- assert.deepEqual((await readdir(path)).sort(),portableEntries(),'Game folder must contain exactly the launcher, README.txt, player data and server data');
+ assert.deepEqual((await readdir(path)).sort(),portableEntries(),'Unexpected game folder contents');
  assert.deepEqual(await readdir(join(path,'player data')),[],'A fresh ZIP ships an empty player data folder');
  return {kind:'portable ZIP extraction',path};
 }
