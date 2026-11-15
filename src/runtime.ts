@@ -44,12 +44,14 @@ export class Runtime extends EventEmitter {
   readonly origin = `http://127.0.0.1:${PORT}`;
   readonly diagnostics: string;
   private settings:LocalSettings;
-  constructor(readonly resources: string, readonly userData: string, readonly storage: string = userData) {
+  constructor(private selected: string, readonly userData: string, readonly storage: string = userData) {
     super();
     this.settings=new LocalSettings(storage);
     this.diagnostics = join(storage, 'diagnostics');
   }
   async loadSettings(){await this.settings.load();}
+  get resources() { return this.selected; }
+  select(resources: string) { if (this.child || this.status !== 'stopped') throw new Error('Stop the game before switching servers'); this.selected = resources; this.emit('change', this.view()); }
   setBots(enabled:boolean){return this.reserveOperation('Configure local bots',async()=>{if(this.status!=='stopped')throw new Error('Save & stop the game before changing bots');await this.settings.setBots(enabled);this.reportUpdate('Local bots '+(enabled?'enabled':'disabled')+' for the next game start.');},false);}
   view(): View {
     return { status: this.status, message: this.message, logs: [...this.lines], pid: this.child?.pid, origin: this.origin, diagnostics: this.diagnostics, operation: this.operationName, closing: this.closing, botsEnabled:this.settings.bots };
