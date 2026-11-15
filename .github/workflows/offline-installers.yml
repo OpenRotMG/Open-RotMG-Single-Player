@@ -61,3 +61,4 @@ jobs:
             .qa/installer-tests/run-*/installer-result.json
             .qa/installer-tests/run-*/*.png
             .qa/installer-tests/run-*/*.log
+            .qa/installer-tests/run-*/report.txt

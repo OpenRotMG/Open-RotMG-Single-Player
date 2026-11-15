@@ -9,6 +9,7 @@ import { constants } from 'node:fs';
 import { join, resolve, win32 } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import {LocalSettings} from './settings';
+import {launchFailure} from './diagnostics';
 
 export type Status = 'stopped' | 'starting' | 'ready' | 'stopping' | 'failed';
 export type View = { clientURL?: string; status: Status; message: string; logs: string[]; pid?: number; origin: string; diagnostics: string; operation?: string; closing: boolean; botsEnabled:boolean };
@@ -41,6 +42,9 @@ export class Runtime extends EventEmitter {
   private operationName?: string;
   private closing = false;
   private generation?: string;
+  private lastServerError?: string;
+  private lastServerLine?: string;
+  failure?: Error;
   readonly origin = `http://127.0.0.1:${PORT}`;
   readonly diagnostics: string;
   private settings:LocalSettings;
@@ -66,6 +70,7 @@ export class Runtime extends EventEmitter {
   reportProblem(error:unknown){console.error(error);this.line(error instanceof Error?error.stack??error.message:String(error));}
   /** Blocks further saves this session; the server's state lock and startup backup protect the next launch. */
   private fail(error: unknown) {
+    this.failure = error instanceof Error ? error : new Error(String(error));this.emit('event', 'failed', {error: String(error)});
     console.error(error);this.line(String(error));
     this.update('failed', `${String(error)}. Save actions are blocked until the launcher is reopened.`);
   }
@@ -86,7 +91,8 @@ export class Runtime extends EventEmitter {
     const { binary, data, client: clientPath, state } = this.runtimePaths();
     await access(binary, constants.R_OK | (process.platform === 'win32' ? 0 : constants.X_OK));
     // Each build serves its client under its own path so a browser never reuses an older client from cache.
-    this.generation = createHash('sha256').update(await readFile(join(this.resources, 'build-identity.json'))).digest('hex');
+    const started = performance.now(), buildIdentity = await readFile(join(this.resources, 'build-identity.json'));
+    this.generation = createHash('sha256').update(buildIdentity).digest('hex');this.lastServerError = undefined;this.lastServerLine = undefined;this.failure = undefined;
     await new Promise<void>((ok, bad) => {
       const probe = createServer();
       probe.once('error', error => bad(new Error(`Loopback port ${PORT} unavailable: ${error.message}. No other process was stopped.`)));
@@ -113,7 +119,17 @@ export class Runtime extends EventEmitter {
     // Environment is deliberately small: host bot/proxy/API-key settings cannot enter the consumer child.
     const env: NodeJS.ProcessEnv = { RUST_LOG: 'openrotmg=info,lag=info' };
     for (const key of ['SystemRoot', 'WINDIR', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LANG']) if (process.env[key]) env[key] = process.env[key];
-    const child = spawn(serverCommandPath(binary), ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>;
+    const expected = JSON.parse(buildIdentity.toString()).binarySha256;
+    let child: ChildProcessByStdio<Writable, null, null>;
+    // Windows reports most refusals synchronously; missing files arrive later as an 'error' event.
+    try { child = spawn(serverCommandPath(binary), ['--desktop', '--config', config], desktopServerSpawnOptions(process.platform, this.resources, env, log.fd)) as ChildProcessByStdio<Writable, null, null>; }
+    catch (error) { await log.close(); throw await launchFailure(binary, error as NodeJS.ErrnoException, expected); }
+    if (child.pid === undefined) {
+      const error = await new Promise<NodeJS.ErrnoException>(ok => child.once('error', ok));
+      await log.close();
+      throw await launchFailure(binary, error, expected);
+    }
+    this.emit('event', 'server spawned', {pid: child.pid, server: this.resources});
     this.child = child;
     this.closed = new Promise((ok) => {
       child.once('error', error => this.fail(new Error(`Server spawn failed: ${error.message}`)));
@@ -124,7 +140,8 @@ export class Runtime extends EventEmitter {
         this.child = undefined;
         if (code === 0 && this.expectedStop && !this.diskError && this.status !== 'failed') this.update(this.boot ? 'stopping' : 'stopped', 'Server stopped. Save verified (exit 0).');
         else if (!this.listenerSeen && !this.expectedStop && this.status !== 'failed') this.line(`Server exited before listening: code=${code}, signal=${signal}`);
-        else this.fail(new Error(`Server exited without verified shutdown: code=${code}, signal=${signal}`));
+        else this.fail(new Error(`Server exited without verified shutdown: code=${code}, signal=${signal}${this.lastServerError ? `; its last error was: ${this.lastServerError}` : ''}`));
+        this.emit('event', 'server exited', {code, signal, seconds: Math.round((performance.now() - started) / 1000)});
         ok({ code, signal });
       });
     });
@@ -144,9 +161,11 @@ export class Runtime extends EventEmitter {
           try {
             const entry = JSON.parse(raw), fields = entry.fields;
             if (fields?.message === 'game frontdoor listening') this.listenerSeen = true;
+            this.lastServerLine = String(fields?.message ?? raw).slice(0, 300);
+            if (/^(ERROR|WARN)$/.test(entry.level ?? '')) this.lastServerError = this.lastServerLine;
             const details = fields ? Object.entries(fields).filter(([key, value]) => key !== 'message' && ['string', 'number', 'boolean'].includes(typeof value) && String(value).length <= 160).map(([key, value]) => `${key}=${value}`).join(' ') : '';
             this.line(`${entry.level ?? 'server'}: ${fields?.message ?? raw}${details ? ' · ' + details : ''}`);
-          } catch { this.line(raw); }
+          } catch { this.lastServerLine = raw.slice(0, 300); if (/panicked|error/i.test(raw)) this.lastServerError = this.lastServerLine; this.line(raw); }
         }
         if (partial.length > 8192) { this.line(partial.slice(0, 8192)); partial = ''; }
       }
@@ -167,7 +186,7 @@ export class Runtime extends EventEmitter {
           const health = await response.json() as { process: number; bots: number; bot_dialogue: { enabled: boolean } };
           if (health.process !== child.pid) throw new Error(`Readiness PID mismatch: expected ${child.pid}, received ${health.process}`);
           if (!Number.isInteger(health.bots)||health.bots<0||(!this.settings.bots&&health.bots!==0)||health.bot_dialogue.enabled) throw new Error('Local server health does not match the configured bots/disabled language service');
-          if (this.listenerSeen) { this.update('ready', `Offline server ready at ${this.origin}`); return; }
+          if (this.listenerSeen) { this.emit('event', 'server ready', {seconds: Math.round((performance.now() - started) / 1000), bots: health.bots}); this.update('ready', `Offline server ready at ${this.origin}`); return; }
         }
       } catch (error) {
         if (!(error instanceof TypeError && error.cause && ['ECONNREFUSED', 'ECONNRESET'].includes((error.cause as NodeJS.ErrnoException).code ?? '')) && !(error instanceof Error && ['TimeoutError', 'AbortError'].includes(error.name))) {
@@ -178,7 +197,7 @@ export class Runtime extends EventEmitter {
     }
     if (this.child !== child) {
       const result = await closed;
-      if (result.code !== 0 || !this.expectedStop || this.diskError) throw new Error(`Server exited before listening: code=${result.code}, signal=${result.signal}. See diagnostics before retrying.`);
+      if (result.code !== 0 || !this.expectedStop || this.diskError) throw new Error(`The game server closed while starting (exit code ${result.code}${result.signal ? `, ${result.signal}` : ''})${this.lastServerError ?? this.lastServerLine ? `. Its last output: ${this.lastServerError ?? this.lastServerLine}` : ''}`);
       return;
     }
     if (this.status === 'stopping' || this.expectedStop) return;

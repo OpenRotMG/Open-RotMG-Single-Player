@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,realpath,readlink} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,realpath,readlink,rm,cp} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
-import {release,version as osVersion} from 'node:os';
+import {release,version as osVersion,homedir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {create} from 'tar';
 import {generateKeyPairSync,sign} from 'node:crypto';
@@ -97,17 +97,29 @@ async function journey(){
   check('Reopening keeps progress',(await offlineAttempts()).length===0);
   await close();
   // A privately signed next server stands in for a published server-only release.
-  const parts=receipt.version.split('.').map(Number);parts[2]++;const next=parts.join('.'),fixture=join(out,'server-update'),name=`server-${receipt.target}.tar.gz`;await mkdir(fixture);
-  await create({file:join(fixture,name),cwd:runtime,gzip:true,portable:true},await readdir(runtime));
-  const {privateKey,publicKey}=generateKeyPairSync('ed25519'),archive=await readFile(join(fixture,name));
-  const manifest=Buffer.from(JSON.stringify({format:1,kind:'openrotmg-server',version:next,target:receipt.target,minLauncher:receipt.version,payload:{name,url:serverAssetURL(next,name),bytes:archive.length,sha256:await hashFile(join(fixture,name))}}));
-  await writeFile(join(fixture,`server-${receipt.target}.json`),manifest);await writeFile(join(fixture,`server-${receipt.target}.json.sig`),sign(null,Buffer.concat([SERVER_DOMAIN,manifest]),privateKey));
-  const release=[{tag_name:'v'+next,draft:false,prerelease:false,body:'',assets:[{name:`server-${receipt.target}.json`}]}];
-  await launch(`require(process.resourcesPath+'/app.asar/dist/update-policy.js').LAUNCHER_PUBLIC_KEY=${JSON.stringify(publicKey.export({format:'pem',type:'spki'}))};const offline=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(value.startsWith('https://api.github.com/'))return new Response(${JSON.stringify(JSON.stringify(release))});if(value.startsWith('https://github.com/'))return new Response(require('node:fs').readFileSync(require('node:path').join(${JSON.stringify(fixture)},value.split('/').pop())));return offline(url,...rest);};`);
-  await page.locator('#show-updates').click();await page.locator('#check-server').click();await page.locator('#install-server').waitFor({state:'visible'});
-  await page.screenshot({path:join(out,'server-update-available.png')});await page.locator('#install-server').click();
-  await wait(async()=>(await page.evaluate(()=>window.launcher.serverUpdates())).installed===next,'server update installed',300000);
-  const updated=await play(join(storage,'servers',next,process.platform==='win32'?'openrotmg.exe':'openrotmg'));await game.verify(false,updated.clientURL);
+  const parts=receipt.version.split('.').map(Number);parts[2]++;const next=parts.join('.'),fixture=join(out,'server-update'),name=`server-${receipt.target}.tar.gz`,exe=process.platform==='win32'?'openrotmg.exe':'openrotmg';await mkdir(fixture);
+  const {privateKey,publicKey}=generateKeyPairSync('ed25519'),release=[{tag_name:'v'+next,draft:false,prerelease:false,body:'',assets:[{name:`server-${receipt.target}.json`}]}];
+  const publishServer=async source=>{
+   await rm(join(fixture,name),{force:true});await create({file:join(fixture,name),cwd:source,gzip:true,portable:true},await readdir(source));const archive=await readFile(join(fixture,name));
+   const manifest=Buffer.from(JSON.stringify({format:1,kind:'openrotmg-server',version:next,target:receipt.target,minLauncher:receipt.version,payload:{name,url:serverAssetURL(next,name),bytes:archive.length,sha256:await hashFile(join(fixture,name))}}));
+   await writeFile(join(fixture,`server-${receipt.target}.json`),manifest);await writeFile(join(fixture,`server-${receipt.target}.json.sig`),sign(null,Buffer.concat([SERVER_DOMAIN,manifest]),privateKey));
+  };
+  const installServer=async()=>{
+   await launch(`require(process.resourcesPath+'/app.asar/dist/update-policy.js').LAUNCHER_PUBLIC_KEY=${JSON.stringify(publicKey.export({format:'pem',type:'spki'}))};const offline=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(value.startsWith('https://api.github.com/'))return new Response(${JSON.stringify(JSON.stringify(release))});if(value.startsWith('https://github.com/'))return new Response(require('node:fs').readFileSync(require('node:path').join(${JSON.stringify(fixture)},value.split('/').pop())));return offline(url,...rest);};`);
+   await page.locator('#show-updates').click();await page.locator('#check-server').click();await page.locator('#install-server').waitFor({state:'visible'});
+   await page.screenshot({path:join(out,'server-update-available.png')});await page.locator('#install-server').click();
+   await wait(async()=>(await page.evaluate(()=>window.launcher.serverUpdates())).installed===next,'server update installed',300000);
+  };
+  // A server that cannot run is the kind of failure players report; the launcher must explain it and copy a useful report.
+  const broken=join(out,'broken-server');await cp(runtime,broken,{recursive:true});await rm(join(broken,exe));await writeFile(join(broken,exe),'not a program',{mode:0o755});
+  await publishServer(broken);await installServer();await page.locator('#show-home').click();await page.locator('#play').click();await page.locator('#problem').waitFor({state:'visible'});
+  const shown=await page.locator('#problem').innerText();await page.screenshot({path:join(out,'launcher-problem.png')});
+  check('A server that cannot run shows what failed, what the system said and a next step',shown.includes("Couldn't start the game")&&/refused to run|closed while starting/.test(shown)&&shown.includes('Next step:'));
+  await page.locator('#copy-report').click();const copied=await app.evaluate(({clipboard})=>clipboard.readText());await writeFile(join(out,'report.txt'),copied);
+  check('Copy report has versions, the problem and recent events without home folders',/^launcher: \d/m.test(copied)&&copied.includes("Problem: Couldn't start the game")&&copied.includes('"event":"problem"')&&!copied.includes(homedir()));
+  await close();await rm(join(storage,'servers',next),{recursive:true});
+  await publishServer(runtime);await installServer();
+  const updated=await play(join(storage,'servers',next,exe));await game.verify(false,updated.clientURL);
   check('Server + client updates without a launcher update and keeps progress',true);
   await close();
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>game.verify(true,url),closeGame:()=>game.close()});

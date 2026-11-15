@@ -2,16 +2,17 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { View } from './runtime';
 async function invoke(channel:string,...args:unknown[]){
   const reply=await ipcRenderer.invoke(channel,...args);
-  if(!reply||typeof reply!=='object'||!(Object.keys(reply).length===2||!reply.ok&&Object.keys(reply).length===3&&reply.severity==='info')||typeof reply.ok!=='boolean'||(reply.ok?!Object.hasOwn(reply,'value'):typeof reply.error!=='string'))throw new Error('The launcher returned an invalid reply. Please report this problem.');
+  if(!reply||typeof reply!=='object'||!(Object.keys(reply).length===2||!reply.ok&&Object.keys(reply).length===3&&(reply.severity==='info'||reply.problem))||typeof reply.ok!=='boolean'||(reply.ok?!Object.hasOwn(reply,'value'):typeof reply.error!=='string'))throw new Error('The launcher returned an invalid reply. Please report this problem.');
   if(!reply.ok){
     // contextBridge strips custom Error names, so expected notices cross as plain data.
     if(reply.severity==='info')throw Object.freeze({name:'Notice',message:reply.error});
+    if(reply.problem)throw Object.freeze({name:'Problem',message:reply.error,problem:reply.problem});
     throw new Error(reply.error);
   }
   return reply.value;
 }
 contextBridge.exposeInMainWorld('launcher', Object.freeze({
-  copyLogs:(text:string)=>invoke('logs:copy',text),
+  copyReport:()=>invoke('report:copy'),
   minimize: () => invoke('window:minimize'),
   maximize: () => invoke('window:maximize'),
   close: () => invoke('window:close'),

@@ -3,8 +3,8 @@ import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import type {Socket} from 'node:net';
 
-export async function gameSite(runtime:{origin:string;clientURL():string;view():{status:string}},port=47832){
-  const [html,css]=await Promise.all(['game.html','game.css'].map(file=>readFile(join(__dirname,file))));
+export async function gameSite(runtime:{origin:string;clientURL():string;view():{status:string}},port:number,onReport:(kind:string,message:string)=>void){
+  const [html,css,reporter]=await Promise.all(['game.html','game.css','game-report.js'].map(file=>readFile(join(__dirname,file))));
   const target=new URL(runtime.origin),sockets=new Set<Socket>();
   let origin:string;
   const trusted=(req:IncomingMessage)=>req.headers.host===new URL(origin).host&&(!req.headers.origin||req.headers.origin===origin);
@@ -12,6 +12,12 @@ export async function gameSite(runtime:{origin:string;clientURL():string;view():
   const headers=(req:IncomingMessage)=>({...req.headers,host:target.host,...(req.headers.origin?{origin:runtime.origin}:{})});
   const server=createServer((req,res)=>{
     if(!trusted(req)){res.writeHead(403);res.end('Unapproved local game origin');return;}
+    // Errors in the player's browser are otherwise invisible to the launcher and to bug reports.
+    if(req.method==='POST'&&req.url==='/singleplayer-report'){
+      let body='';req.setEncoding('utf8');req.on('data',chunk=>{body+=chunk;if(body.length>8192)req.destroy();});
+      req.on('end',()=>{let value:{kind:unknown;message:unknown};try{value=JSON.parse(body);}catch{res.writeHead(400);res.end();return;}onReport(String(value.kind).slice(0,40),String(value.message).slice(0,2000));res.writeHead(204);res.end();});return;
+    }
+    if(req.method==='GET'&&req.url==='/singleplayer-report.js'){res.writeHead(200,{'content-type':'text/javascript; charset=utf-8','cache-control':'no-store'});res.end(reporter);return;}
     if(runtime.view().status!=='ready'){res.writeHead(503,{'content-type':'text/plain'});res.end('Server is stopped. Start it in OpenRotMG Singleplayer.');return;}
     const url=new URL(req.url!,origin),path=url.pathname,base=prefix();
     if(req.method==='GET'&&path==='/'&&base!=='/'){ res.writeHead(302,{location:base});res.end();return;}

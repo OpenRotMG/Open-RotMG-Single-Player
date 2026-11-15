@@ -2,9 +2,10 @@ import type { View } from './runtime';
 import type { ImportPreview, SaveResult, BackupFile, LocalAccount } from './saves';
 import type { LauncherUpdateView } from './launcher-updates';
 import type { ServerUpdateView } from './server-updates';
+import type { Problem } from './diagnostics';
 declare global {
   interface Window { launcher: {
-    copyLogs(text:string):Promise<void>;
+    copyReport():Promise<void>;
     minimize():Promise<void>; maximize():Promise<void>; close():Promise<void>;
     status():Promise<View>; setBots(enabled:boolean):Promise<void>; start():Promise<void>; stop():Promise<void>; client():Promise<void>; help():Promise<void>;
     launcherUpdates():Promise<LauncherUpdateView>; checkLauncher():Promise<LauncherUpdateView>; installLauncher():Promise<void>; recoverLauncher():Promise<LauncherUpdateView>; launcherHealthy():Promise<void>; launcherChanged(callback:(view:LauncherUpdateView)=>void):void;
@@ -20,7 +21,7 @@ const button = (id:string) => element<HTMLButtonElement>(id);
 const pages=['accounts','backups','updates','advanced'] as const;
 type Page = 'home'|typeof pages[number];
 let page:Page='home',runtimeView:View|undefined,launcherView:LauncherUpdateView|undefined,serverView:ServerUpdateView|undefined;
-let preview:ImportPreview|undefined,requesting=false,submitting=false,actionError='',backups:BackupFile[]=[],selectedBackup:string|undefined,backupRequest=0;
+let actionProblem:Problem|undefined,preview:ImportPreview|undefined,requesting=false,submitting=false,actionError='',backups:BackupFile[]=[],selectedBackup:string|undefined,backupRequest=0;
 function renderLogs(){
   const lines=[runtimeView?.message,serverView?.message,launcherView?.message,...(runtimeView?.logs??[]),actionError];
   const query=element<HTMLInputElement>('log-search').value.toLowerCase();
@@ -54,13 +55,15 @@ function render(){
   const launcherMessages:Record<LauncherUpdateView['phase'],string>={idle:'',checking:'Checking…',error:'Update did not finish. See Advanced → Logs.',available:'Update available.',current:'Up to date.',downloading:'Downloading and checking…',installing:'Saving and reopening…',recovery:'Check launcher files before playing.'};
   element('launcher-update-message').textContent=launcherView?(['checking','downloading','installing','error'].includes(launcherView.phase)?launcherView.message:launcherMessages[launcherView.phase]):'';
   const value=launcherView?.progress,bar=element<HTMLProgressElement>('launcher-progress');bar.hidden=!launcherView||!['checking','downloading','installing'].includes(launcherView.phase)||!value;if(value&&value.completed!==undefined&&value.total!==undefined){bar.max=value.total;bar.value=value.completed;}else bar.removeAttribute('value');
+  const problem=actionProblem??(v as View&{problem?:Problem}|undefined)?.problem;element('problem').hidden=!problem;
+  if(problem){element('problem-title').textContent=problem.title;element('problem-said').textContent=problem.said;element('problem-next').textContent=problem.next;}
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
-function reportError(error:unknown){const notice=error as {name?:unknown;message?:unknown}|null,info=notice?.name==='Notice'&&typeof notice.message==='string';actionError=info?'':String(error);element('error').setAttribute('class',info?'notice info':'notice error');element('error').setAttribute('role',info?'status':'alert');const message=info?notice!.message as string:error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
+function reportError(error:unknown){const raised=error as {name?:unknown;problem?:Problem}|null;if(raised?.name==='Problem'&&raised.problem){actionProblem=raised.problem;actionError=raised.problem.said;render();return;}const notice=error as {name?:unknown;message?:unknown}|null,info=notice?.name==='Notice'&&typeof notice.message==='string';actionError=info?'':String(error);element('error').setAttribute('class',info?'notice info':'notice error');element('error').setAttribute('role',info?'status':'alert');const message=info?notice!.message as string:error instanceof Error?error.message:String(error);element('error').textContent=message;element('import-error').textContent=message;renderLogs();}
 async function invoke(action:()=>Promise<unknown>){
   if(requesting)return;
-  requesting=true;actionError='';element('error').textContent='';element('import-error').textContent='';render();
+  requesting=true;actionError='';actionProblem=undefined;element('error').textContent='';element('import-error').textContent='';render();
   try{await action();}catch(error){reportError(error);}finally{requesting=false;render();}
 }
 function showPage(next:Page){
@@ -136,7 +139,7 @@ button('check-launcher').onclick=()=>void invoke(async()=>{launcherView=await wi
 button('download-launcher').onclick=()=>void invoke(()=>window.launcher.installLauncher());
 button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await window.launcher.recoverLauncher();});
 element('log-search').addEventListener('input',renderLogs);
-button('copy-logs').onclick=()=>void window.launcher.copyLogs(element('logs').textContent!).catch(reportError);
+for(const id of ['copy-logs','copy-report'])button(id).onclick=()=>void window.launcher.copyReport().catch(reportError);
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
 window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.serverChanged(view=>{serverView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
 void invoke(async()=>{runtimeView=await window.launcher.status();launcherView=await window.launcher.launcherUpdates();serverView=await window.launcher.serverUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});
