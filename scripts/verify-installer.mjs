@@ -33,7 +33,7 @@ async function journey(){
   const flags=JSON.parse(process.env.PI_NATIVE_TEST_CHROME_ARGS??'[]');assert(flags.length===0||JSON.stringify(flags)==='["--ignore-gpu-blocklist"]','Only approved software WebGL flag allowed');
   display=await updateTestDisplay(out);report.display=display.proof;
   // Windows cannot launch an updated app beyond MAX_PATH, so its copy lives under the short runner temp root.
-  const env=await consumerEnvironment(display.env,out),base=process.platform==='win32'?await mkdtemp(join(process.env.OPENROTMG_TEST_TMP_ROOT,'main-')):out,installation=join(base,'extracted Open RotMG é 日本');
+  const env=await consumerEnvironment(display.env,out),base=process.platform==='win32'?await mkdir(process.env.OPENROTMG_TEST_TMP_ROOT,{recursive:true}).then(()=>mkdtemp(join(process.env.OPENROTMG_TEST_TMP_ROOT,'main-'))):out,installation=join(base,'extracted Open RotMG é 日本');
   report.installation=await installArtifact(artifact,installation,base);const paths=installedPaths(report.installation.path),root=report.installation.path,storage=join(root,'server data/profile');
   const runtime=join(paths.resources,'runtime'),binary=join(runtime,process.platform==='win32'?'openrotmg.exe':'openrotmg'),data=join(runtime,'data');
   const identity=JSON.parse(await readFile(join(runtime,'build-identity.json'),'utf8'));
