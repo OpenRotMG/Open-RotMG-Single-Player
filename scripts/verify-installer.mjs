@@ -65,7 +65,7 @@ async function journey(){
   check('Home shows the realm caption and one Play button',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>text.includes('Enter your own realm.')&&!/installed/i.test(text)));
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
-  check('Updates has one manual check',await page.locator('#updates-page').innerText().then(text=>!/Server \+ client|Install/i.test(text))&&await page.locator('#check-launcher').isEnabled());
+  check('Updates has separate Server + client and Launcher checks that have not run',await page.locator('#updates-page').innerText().then(text=>text.includes('Server + client')&&text.includes('Launcher')&&!/available|Up to date/i.test(text))&&await page.locator('#check-server').isEnabled()&&await page.locator('#check-launcher').isEnabled());
   await page.screenshot({path:join(out,'launcher-updates.png')});
   check('Import before the first Play explains why it waits',/Click Play once/.test(await page.evaluate(()=>window.launcher.importPlayer().then(()=>'',error=>error.message))));
   await play();
