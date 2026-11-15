@@ -17,5 +17,6 @@
     "version": "0.7.1-openrotmg.16",
     "sourceCommit": "89a7049965f3090e706265670df309a5128233ac",
     "bundleSha256": "579236cd5a97edd3ee82c82e7e6c96976178bdc8941bfb2a64b6693f05160435"
-  }
+  },
+  "serverMinLauncher": "1.0.5"
 }

@@ -4,7 +4,10 @@ import {mkdir,mkdtemp,readFile,writeFile,readdir,realpath,readlink} from 'node:f
 import {resolve,join,dirname,basename} from 'node:path';
 import {release,version as osVersion} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
+import {create} from 'tar';
+import {generateKeyPairSync,sign} from 'node:crypto';
 import {hashFile,targetName} from '../dist/update-format.js';
+import {SERVER_DOMAIN,serverAssetURL} from '../dist/server-updates.js';
 import {launchUpdateTest} from './test-launch.mjs';
 import {updateTestDisplay} from './test-display.mjs';
 import {consumerEnvironment,runtimeLinkage} from './native-boundaries.mjs';
@@ -41,28 +44,28 @@ async function journey(){
   report.linkage=runtimeLinkage(binary);check('The server needs only system libraries',true);
   const fixtureState=join(out,'synthetic donor'),portable=join(out,'exported account.json');
   execFileSync(binary,['--backup-fixture',fixtureState,data],{env,timeout:30000});execFileSync(binary,['--local-save','export',fixtureState,data,'1',portable],{env,timeout:30000});
-  const launch=async()=>{
+  const launch=async(extra='')=>{
    // Any attempt to leave this computer fails the test: the game must work offline and only check for updates on request.
-   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:paths.executable,profile:paths.player,env,policy:{},setupMain:`globalThis.offlineAttempts=[];const original=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(!/^http:\\/\\/127\\.0\\.0\\.1:/.test(value)){globalThis.offlineAttempts.push(value);throw new TypeError('Offline test refused '+value);}return original(url,...rest);};`}));
+   ({app}=await launchUpdateTest({executablePath:paths.launcher,electronPath:paths.executable,profile:paths.player,env,policy:{},setupMain:`globalThis.offlineAttempts=[];const original=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(!/^http:\\/\\/127\\.0\\.0\\.1:/.test(value)){globalThis.offlineAttempts.push(value);throw new TypeError('Offline test refused '+value);}return original(url,...rest);};`+extra}));
    page=await app.firstWindow();await page.waitForFunction(()=>!!window.launcher);await wait(async()=>(await page.locator('#play').isEnabled()),'launcher ready');
   };
   const offlineAttempts=()=>app.evaluate(()=>globalThis.offlineAttempts);
   const choose=(path,confirm)=>app.evaluate((_electron,{path,confirm})=>{const f=globalThis.runtimeUpdateTest;if(path!==undefined){f.allowedFiles.push(path);f.choices.push(path);}if(confirm!==undefined)f.confirms.push(confirm);},{path,confirm});
   const status=()=>page.evaluate(()=>window.launcher.status());
   const backups=async()=>(await readdir(join(paths.player,'backups'))).filter(name=>name.endsWith('.sqlite'));
-  const play=async()=>{
+  const play=async(server=binary)=>{
    await page.locator('#show-home').click();await page.locator('#play').click();
    await wait(async()=>{const view=await status();assert.notEqual(view.status,'failed',view.message);return view.status==='ready';},'bundled server ready',650000);
-   const view=await status(),image=process.platform==='linux'?await readlink(`/proc/${view.pid}/exe`):binary;
-   check('Play runs the bundled server',await realpath(image)===await realpath(binary));
+   const view=await status(),image=process.platform==='linux'?await readlink(`/proc/${view.pid}/exe`):server;
+   check('Play runs the expected server',await realpath(image)===await realpath(server));
    return view;
   };
   const close=async()=>{const view=await status(),main=app.process().pid,closed=app.waitForEvent('close');await page.locator('#close-window').click();assert.equal((await closed).code,0);assert(!alive(main));if(view.pid)assert(!alive(view.pid));await app.detach();app=undefined;};
   await launch();
-  check('Home has one Play button and no caption',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>!/Enter your own realm|installed/i.test(text)));
+  check('Home shows the realm caption and one Play button',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>text.includes('Enter your own realm.')&&!/installed/i.test(text)));
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
-  check('Updates has one manual check',await page.locator('#updates-page').innerText().then(text=>!/Server \+ client|Install/i.test(text))&&await page.locator('#check-launcher').isEnabled());
+  check('Updates has separate Server + client and Launcher checks that have not run',await page.locator('#updates-page').innerText().then(text=>text.includes('Server + client')&&text.includes('Launcher')&&!/available|Up to date/i.test(text))&&await page.locator('#check-server').isEnabled()&&await page.locator('#check-launcher').isEnabled());
   await page.screenshot({path:join(out,'launcher-updates.png')});
   check('Import before the first Play explains why it waits',/Click Play once/.test(await page.evaluate(()=>window.launcher.importPlayer().then(()=>'',error=>error.message))));
   await play();
@@ -92,6 +95,20 @@ async function journey(){
   check('Play backs up an existing save first',(await backups()).some(name=>name.includes('-pre-start-')));
   await game.verify(false,reopened.clientURL);
   check('Reopening keeps progress',(await offlineAttempts()).length===0);
+  await close();
+  // A privately signed next server stands in for a published server-only release.
+  const parts=receipt.version.split('.').map(Number);parts[2]++;const next=parts.join('.'),fixture=join(out,'server-update'),name=`server-${receipt.target}.tar.gz`;await mkdir(fixture);
+  await create({file:join(fixture,name),cwd:runtime,gzip:true,portable:true},await readdir(runtime));
+  const {privateKey,publicKey}=generateKeyPairSync('ed25519'),archive=await readFile(join(fixture,name));
+  const manifest=Buffer.from(JSON.stringify({format:1,kind:'openrotmg-server',version:next,target:receipt.target,minLauncher:receipt.version,payload:{name,url:serverAssetURL(next,name),bytes:archive.length,sha256:await hashFile(join(fixture,name))}}));
+  await writeFile(join(fixture,`server-${receipt.target}.json`),manifest);await writeFile(join(fixture,`server-${receipt.target}.json.sig`),sign(null,Buffer.concat([SERVER_DOMAIN,manifest]),privateKey));
+  const release=[{tag_name:'v'+next,draft:false,prerelease:false,body:'',assets:[{name:`server-${receipt.target}.json`}]}];
+  await launch(`require(process.resourcesPath+'/app.asar/dist/update-policy.js').LAUNCHER_PUBLIC_KEY=${JSON.stringify(publicKey.export({format:'pem',type:'spki'}))};const offline=globalThis.fetch;globalThis.fetch=async(url,...rest)=>{const value=String(url);if(value.startsWith('https://api.github.com/'))return new Response(${JSON.stringify(JSON.stringify(release))});if(value.startsWith('https://github.com/'))return new Response(require('node:fs').readFileSync(require('node:path').join(${JSON.stringify(fixture)},value.split('/').pop())));return offline(url,...rest);};`);
+  await page.locator('#show-updates').click();await page.locator('#check-server').click();await page.locator('#install-server').waitFor({state:'visible'});
+  await page.screenshot({path:join(out,'server-update-available.png')});await page.locator('#install-server').click();
+  await wait(async()=>(await page.evaluate(()=>window.launcher.serverUpdates())).installed===next,'server update installed',300000);
+  const updated=await play(join(storage,'servers',next,process.platform==='win32'?'openrotmg.exe':'openrotmg'));await game.verify(false,updated.clientURL);
+  check('Server + client updates without a launcher update and keeps progress',true);
   await close();
   await verifyLauncherUpdate({paths,env,out,report,check,verifyProgress:url=>game.verify(true,url),closeGame:()=>game.close()});
   await verifyLegacyLauncher({artifact,env,out,report,check});

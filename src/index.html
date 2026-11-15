@@ -11,7 +11,7 @@
 <div class="workspace">
 <p id="error" class="notice error" role="alert"></p>
 <div id="home-page">
-<section class="hero"><img class="portal" src="assets/nexus-portal.png" alt="Nexus portal"><button id="play" class="primary" disabled>Play</button><p id="message" role="status">Loading…</p><progress id="progress" aria-label="Preparing game" hidden></progress><button id="home-stop" class="quiet" hidden>Save &amp; stop</button></section>
+<section class="hero"><img class="portal" src="assets/nexus-portal.png" alt="Nexus portal"><p id="realm-caption">Enter your own realm.</p><button id="play" class="primary" disabled>Play</button><p id="message" role="status">Loading…</p><progress id="progress" aria-label="Preparing game" hidden></progress><button id="home-stop" class="quiet" hidden>Save &amp; stop</button></section>
 <nav class="shortcuts" aria-label="Tools"><button id="import" class="quiet">Import account</button><button id="show-backups" class="quiet">Backups</button><button id="show-updates" class="quiet">Updates</button></nav>
 </div>
 <div id="settings-page" hidden>
@@ -24,7 +24,8 @@
 <section class="group"><h3>Save location</h3><code id="save-location" class="path"></code><button id="save-folder" disabled>Open save folder</button></section>
 </section>
 <section id="updates-page" role="tabpanel" aria-labelledby="tab-updates" hidden>
-<section class="group" aria-label="Updates"><h3>Updates</h3><p id="launcher-version" class="version"></p><p id="launcher-update-message" class="setting-status" role="status"></p><progress id="launcher-progress" aria-label="Update progress" hidden></progress><nav><button id="check-launcher" disabled>Check for updates</button><button id="download-launcher" hidden>Update and reopen</button><button id="recover-launcher" hidden>Check launcher files</button></nav></section>
+<div class="columns"><section class="group" aria-label="Server and client updates"><h3>Server + client</h3><p id="server-version" class="version"></p><p id="server-update-message" class="setting-status" role="status"></p><progress id="server-progress" aria-label="Server update progress" hidden></progress><nav><button id="check-server">Check for updates</button><button id="install-server" hidden>Update</button></nav></section>
+<section class="group" aria-label="Launcher updates"><h3>Launcher</h3><p id="launcher-version" class="version"></p><p id="launcher-update-message" class="setting-status" role="status"></p><progress id="launcher-progress" aria-label="Update progress" hidden></progress><nav><button id="check-launcher" disabled>Check for updates</button><button id="download-launcher" hidden>Update and reopen</button><button id="recover-launcher" hidden>Check launcher files</button></nav></section></div>
 </section>
 <section id="advanced-page" role="tabpanel" aria-labelledby="tab-advanced" hidden>
 <section class="group"><h3>Server</h3><label class="check"><input id="bots-enabled" type="checkbox" disabled> Enable server-side bots</label></section>

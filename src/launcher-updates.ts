@@ -8,6 +8,15 @@ import {REPOSITORY,Target,decodeJson,demand,integer,launcherVersion,versionAtLea
 
 export type LauncherUpdateView={installed:string;available?:string;phase:'idle'|'checking'|'current'|'available'|'error'|'downloading'|'installing'|'recovery';message:string;blocked?:boolean;progress?:UpdateProgress};
 const discovery=`https://api.github.com/repos/${REPOSITORY}/releases?per_page=100`;
+export async function fetchReleases(request:typeof fetch,signal:AbortSignal):Promise<any[]>{
+    const response=await request(discovery,{redirect:'error',signal,headers:{accept:'application/vnd.github+json'}});
+    if(!response.ok){await response.body?.cancel();throw Error(`GitHub releases returned HTTP ${response.status}`);}
+    if(response.headers.get('link')?.includes('rel="next"')){await response.body?.cancel();throw Error('Release history exceeds the checked 100-release bound');}
+    demand(response.body,'Release response has no body');const reader=response.body.getReader(),parts:Uint8Array[]=[];let size=0,complete=false;
+    try{for(;;){const chunk=await reader.read();if(chunk.done){complete=true;break;}size+=chunk.value.byteLength;demand(size<=2*1024*1024,'Release response exceeds 2 MiB');parts.push(chunk.value);}}
+    finally{if(!complete)await reader.cancel();reader.releaseLock();}
+    const releases=decodeJson(Buffer.concat(parts),2*1024*1024);demand(Array.isArray(releases)&&releases.length<=100,'Invalid release list');return releases;
+}
 export class LauncherUpdates extends EventEmitter {
   private reporter=new UpdateReporter(value=>{this.state.progress=value;this.state.message=progressText(value);this.changed();},message=>this.emit('log',message));
   private state:LauncherUpdateView;private task?:Promise<LauncherUpdateView>;private controller?:AbortController;
@@ -38,13 +47,7 @@ export class LauncherUpdates extends EventEmitter {
     }).finally(()=>{this.task=undefined;this.controller=undefined;this.changed();});this.task=task;return task;
   }
   private async discover(signal:AbortSignal):Promise<LauncherUpdateView>{
-    const response=await this.request(discovery,{redirect:'error',signal,headers:{accept:'application/vnd.github+json'}});
-    if(!response.ok){await response.body?.cancel();throw Error(`GitHub launcher releases returned HTTP ${response.status}`);}
-    if(response.headers.get('link')?.includes('rel="next"')){await response.body?.cancel();throw Error('Launcher history exceeds the checked 100-release bound');}
-    demand(response.body,'Launcher release response has no body');const reader=response.body.getReader(),parts:Uint8Array[]=[];let size=0,complete=false;
-    try{for(;;){const chunk=await reader.read();if(chunk.done){complete=true;break;}size+=chunk.value.byteLength;demand(size<=2*1024*1024,'Launcher release response exceeds 2 MiB');parts.push(chunk.value);}}
-    finally{if(!complete)await reader.cancel();reader.releaseLock();}
-    const releases=decodeJson(Buffer.concat(parts),2*1024*1024);demand(Array.isArray(releases)&&releases.length<=100,'Invalid launcher release list');
+    const releases=await fetchReleases(this.request,signal);
     let latest:{version:string}|undefined;
     for(const release of releases){
       demand(release&&typeof release==='object','Invalid launcher release record');
