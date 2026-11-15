@@ -10,6 +10,7 @@
 <header><div class="brand"><img src="assets/amulet.png" alt=""><h1>Open RotMG</h1></div><nav aria-label="Launcher"><button id="show-home" aria-current="page">Play</button><button id="show-settings" aria-label="Settings">Settings</button></nav></header>
 <div class="workspace">
 <p id="error" class="notice error" role="alert"></p>
+<section id="problem" class="problem" role="alert" hidden><h2 id="problem-title"></h2><p id="problem-said"></p><p><b>Next step:</b> <span id="problem-next"></span></p><button id="copy-report">Copy report</button></section>
 <div id="home-page">
 <section class="hero"><img class="portal" src="assets/nexus-portal.png" alt="Nexus portal"><p id="realm-caption">Enter your own realm.</p><button id="play" class="primary" disabled>Play</button><p id="message" role="status">Loading…</p><progress id="progress" aria-label="Preparing game" hidden></progress><button id="home-stop" class="quiet" hidden>Save &amp; stop</button></section>
 <nav class="shortcuts" aria-label="Tools"><button id="import" class="quiet">Import account</button><button id="show-backups" class="quiet">Backups</button><button id="show-updates" class="quiet">Updates</button></nav>
@@ -29,7 +30,7 @@
 </section>
 <section id="advanced-page" role="tabpanel" aria-labelledby="tab-advanced" hidden>
 <section class="group"><h3>Server</h3><label class="check"><input id="bots-enabled" type="checkbox" disabled> Enable server-side bots</label></section>
-<section id="logs-page" class="group"><div class="section-head"><h3>Logs</h3><button id="copy-logs">Copy log</button></div><input id="log-search" aria-label="Search logs" placeholder="Search logs"><pre id="logs" tabindex="0" aria-label="Server logs"></pre></section>
+<section id="logs-page" class="group"><div class="section-head"><h3>Logs</h3><button id="copy-logs">Copy report</button></div><input id="log-search" aria-label="Search logs" placeholder="Search logs"><pre id="logs" tabindex="0" aria-label="Server logs"></pre></section>
 </section>
 </div>
 </div>

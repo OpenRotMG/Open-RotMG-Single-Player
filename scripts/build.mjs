@@ -29,6 +29,6 @@ export async function assembleRuntime(input,pins,destination){
 
 assert(process.env.OPENROTMG_BUILD_INPUTS&&isAbsolute(process.env.OPENROTMG_BUILD_INPUTS),'Set OPENROTMG_BUILD_INPUTS to an absolute build-input JSON (see docs/development.md)');
 await assembleRuntime(JSON.parse(await readFile(process.env.OPENROTMG_BUILD_INPUTS,'utf8')),JSON.parse(await readFile('source-pins.json','utf8')),resolve('runtime'));
-await cp('.qa/renderer/renderer.js','dist/renderer.js');for(const file of ['index.html','style.css','game.html','game.css'])await cp(`src/${file}`,`dist/${file}`);
+await cp('.qa/renderer/renderer.js','dist/renderer.js');for(const file of ['index.html','style.css','game.html','game.css','game-report.js'])await cp(`src/${file}`,`dist/${file}`);
 await cp('src/assets','dist/assets',{recursive:true});
 console.log(`Bundled pinned server and client for ${process.platform}/${process.arch}`);

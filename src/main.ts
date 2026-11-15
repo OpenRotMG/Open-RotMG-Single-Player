@@ -13,6 +13,8 @@ import {ServerUpdates,newestServer} from './server-updates';
 import { targetName } from './update-format';
 import { gameSite } from './game-site';
 import {UserMessage,UserNotice} from './user-message';
+import {Journal,Problem,explain,identity,report} from './diagnostics';
+import {dirname} from 'node:path';
 import {desktopName,installDesktopIcon} from './desktop-icon';
 
 app.setName('Open RotMG Single Player');
@@ -43,18 +45,34 @@ else {
   let launcherUpdates: LauncherUpdates;
   let serverUpdates: ServerUpdates;
   let site: Awaited<ReturnType<typeof gameSite>>;
-  const view = () => ({...runtime.view(),clientURL:runtime.view().status==='ready'?site.url():undefined});
+  let journal: Journal, about: Record<string, unknown>, lastProblem: Problem|undefined;
+  const problem=(error:unknown,step:string)=>{lastProblem=explain(error,step);journal.write('problem',{...lastProblem,error:String(error)});return lastProblem;};
+  let shownFailure:Error|undefined,failureProblem:Problem|undefined;
+  const view = () => {
+    const current=runtime.view();
+    if(current.status==='failed'&&runtime.failure&&runtime.failure!==shownFailure){shownFailure=runtime.failure;failureProblem=problem(runtime.failure,'playing');}
+    return {...current,problem:current.status==='failed'?failureProblem:undefined,clientURL:current.status==='ready'?site.url():undefined};
+  };
   let quitting = false, closing = false;
   const index = pathToFileURL(join(__dirname, 'index.html')).href;
+  // Status polling and window chrome would drown the journal's record of what the player did.
+  const journaled=(channel:string)=>!/:status$|^window:|^report:|^save:(list|location)$/.test(channel);
   app.whenReady().then(async () => {
     const userData=app.isPackaged?await realpath(playerData):playerData,storage=app.isPackaged?await realpath(app.getPath('userData')):app.getPath('userData');
+    journal=new Journal(storage);
+    process.on('uncaughtException',error=>{journal.write('launcher error',{error:String(error.stack??error)});dialog.showErrorBox('Something went wrong in the launcher',`${error}\n\nUse Copy report in Settings → Advanced and post it in #help on Discord.`);});
+    process.on('unhandledRejection',error=>{journal.write('launcher error',{error:String((error as Error)?.stack??error)});});
+    app.on('child-process-gone',(_event,details)=>journal.write('helper process gone',details as unknown as Record<string,unknown>));
     const server=await newestServer(join(process.resourcesPath,'runtime'),app.getVersion(),storage);
     runtime = new Runtime(server.root, userData, storage);
+    runtime.on('event',(event,details)=>journal.write(event,details));
     await runtime.loadSettings();
-    site = await gameSite(runtime);
+    site = await gameSite(runtime,47832,(kind,message)=>{journal.write('game page '+kind,{message});runtime.reportProblem(`Game page ${kind}: ${message}`);});
     const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
     const root=portableRoot?await realpath(portableRoot):undefined;
+    about=await identity({launcher:app.getVersion(),server:server.version,serverRoot:server.root,folder:root??dirname(userData),storage});
+    journal.write('launcher started',about);runtime.reportUpdate('Started: '+Object.entries(about).map(([key,value])=>`${key}=${value}`).join(' '));
     const appPolicy=createLauncherPolicy(process.resourcesPath,app.getVersion());
     const store=root?new LauncherStore({root,generation,installed:app.getVersion(),resources:process.resourcesPath,policy:appPolicy,native:join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer')}):undefined;
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
@@ -66,6 +84,7 @@ else {
     window = new BrowserWindow({ icon:join(__dirname,'assets/app-icon.png'), width: 900, height: 700, minWidth: 360, minHeight: 480, frame: false, title: 'Open RotMG Single Player',
       webPreferences: { preload: join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true } });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    window.webContents.on('render-process-gone',(_event,details)=>journal.write('launcher window crashed',details as unknown as Record<string,unknown>));
     window.webContents.on('will-navigate', event => event.preventDefault());
     window.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
     window.webContents.session.webRequest.onBeforeRequest((details, callback) => callback({ cancel: details.url !== index && !details.url.startsWith(pathToFileURL(__dirname + '/').href) }));
@@ -87,15 +106,22 @@ else {
       if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== index || !valid(args)) throw new Error('Rejected untrusted IPC sender or arguments');
       return (async()=>{
         try{
-          if(closing&&!['launcher:status','server:status','runtime:status','logs:copy','window:minimize','window:maximize'].includes(channel))throw new UserNotice('The launcher is closing. Please wait.');
-          if(launcherUpdates.busy&&!['launcher:status','server:status','runtime:status','window:minimize','window:maximize','logs:copy','save:location',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserNotice('The launcher is updating. Please wait.');
+          if(closing&&!['launcher:status','server:status','runtime:status','report:copy','window:minimize','window:maximize'].includes(channel))throw new UserNotice('The launcher is closing. Please wait.');
+          if(launcherUpdates.busy&&!['launcher:status','server:status','runtime:status','window:minimize','window:maximize','report:copy','save:location',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserNotice('The launcher is updating. Please wait.');
           if(launcherUpdates.view().blocked&&['runtime:start','runtime:client','runtime:bots','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
-          return{ok:true,value:await action(...args)};
+          const started=performance.now(),value=await action(...args);
+          if(journaled(channel))journal.write(channel,{ok:true,ms:Math.round(performance.now()-started)});
+          return{ok:true,value};
         }
-        catch(error){if(error instanceof UserNotice)return{ok:false,error:error.message,severity:'info'};runtime.reportProblem(error);return{ok:false,error:error instanceof UserMessage?error.message:'This action did not finish. See Advanced → Logs for details.'};}
+        catch(error){
+          if(error instanceof UserNotice)return{ok:false,error:error.message,severity:'info'};
+          runtime.reportProblem(error);
+          if(error instanceof UserMessage){journal.write(channel,{ok:false,message:error.message});return{ok:false,error:error.message};}
+          const found=problem(error,channel);return{ok:false,error:found.said,problem:found};
+        }
       })();
     });
-    checked('logs:copy',text=>clipboard.writeText(text as string),args=>args.length===1&&typeof args[0]==='string'&&Buffer.byteLength(args[0])<=1024*1024);
+    checked('report:copy',()=>clipboard.writeText(report(about,lastProblem,journal,runtime.view().logs)));
     checked('window:minimize', () => window!.minimize());
     checked('window:maximize', () => { if(window!.isMaximized())window!.unmaximize();else window!.maximize(); });
     checked('window:close', () => window!.close());

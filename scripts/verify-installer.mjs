@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import {spawn,execFileSync} from 'node:child_process';
-import {mkdir,mkdtemp,readFile,writeFile,readdir,realpath,readlink} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,writeFile,readdir,realpath,readlink,rename,rm} from 'node:fs/promises';
 import {resolve,join,dirname,basename} from 'node:path';
-import {release,version as osVersion} from 'node:os';
+import {release,version as osVersion,homedir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {create} from 'tar';
 import {generateKeyPairSync,sign} from 'node:crypto';
@@ -96,6 +96,14 @@ async function journey(){
   await game.verify(false,reopened.clientURL);
   check('Reopening keeps progress',(await offlineAttempts()).length===0);
   await close();
+  // A server that cannot run is the kind of failure players report; the launcher must explain it and copy a useful report.
+  await rename(binary,binary+'.real');await writeFile(binary,'not a program',{mode:0o755});
+  await launch();await page.locator('#play').click();await page.locator('#problem').waitFor({state:'visible'});
+  const shown=await page.locator('#problem').innerText();await page.screenshot({path:join(out,'launcher-problem.png')});
+  check('A server that cannot run shows what failed, what the system said and a next step',shown.includes("Couldn't start the game")&&/refused to run/.test(shown)&&shown.includes('Next step:'));
+  await page.locator('#copy-report').click();const copied=await app.evaluate(({clipboard})=>clipboard.readText());await writeFile(join(out,'report.txt'),copied);
+  check('Copy report has versions, the problem and recent events without home folders',/^launcher: \d/m.test(copied)&&copied.includes('refused to run')&&copied.includes('"event":"problem"')&&!copied.includes(homedir()));
+  await close();await rm(binary);await rename(binary+'.real',binary);
   // A privately signed next server stands in for a published server-only release.
   const parts=receipt.version.split('.').map(Number);parts[2]++;const next=parts.join('.'),fixture=join(out,'server-update'),name=`server-${receipt.target}.tar.gz`;await mkdir(fixture);
   await create({file:join(fixture,name),cwd:runtime,gzip:true,portable:true},await readdir(runtime));

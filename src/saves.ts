@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Runtime, serverCommandPath } from './runtime';
 
 import {UserMessage} from './user-message';
+import {launchFailure} from './diagnostics';
 
 export type ImportPreview = { account: number; login: string; replaced: boolean; disclosure: string; exported_at: number; name: string; character_count: number; expected: string };
 export type SnapshotPreview = { verified: true; schema: number; scope: 'all-local-accounts'; account_count: number; character_count: number };
@@ -52,6 +53,8 @@ export async function saveAuthority<T>(runtime: SaveAuthorityRuntime, command: '
     runtime.blockAmbiguousSave(error);
     return error;
   };
+  // A program that never started cannot have changed the save, so this is reported without blocking saves.
+  if (spawnError && child.pid === undefined) throw await launchFailure(binary, spawnError);
   if (spawnError) throw unverified(`could not start: ${spawnError.message}`);
   if (signal || overflow || (pipeError && (code === 0 || (pipeError as NodeJS.ErrnoException).code !== 'EPIPE'))) throw unverified(`exit=${code}, signal=${signal}, outputLimit=${overflow}, stdin=${pipeError?.message ?? 'closed'}`);
   if (code === null) throw unverified('child closed without an exit status');
