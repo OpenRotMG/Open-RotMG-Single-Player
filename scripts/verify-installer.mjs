@@ -62,7 +62,7 @@ async function journey(){
   };
   const close=async()=>{const view=await status(),main=app.process().pid,closed=app.waitForEvent('close');await page.locator('#close-window').click();assert.equal((await closed).code,0);assert(!alive(main));if(view.pid)assert(!alive(view.pid));await app.detach();app=undefined;};
   await launch();
-  check('Home has one Play button and no caption',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>!/Enter your own realm|installed/i.test(text)));
+  check('Home shows the realm caption and one Play button',await page.locator('#play').innerText()==='Play'&&await page.locator('#home-page').innerText().then(text=>text.includes('Enter your own realm.')&&!/installed/i.test(text)));
   await page.screenshot({path:join(out,'launcher-home.png')});
   await page.locator('#show-settings').click();await page.locator('#tab-updates').click();
   check('Updates has one manual check',await page.locator('#updates-page').innerText().then(text=>!/Server \+ client|Install/i.test(text))&&await page.locator('#check-launcher').isEnabled());
