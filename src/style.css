@@ -16,3 +16,4 @@ input,select{padding:7px 9px;color:#202020;background:white;border:1px solid #7f
 .password-field{position:relative;margin:6px 0 14px}.password-field input{display:block;width:100%;margin:0;padding-right:40px}.password-field button{position:absolute;right:2px;top:50%;transform:translateY(-50%);min-width:0;padding:4px 8px;border:0;background:none;box-shadow:none}
 .columns{display:grid;grid-template-columns:1fr 1fr;gap:18px}.columns>.group{margin:0}#realm-caption{margin-top:-10px}
 .problem{background:#fff0e6;border:1px solid #ca9a89;color:#5b1d16;padding:14px 16px;margin-bottom:18px;border-radius:3px}.problem h2{font-size:15px;margin:0 0 8px;color:#842b21}.problem p{margin:6px 0}.problem button{margin-top:8px}
+#multiplayer-page .hint{margin-top:10px}#internet{margin-top:18px}#multiplayer-page code{font-size:13px}

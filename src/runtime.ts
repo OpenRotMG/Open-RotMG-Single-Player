@@ -66,7 +66,7 @@ export class Runtime extends EventEmitter {
     this.lines = this.lines.slice(-MAX_LOG);
     this.emit('change', this.view());
   }
-  reportUpdate(message:string){const line=new Date().toISOString()+' [updates] '+message;this.line(line);console.info(line);}
+  reportUpdate(message:string,area='updates'){const line=new Date().toISOString()+` [${area}] `+message;this.line(line);console.info(line);}
   reportProblem(error:unknown){console.error(error);this.line(error instanceof Error?error.stack??error.message:String(error));}
   /** Blocks further saves this session; the server's state lock and startup backup protect the next launch. */
   private fail(error: unknown) {
@@ -110,7 +110,7 @@ export class Runtime extends EventEmitter {
       data, client: clientPath, state, ...operational, client_generation: this.generation,
       // The server writes and verifies this full backup before it may migrate or open the save.
       pre_migration_backup: join(backups, `${Date.now()}-pre-start-${randomUUID()}.sqlite`),
-      behind_proxy: false, shore_bots: this.settings.bots, bot_llm: false, max_players: 85, realm_seed: 42 }, null, 2), { mode: 0o600 });
+      behind_proxy: true, shore_bots: this.settings.bots, bot_llm: false, max_players: 85, realm_seed: 42 }, null, 2), { mode: 0o600 });
     const name = new Date().toISOString().replaceAll(':', '-');
     // Direct inherited file descriptors retain EOF-drain diagnostics even if Electron crashes.
     const log = await open(join(this.diagnostics, `${name}.jsonl`), 'wx+', 0o600);

@@ -3,6 +3,7 @@ import type { ImportPreview, SaveResult, BackupFile, LocalAccount } from './save
 import type { LauncherUpdateView } from './launcher-updates';
 import type { ServerUpdateView } from './server-updates';
 import type { Problem } from './diagnostics';
+import type { MultiplayerView } from './multiplayer';
 declare global {
   interface Window { launcher: {
     copyReport():Promise<void>;
@@ -13,14 +14,15 @@ declare global {
     importPlayer():Promise<ImportPreview|undefined>; confirmImport(expected:string,password:string,confirmation:string,replace:boolean):Promise<SaveResult|undefined>; cancelImport():Promise<boolean>;
     listAccounts():Promise<LocalAccount[]>;editAccount(account:number,expected:string,username:string,password:string):Promise<LocalAccount[]>;
     makeBackup():Promise<void>; listBackups():Promise<BackupFile[]>; saveLocation():Promise<string>; openSaveFolder():Promise<void>; openBackupFolder():Promise<void>; restoreBackup(name:string):Promise<void>;
+    multiplayer():Promise<MultiplayerView>; host():Promise<MultiplayerView>; online():Promise<MultiplayerView>; unhost():Promise<void>; join(address:string):Promise<void>; copy(text:string):Promise<void>; multiplayerChanged(callback:(view:MultiplayerView)=>void):void;
     changed(callback:(view:View)=>void):void;
   } }
 }
 const element = <T extends HTMLElement>(id:string):T => { const node=document.getElementById(id);if(!node)throw Error('Missing launcher control: '+id);return node as T; };
 const button = (id:string) => element<HTMLButtonElement>(id);
 const pages=['accounts','backups','updates','advanced'] as const;
-type Page = 'home'|typeof pages[number];
-let page:Page='home',runtimeView:View|undefined,launcherView:LauncherUpdateView|undefined,serverView:ServerUpdateView|undefined;
+type Page = 'home'|'multiplayer'|typeof pages[number];
+let page:Page='home',multiplayerView:MultiplayerView|undefined,runtimeView:View|undefined,launcherView:LauncherUpdateView|undefined,serverView:ServerUpdateView|undefined;
 let actionProblem:Problem|undefined,preview:ImportPreview|undefined,requesting=false,submitting=false,actionError='',backups:BackupFile[]=[],selectedBackup:string|undefined,backupRequest=0;
 function renderLogs(){
   const lines=[runtimeView?.message,serverView?.message,launcherView?.message,...(runtimeView?.logs??[]),actionError];
@@ -57,6 +59,11 @@ function render(){
   const value=launcherView?.progress,bar=element<HTMLProgressElement>('launcher-progress');bar.hidden=!launcherView||!['checking','downloading','installing'].includes(launcherView.phase)||!value;if(value&&value.completed!==undefined&&value.total!==undefined){bar.max=value.total;bar.value=value.completed;}else bar.removeAttribute('value');
   const problem=actionProblem??(v as View&{problem?:Problem}|undefined)?.problem;element('problem').hidden=!problem;
   if(problem){element('problem-title').textContent=problem.title;element('problem-said').textContent=problem.said;element('problem-next').textContent=problem.next;}
+  const m=multiplayerView,hosting=Boolean(m&&m.phase!=='off');
+  element('host-off').hidden=hosting;element('host-on').hidden=!hosting;button('host').disabled=busy||failed;button('join').disabled=requesting;
+  element('home-address').textContent=m?.home??'';element('internet').hidden=!m?.internet;element('internet-address').textContent=m?.internet??'';
+  element('internet-label').textContent=m?.phase==='link'?'Friends anywhere join with this share link:':'Friends anywhere join with your internet address:';
+  element('multiplayer-message').textContent=m?.message??'';button('online').hidden=!['home','checking'].includes(m?.phase??'');button('online').disabled=requesting;button('unhost').disabled=requesting;
   if(v?.closing||(submitting&&!v?.operation))hidePreview();
   renderLogs();
 }
@@ -68,9 +75,9 @@ async function invoke(action:()=>Promise<unknown>){
 }
 function showPage(next:Page){
   element('account-list').replaceChildren();
-  page=next;element('home-page').hidden=page!=='home';element('settings-page').hidden=page==='home';
+  page=next;const settings=(pages as readonly string[]).includes(page);element('home-page').hidden=page!=='home';element('multiplayer-page').hidden=page!=='multiplayer';element('settings-page').hidden=!settings;
   for(const name of pages){element(`${name}-page`).hidden=page!==name;button(`tab-${name}`).setAttribute('aria-selected',String(page===name));button(`tab-${name}`).tabIndex=page===name?0:-1;}
-  button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-settings').setAttribute('aria-current',page!=='home'?'page':'false');
+  button('show-home').setAttribute('aria-current',page==='home'?'page':'false');button('show-multiplayer').setAttribute('aria-current',page==='multiplayer'?'page':'false');button('show-settings').setAttribute('aria-current',settings?'page':'false');
   if(page==='backups'&&!['downloading','installing'].includes(launcherView?.phase??''))void refreshBackups().catch(reportError);
   if(page==='accounts'){element('accounts-status').textContent='';if(runtimeView?.status==='stopped'&&!button('load-accounts').disabled)void invoke(async()=>renderAccounts(await window.launcher.listAccounts()));}
 }
@@ -91,11 +98,16 @@ async function refreshBackups(){
 function hidePreview(){preview=undefined;for(const id of ['import-password','import-confirmation'])element<HTMLInputElement>(id).value='';const modal=element<HTMLDialogElement>('import-preview');if(modal.open)modal.close();}
 async function play(){if(runtimeView?.status!=='ready')await window.launcher.start();await window.launcher.client();}
 button('import').onclick=()=>showPage('accounts');
-button('show-home').onclick=()=>showPage('home');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-updates').onclick=()=>showPage('updates');
+button('show-home').onclick=()=>showPage('home');button('show-multiplayer').onclick=()=>showPage('multiplayer');button('show-settings').onclick=()=>showPage('backups');button('show-backups').onclick=()=>showPage('backups');button('show-updates').onclick=()=>showPage('updates');
 for(const name of pages){button(`tab-${name}`).onclick=()=>showPage(name);button(`tab-${name}`).onkeydown=event=>{const index=pages.indexOf(name),next=event.key==='ArrowRight'?(index+1)%pages.length:event.key==='ArrowLeft'?(index+pages.length-1)%pages.length:event.key==='Home'?0:event.key==='End'?pages.length-1:undefined;if(next!==undefined){event.preventDefault();showPage(pages[next]);button(`tab-${pages[next]}`).focus();}};}
 button('play').onclick=()=>void invoke(play);
 element<HTMLInputElement>('bots-enabled').onchange=event=>{const enabled=(event.target as HTMLInputElement).checked;void invoke(async()=>{await window.launcher.setBots(enabled);runtimeView=await window.launcher.status();});};
 button('home-stop').onclick=()=>void invoke(async()=>{await window.launcher.stop();await refreshBackups();});
+button('host').onclick=()=>void invoke(async()=>{multiplayerView=await window.launcher.host();});
+button('online').onclick=()=>void invoke(async()=>{multiplayerView=await window.launcher.online();});
+button('unhost').onclick=()=>void invoke(()=>window.launcher.unhost());
+element<HTMLFormElement>('join-form').onsubmit=event=>{event.preventDefault();void invoke(()=>window.launcher.join(element<HTMLInputElement>('join-address').value));};
+for(const id of ['home','internet'])button(`copy-${id}`).onclick=()=>void invoke(()=>window.launcher.copy(element(`${id}-address`).textContent!));
 button('help').onclick=()=>void invoke(()=>window.launcher.help());
 element('export-account').onclick=event=>{event.preventDefault();void invoke(()=>window.launcher.help());};
 function renderAccounts(accounts:LocalAccount[]){
@@ -141,5 +153,5 @@ button('recover-launcher').onclick=()=>void invoke(async()=>{launcherView=await 
 element('log-search').addEventListener('input',renderLogs);
 for(const id of ['copy-logs','copy-report'])button(id).onclick=()=>void window.launcher.copyReport().catch(reportError);
 for(const [id,action] of [['minimize',()=>window.launcher.minimize()],['maximize',()=>window.launcher.maximize()],['close-window',()=>window.launcher.close()]] as const)button(id).onclick=()=>void action().catch(reportError);
-window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.serverChanged(view=>{serverView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
-void invoke(async()=>{runtimeView=await window.launcher.status();launcherView=await window.launcher.launcherUpdates();serverView=await window.launcher.serverUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});
+window.launcher.changed(view=>{runtimeView=view;render();});window.launcher.multiplayerChanged(view=>{multiplayerView=view;render();});window.launcher.serverChanged(view=>{serverView=view;render();});window.launcher.launcherChanged(view=>{launcherView=view;render();});
+void invoke(async()=>{runtimeView=await window.launcher.status();multiplayerView=await window.launcher.multiplayer();launcherView=await window.launcher.launcherUpdates();serverView=await window.launcher.serverUpdates();element('save-location').textContent=await window.launcher.saveLocation();await window.launcher.launcherHealthy();});
