@@ -12,6 +12,7 @@ import {LauncherStore} from './launcher-store';
 import {ServerUpdates,newestServer} from './server-updates';
 import { targetName } from './update-format';
 import { gameSite } from './game-site';
+import {Multiplayer,joinURL} from './multiplayer';
 import {UserMessage,UserNotice} from './user-message';
 import {Journal,Problem,explain,identity,report} from './diagnostics';
 import {dirname} from 'node:path';
@@ -45,6 +46,7 @@ else {
   let launcherUpdates: LauncherUpdates;
   let serverUpdates: ServerUpdates;
   let site: Awaited<ReturnType<typeof gameSite>>;
+  let multiplayer: Multiplayer;
   let journal: Journal, about: Record<string, unknown>, lastProblem: Problem|undefined;
   const problem=(error:unknown,step:string)=>{lastProblem=explain(error,step);journal.write('problem',{...lastProblem,error:String(error)});return lastProblem;};
   let shownFailure:Error|undefined,failureProblem:Problem|undefined;
@@ -67,7 +69,7 @@ else {
     runtime = new Runtime(server.root, userData, storage);
     runtime.on('event',(event,details)=>journal.write(event,details));
     await runtime.loadSettings();
-    site = await gameSite(runtime,47832,(kind,message)=>{journal.write('game page '+kind,{message});runtime.reportProblem(`Game page ${kind}: ${message}`);});
+    site = await gameSite(runtime,47832,(kind,message)=>{journal.write('game page '+kind,{message});runtime.reportProblem(`Game page ${kind}: ${message}`);},()=>multiplayer.reachability());
     const portableRoot=app.commandLine.getSwitchValue('portable-root'),generation=app.commandLine.getSwitchValue('launcher-generation');
     if(app.isPackaged&&(!portableRoot||!generation))throw Error('Open the top-level portable launcher; portable ownership is missing');
     const root=portableRoot?await realpath(portableRoot):undefined;
@@ -75,6 +77,7 @@ else {
     journal.write('launcher started',about);runtime.reportUpdate('Started: '+Object.entries(about).map(([key,value])=>`${key}=${value}`).join(' '));
     const appPolicy=createLauncherPolicy(process.resourcesPath,app.getVersion());
     const store=root?new LauncherStore({root,generation,installed:app.getVersion(),resources:process.resourcesPath,policy:appPolicy,native:join(root,process.platform==='win32'?'OpenRotMG Singleplayer.exe':'OpenRotMG Singleplayer')}):undefined;
+    multiplayer = new Multiplayer(site,appPolicy,join(storage,'tools'),message=>runtime.reportUpdate(message,'multiplayer'));
     launcherUpdates = new LauncherUpdates(app.getVersion(),targetName(),appPolicy.request,store);
     serverUpdates = new ServerUpdates(runtime,appPolicy,storage,server.version);
     serverUpdates.on('log',message=>runtime.reportUpdate('Server: '+message));
@@ -108,7 +111,7 @@ else {
         try{
           if(closing&&!['launcher:status','server:status','runtime:status','report:copy','window:minimize','window:maximize'].includes(channel))throw new UserNotice('The launcher is closing. Please wait.');
           if(launcherUpdates.busy&&!['launcher:status','server:status','runtime:status','window:minimize','window:maximize','report:copy','save:location',...(launcherUpdates.view().phase==='downloading'?['window:close']:[])].includes(channel))throw new UserNotice('The launcher is updating. Please wait.');
-          if(launcherUpdates.view().blocked&&['runtime:start','runtime:client','runtime:bots','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
+          if(launcherUpdates.view().blocked&&['runtime:start','multiplayer:host','runtime:client','runtime:bots','save:import','save:confirm-import','save:backup','save:restore','account:list','account:edit'].includes(channel))throw new UserMessage('Check launcher files in Settings → Updates before playing.');
           const started=performance.now(),value=await action(...args);
           if(journaled(channel))journal.write(channel,{ok:true,ms:Math.round(performance.now()-started)});
           return{ok:true,value};
@@ -134,7 +137,7 @@ else {
       try{
         if(serverUpdates.view().phase==='downloading')throw new UserNotice('Wait for the server update to finish.');
         requireLauncherSaveState(runtime.view());const prepared=await launcherUpdates.prepare();if(closing)throw new UserMessage('Launcher update canceled while closing.');closing=true;
-        await Promise.all([saves.cancelImport(),runtime.close()]);requireLauncherSaveState(runtime.view(),true);await site.close();
+        await multiplayer.stop();await Promise.all([saves.cancelImport(),runtime.close()]);requireLauncherSaveState(runtime.view(),true);await site.close();
         launcherUpdates.step('Starting authenticated update helper');await launcherUpdates.arm(prepared);quitting=true;app.exit(73);
       }catch(error){launcherUpdates.failed(error);runtime.reportProblem(error);throw error instanceof UserMessage?error:new UserMessage('The update did not finish. See Advanced → Logs.');}
       finally{closing=false;}
@@ -149,6 +152,12 @@ else {
       if (runtime.view().status !== 'ready' || runtime.view().operation || runtime.view().closing) throw new Error('Server is not ready');
       await shell.openExternal(site.url());
     });
+    checked('multiplayer:status', () => multiplayer.view());
+    checked('multiplayer:host', async () => { if (runtime.view().status !== 'ready') await runtime.start(); return multiplayer.host(); });
+    checked('multiplayer:online', () => multiplayer.online());
+    checked('multiplayer:stop', () => multiplayer.stop());
+    checked('multiplayer:join', address => shell.openExternal(joinURL(address as string)), args => args.length === 1 && typeof args[0] === 'string' && args[0].length <= 300);
+    checked('multiplayer:copy', text => clipboard.writeText(text as string), args => args.length === 1 && typeof args[0] === 'string' && args[0].length <= 300);
     checked('runtime:help', () => shell.openExternal('https://openrotmg.org/export/'));
     checked('account:list',()=>saves.listAccounts());
     checked('account:edit',(account,expected,username,password)=>saves.editAccount(account,expected,username,password),args=>args.length===4&&Number.isSafeInteger(args[0])&&Number(args[0])>0&&typeof args[1]==='string'&&/^[a-f0-9]{64}$/.test(args[1])&&typeof args[2]==='string'&&args[2].length<=245&&typeof args[3]==='string'&&Buffer.byteLength(args[3])<=128);
@@ -161,7 +170,12 @@ else {
     checked('save:location', () => runtime.userData);
     checked('save:open-location', () => saves.openSaveFolder());
     checked('save:restore', name => saves.restoreBackup(name as string), args => args.length === 1 && isBackupName(args[0]));
-    runtime.on('change', () => { if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view()); });
+    runtime.on('change', () => {
+      // Friends would otherwise keep a listener that only answers "Server is stopped".
+      if (runtime.view().status !== 'ready' && multiplayer.view().phase !== 'off') void multiplayer.stop().catch(error => runtime.reportProblem(error));
+      if (window && !window.isDestroyed()) window.webContents.send('runtime:changed', view());
+    });
+    multiplayer.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('multiplayer:changed', view); });
     launcherUpdates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('launcher:changed',view); });
     serverUpdates.on('change', view => { if (window && !window.isDestroyed()) window.webContents.send('server:changed',view); });
     window.on('close', event => { if (!quitting) { event.preventDefault(); void close(); } });
@@ -171,7 +185,7 @@ else {
     if (closing) return;
     closing = true;
     launcherUpdates.abort();
-    try { const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
+    try { await multiplayer.stop(); const stopped = runtime.close(); await Promise.all([saves.cancelImport(), stopped]); await site.close(); quitting = true; app.quit(); }
     catch (error) {
       runtime.reportProblem(error);
       // Keep the app alive while an unconfirmed server may still be writing the save.

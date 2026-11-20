@@ -13,3 +13,7 @@ Build on the target OS. `OPENROTMG_BUILD_INPUTS` names a JSON file with the pinn
 3. Upload each ZIP, `launcher-TARGET.tar.gz`, `server-TARGET.tar.gz` and sources to a draft release whose body has `LAUNCHER_VERSION=X.Y.Z`, run `promote-launcher.yml` (signs launcher and server metadata), then publish with `make_latest:false` so pre-1.0.3 launchers still find the v1.0.2 server.
 
 Each release carries both updates; players can take Server + client without updating the launcher. A server that needs a newer launcher raises `serverMinLauncher` in `source-pins.json`.
+
+## Multiplayer
+
+Host world listens on port 47833 next to the loopback game page. "Let friends anywhere join" asks `reachability/` (a Cloudflare Worker on the Workers Free plan) to connect back to that port. If it can't, the launcher downloads the pinned `cloudflared` and opens a Quick Tunnel. Deploy the Worker with `npx wrangler deploy` from `reachability/`, signed in to the account in its `wrangler.toml`.

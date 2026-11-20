@@ -7,7 +7,7 @@
 </head>
 <body><main>
 <div class="titlebar"><img src="assets/amulet.png" alt=""><span>Open RotMG Single Player</span><nav aria-label="Window"><button id="minimize" aria-label="Minimize" title="Minimize">_</button><button id="maximize" aria-label="Maximize or restore" title="Maximize or restore">□</button><button id="close-window" aria-label="Save and close" title="Save and close">×</button></nav></div>
-<header><div class="brand"><img src="assets/amulet.png" alt=""><h1>Open RotMG</h1></div><nav aria-label="Launcher"><button id="show-home" aria-current="page">Play</button><button id="show-settings" aria-label="Settings">Settings</button></nav></header>
+<header><div class="brand"><img src="assets/amulet.png" alt=""><h1>Open RotMG</h1></div><nav aria-label="Launcher"><button id="show-home" aria-current="page">Play</button><button id="show-multiplayer">Multiplayer</button><button id="show-settings" aria-label="Settings">Settings</button></nav></header>
 <div class="workspace">
 <p id="error" class="notice error" role="alert"></p>
 <section id="problem" class="problem" role="alert" hidden><h2 id="problem-title"></h2><p id="problem-said"></p><p><b>Next step:</b> <span id="problem-next"></span></p><button id="copy-report">Copy report</button></section>
@@ -15,6 +15,14 @@
 <section class="hero"><img class="portal" src="assets/nexus-portal.png" alt="Nexus portal"><p id="realm-caption">Enter your own realm.</p><button id="play" class="primary" disabled>Play</button><p id="message" role="status">Loading…</p><progress id="progress" aria-label="Preparing game" hidden></progress><button id="home-stop" class="quiet" hidden>Save &amp; stop</button></section>
 <nav class="shortcuts" aria-label="Tools"><button id="import" class="quiet">Import account</button><button id="show-backups" class="quiet">Backups</button><button id="show-updates" class="quiet">Updates</button></nav>
 </div>
+<div id="multiplayer-page" hidden><div class="columns">
+<section class="group"><h3>Join world</h3><form id="join-form"><label>Address your friend sent you<input id="join-address" placeholder="192.168.1.20:47833 or https://….trycloudflare.com" maxlength="300" required autocomplete="off"></label><button id="join">Join world</button></form><p class="hint">Your characters stay here. You make a new account in your friend's world.</p></section>
+<section class="group"><h3>Host world</h3>
+<div id="host-off"><p>Let friends on the same Wi-Fi join your world. You keep playing as usual.</p><nav><button id="host">Host world</button></nav></div>
+<div id="host-on" hidden><p>Your world is open on your home network. Friends on the same Wi-Fi join with:</p><div class="kv"><code id="home-address"></code><button id="copy-home">Copy</button></div><p class="hint">Can't connect? Allow Open RotMG Single Player through your firewall on private networks.</p>
+<div id="internet" hidden><p id="internet-label"></p><div class="kv"><code id="internet-address"></code><button id="copy-internet">Copy</button></div></div>
+<p id="multiplayer-message" class="setting-status" role="status"></p><nav><button id="online">Let friends anywhere join</button><button id="unhost" class="quiet">Stop hosting</button></nav></div>
+</section></div></div>
 <div id="settings-page" hidden>
 <nav class="tabs" role="tablist" aria-label="Settings"><button id="tab-accounts" role="tab" aria-controls="accounts-page" aria-selected="false" tabindex="-1">Accounts</button><button id="tab-backups" role="tab" aria-controls="backups-page" aria-selected="true">Backups</button><button id="tab-updates" role="tab" aria-controls="updates-page" aria-selected="false" tabindex="-1">Updates</button><button id="tab-advanced" role="tab" aria-controls="advanced-page" aria-selected="false" tabindex="-1">Advanced</button></nav>
 <section id="accounts-page" role="tabpanel" aria-labelledby="tab-accounts" hidden>

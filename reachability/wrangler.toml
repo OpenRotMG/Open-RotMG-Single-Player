@@ -1,0 +1,6 @@
+name = "openrotmg-reachability"
+main = "worker.js"
+compatibility_date = "2026-05-01"
+account_id = "ab7ce7b09c1cd402a7a75ad97066ca8b"
+workers_dev = true
+preview_urls = false
